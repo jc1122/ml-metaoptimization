@@ -1,0 +1,11 @@
+interface:
+  display_name: "ML Metaoptimization"
+  short_description: "Systematic ML improvement via parallel brainstorming subagents and Ray cluster execution"
+  categories:
+    - ml
+    - research
+    - distributed
+  default_prompt: >
+    Run a systematic ML metaoptimization campaign toward the stated goal.
+    Dispatch 8 parallel brainstorming subagents continuously, synthesize proposals,
+    validate locally, and execute on the Ray cluster. Persist state in ml_metaopt_state.json.

@@ -111,7 +111,7 @@ def _validate_batch_manifest(payload: dict) -> None:
 
     retry_policy = payload.get("retry_policy")
     assert isinstance(retry_policy, dict) and retry_policy, "retry_policy is required"
-    assert isinstance(retry_policy.get("max_attempts"), int) and retry_policy["max_attempts"] > 0, (
+    assert type(retry_policy.get("max_attempts")) is int and retry_policy["max_attempts"] > 0, (
         "retry_policy.max_attempts is required"
     )
 
@@ -167,7 +167,7 @@ def _validate_state_payload(payload: dict) -> None:
     assert isinstance(ideation_rounds_by_slot, dict), "proposal_cycle.ideation_rounds_by_slot is required"
     for slot_id, rounds in ideation_rounds_by_slot.items():
         _require_non_empty_string(slot_id, "proposal_cycle.ideation_rounds_by_slot keys must be non-empty strings")
-        assert isinstance(rounds, int) and rounds >= 0, (
+        assert type(rounds) is int and rounds >= 0, (
             "proposal_cycle.ideation_rounds_by_slot values must be non-negative integers"
         )
     assert "shortfall_reason" in proposal_cycle, "proposal_cycle.shortfall_reason is required"
@@ -503,6 +503,11 @@ class MetaoptValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, r"retry_policy.max_attempts is required"):
             _validate_batch_manifest(zero_max_attempts)
 
+        boolean_max_attempts = dict(fixture)
+        boolean_max_attempts["retry_policy"] = {"max_attempts": True}
+        with self.assertRaisesRegex(AssertionError, r"retry_policy.max_attempts is required"):
+            _validate_batch_manifest(boolean_max_attempts)
+
     def test_state_validator_rejects_malformed_nested_sections_with_clear_messages(self) -> None:
         fixture = _read_json("tests/fixtures/state/running.json")
 
@@ -536,6 +541,14 @@ class MetaoptValidationTests(unittest.TestCase):
             AssertionError, r"proposal_cycle.ideation_rounds_by_slot values must be non-negative integers"
         ):
             _validate_state_payload(negative_rounds)
+
+        boolean_rounds = dict(fixture)
+        boolean_rounds["proposal_cycle"] = dict(fixture["proposal_cycle"])
+        boolean_rounds["proposal_cycle"]["ideation_rounds_by_slot"] = {"bg-1": False}
+        with self.assertRaisesRegex(
+            AssertionError, r"proposal_cycle.ideation_rounds_by_slot values must be non-negative integers"
+        ):
+            _validate_state_payload(boolean_rounds)
 
         malformed_patch_artifacts = dict(fixture)
         malformed_patch_artifacts["local_changeset"] = dict(fixture["local_changeset"])

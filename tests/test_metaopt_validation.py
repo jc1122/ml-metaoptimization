@@ -132,11 +132,14 @@ def _validate_state_payload(payload: dict) -> None:
 
 
 class MetaoptValidationTests(unittest.TestCase):
-    def test_example_campaign_is_v2_and_free_of_sentinel_values(self) -> None:
+    def test_example_campaign_is_v3_and_free_of_sentinel_values(self) -> None:
         campaign = _read_yaml("ml_metaopt_campaign.example.yaml")
 
-        self.assertEqual(campaign["version"], 2)
+        self.assertEqual(campaign["version"], 3)
         self.assertEqual(campaign["remote_queue"]["backend"], "ray-hetzner")
+
+        retry_policy = campaign["remote_queue"]["retry_policy"]
+        self.assertEqual(retry_policy["max_attempts"], 2)
 
         for command_name in ("enqueue_command", "status_command", "results_command"):
             command = campaign["remote_queue"][command_name]
@@ -146,6 +149,7 @@ class MetaoptValidationTests(unittest.TestCase):
         for dataset in campaign["datasets"]:
             self.assertRegex(dataset["fingerprint"], r"^sha256:[0-9a-f]{64}$")
 
+        self.assertNotIn("max_batch_retries", campaign["execution"])
         self.assertNotIn("/root/project/", campaign["execution"]["entrypoint"])
 
     def test_backend_contract_defines_stdout_json_wire_format(self) -> None:

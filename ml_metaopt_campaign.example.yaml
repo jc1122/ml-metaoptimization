@@ -1,4 +1,4 @@
-version: 2
+version: 3
 campaign_id: market-forecast-v3
 goal: Improve out-of-sample forecast quality without temporal leakage.
 
@@ -64,6 +64,8 @@ artifacts:
 
 remote_queue:
   backend: ray-hetzner
+  retry_policy:
+    max_attempts: 2
   # The orchestrator appends one shell-escaped argument: manifest path for enqueue, batch_id for status/results.
   enqueue_command: python3 /opt/ray-hetzner/metaopt/enqueue_batch.py
   status_command: python3 /opt/ray-hetzner/metaopt/get_batch_status.py
@@ -74,7 +76,6 @@ execution:
   # This path is container-specific and must match where the backend materializes the immutable artifact.
   entrypoint: python3 /srv/metaopt/project/scripts/ray_runner.py
   target_cluster_utilization: 0.95
-  max_batch_retries: 2
   trial_budget:
     kind: fixed_trials
     value: 128

@@ -41,6 +41,7 @@ VALID_SLOT_MODES = {
 }
 VALID_MODEL_CLASSES = {"strong_coder", "strong_reasoner", "general_worker"}
 VALID_REMOTE_BATCH_STATUSES = {"queued", "running", "completed", "failed"}
+LEGACY_MAX_BATCH_RETRIES_KEY = "max_batch_" "retries"
 
 
 def _read_text(relative_path: str) -> str:
@@ -174,7 +175,7 @@ class MetaoptValidationTests(unittest.TestCase):
         for dataset in campaign["datasets"]:
             self.assertRegex(dataset["fingerprint"], r"^sha256:[0-9a-f]{64}$")
 
-        self.assertNotIn("max_batch_retries", campaign["execution"])
+        self.assertNotIn(LEGACY_MAX_BATCH_RETRIES_KEY, campaign["execution"])
         self.assertNotIn("/root/project/", campaign["execution"]["entrypoint"])
 
     def test_backend_contract_defines_stdout_json_wire_format(self) -> None:

@@ -105,8 +105,15 @@ def _validate_batch_manifest(payload: dict) -> None:
     _require_non_empty_string(payload.get("campaign_id"), "campaign_id is required")
     assert isinstance(payload.get("iteration"), int) and payload["iteration"] >= 0, "iteration is required"
     _require_non_empty_string(payload.get("batch_id"), "batch_id is required")
-    assert isinstance(payload.get("experiment"), dict) and payload["experiment"], "experiment is required"
-    assert isinstance(payload.get("retry_policy"), dict) and payload["retry_policy"], "retry_policy is required"
+    experiment = payload.get("experiment")
+    assert isinstance(experiment, dict) and experiment, "experiment is required"
+    _require_non_empty_string(experiment.get("proposal_id"), "experiment.proposal_id is required")
+
+    retry_policy = payload.get("retry_policy")
+    assert isinstance(retry_policy, dict) and retry_policy, "retry_policy is required"
+    assert isinstance(retry_policy.get("max_attempts"), int) and retry_policy["max_attempts"] > 0, (
+        "retry_policy.max_attempts is required"
+    )
 
     artifacts = payload.get("artifacts")
     assert isinstance(artifacts, dict), "artifacts is required"
@@ -472,6 +479,29 @@ class MetaoptValidationTests(unittest.TestCase):
 
         with self.assertRaisesRegex(AssertionError, r"artifacts.data_manifest is required"):
             _validate_batch_manifest(_read_json("tests/fixtures/manifest/invalid-missing-data-manifest.json"))
+
+    def test_batch_manifest_requires_minimal_nested_contract_fields(self) -> None:
+        fixture = _read_json("tests/fixtures/manifest/valid.json")
+
+        missing_proposal_id = dict(fixture)
+        missing_proposal_id["experiment"] = {"slot_id": "bg-1"}
+        with self.assertRaisesRegex(AssertionError, r"experiment.proposal_id is required"):
+            _validate_batch_manifest(missing_proposal_id)
+
+        blank_proposal_id = dict(fixture)
+        blank_proposal_id["experiment"] = {"proposal_id": ""}
+        with self.assertRaisesRegex(AssertionError, r"experiment.proposal_id is required"):
+            _validate_batch_manifest(blank_proposal_id)
+
+        missing_max_attempts = dict(fixture)
+        missing_max_attempts["retry_policy"] = {"strategy": "retry"}
+        with self.assertRaisesRegex(AssertionError, r"retry_policy.max_attempts is required"):
+            _validate_batch_manifest(missing_max_attempts)
+
+        zero_max_attempts = dict(fixture)
+        zero_max_attempts["retry_policy"] = {"max_attempts": 0}
+        with self.assertRaisesRegex(AssertionError, r"retry_policy.max_attempts is required"):
+            _validate_batch_manifest(zero_max_attempts)
 
     def test_state_validator_rejects_malformed_nested_sections_with_clear_messages(self) -> None:
         fixture = _read_json("tests/fixtures/state/running.json")

@@ -7,7 +7,9 @@ description: 'Use when improving ML model quality through continuous parallel br
 
 ## Overview
 
-Two-layer autonomous loop: 8 parallel local brainstorming subagents run continuously while a Ray cluster executes the designed experiment. When the cluster finishes, the next experiment is already fully refined.
+Two-layer autonomous loop: 8 parallel local brainstorming subagents run continuously while the Ray cluster runs **multiple parallel jobs that saturate all available nodes**. When the cluster finishes, the next experiment is already fully refined.
+
+**Resource utilization is a first-class goal.** Every cluster deployment must fill all available workers. A single job that uses one node while others sit idle is a failure mode.
 
 **The main agent is the orchestrator only.** It never does analytical or coding work directly — it delegates everything to subagents and manages state.
 
@@ -134,6 +136,8 @@ Dispatch one Opus 4.6 fast subagent with:
 
 It returns a complete Ray campaign specification: script design, search space, and deploy instructions.
 
+**Utilization requirement:** the design must account for the number of available cluster workers and produce enough parallel trials/tasks to saturate all of them. Under-utilization (jobs that leave most workers idle) must be treated as a design flaw and sent back for revision before Phase 4.
+
 ## Phase 4 — Local Sanity Check
 
 **Purpose:** verify configs are correct and infrastructure is wired up. This is not a performance or training run — all heavy computation is delegated to the Ray cluster, which must be kept saturated.
@@ -150,21 +154,23 @@ Brainstorming subagents continue running throughout this phase.
 
 ## Phase 5 — Deploy to Ray Cluster
 
-Use the deploy pattern from jc1122/ray-hetzner. Update `cluster_job` in state file immediately after launch.
+**Goal: saturate all available workers immediately.** Deploy multiple parallel jobs — one per distinct trial configuration or search space partition — so every node is busy from the start. Do not deploy a single sequential job.
+
+Use the deploy pattern from jc1122/ray-hetzner. For each job launched, append an entry to `cluster_jobs` in the state file immediately after launch.
 
 **Do not stop brainstorming subagents** — they continue refining the next iteration while the cluster runs. Their proposals go into `next_proposals`.
 
-**Cluster monitoring:** dispatch one Opus 4.6 fast subagent with the ray-hetzner README and cluster job details. It runs the ray-hetzner smoke tests once and reports back: running, completed, or failed. Dispatch again when a status check is needed — do not poll continuously.
+**Cluster monitoring:** dispatch one Opus 4.6 fast subagent with the ray-hetzner README and all running job details. It checks status of all jobs once and reports back: running, completed, or failed per job. Dispatch again when a status check is needed — do not poll continuously.
 
-**If cluster job fails:** dispatch Opus 4.6 fast subagent with:
-- Full error log
+**If any job fails:** dispatch Opus 4.6 fast subagent with:
+- Full error log for the failed job
 - ray-hetzner README (read from local installation)
 
-It diagnoses the failure and returns a fix. Apply and re-deploy.
+It diagnoses the failure and returns a fix. Apply and re-deploy the failed job — do not cancel healthy jobs.
 
 ## Phase 6 — Collect, Analyze, Update Baseline
 
-Collect results from cluster. Dispatch Opus 4.6 fast subagent with results + current `baseline` to compare performance and extract learnings.
+Collect results from all cluster jobs. Dispatch Opus 4.6 fast subagent with all results + current `baseline` to compare performance across parallel runs and extract learnings.
 
 Update in state file: `baseline` (if improved), `key_learnings`, `completed_experiments`.
 
@@ -196,11 +202,15 @@ Write this file to `{project_root}/ml_metaopt_state.json`. Update after every ph
   "next_proposals": ["<proposal accumulated during Phases 2–6 for next iteration>"],
   "completed_experiments": ["<experiment description>"],
   "key_learnings": ["<learning>"],
-  "cluster_job": {
-    "script": "<filename>",
-    "started": "<ISO timestamp>",
-    "status": "running|done|failed|none"
-  }
+  "cluster_jobs": [
+    {
+      "id": "<job id or name>",
+      "script": "<filename>",
+      "config": "<trial config or partition description>",
+      "started": "<ISO timestamp>",
+      "status": "running|done|failed"
+    }
+  ]
 }
 ```
 
@@ -214,8 +224,10 @@ Write this file to `{project_root}/ml_metaopt_state.json`. Update after every ph
 | Coding task assigned to GPT subagent | Coding → Opus 4.6 fast only |
 | Deploying to cluster before sanity check | Always complete Phase 4 first |
 | Running a full training loop in Phase 4 | Sanity check must finish in <60s — use minimal batches/iterations only; heavy work goes to Ray |
-| Ray cluster nodes sitting idle | Keep nodes saturated — deploy as soon as Phase 4 passes |
-| Stopping subagents during cluster run | Keep all 8 running throughout the cluster job |
+| Ray cluster nodes sitting idle | Deploy multiple parallel jobs to fill all workers — one job per trial/partition |
+| Deploying a single sequential job | Design search space partitions so every worker has a job from the start |
+| Stopping subagents during cluster run | Keep all 8 running throughout the cluster jobs |
+| Cancelling all jobs when one fails | Only re-deploy the failed job — healthy jobs continue running |
 | Subagent sits idle after finishing | Reassign to a new angle immediately |
 | Not passing state context to reassigned subagent | Always include relevant state fields per task |
 | Not updating state file after phase transition | Compaction will lose current progress |

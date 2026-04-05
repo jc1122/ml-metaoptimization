@@ -281,7 +281,8 @@ class MetaoptValidationTests(unittest.TestCase):
         machine = _read_text("references/state-machine.md")
         lanes = _read_text("references/worker-lanes.md")
 
-        _require_pattern(self, skill, r"continuous across reinvocations")
+        _require_pattern(self, skill, r"not a self-scheduling daemon")
+        _require_pattern(self, skill, r"persists state, exits, and resumes")
         _require_pattern(self, skill, r"artifacts/.*code/.*data/.*manifests/.*patches/")
         _require_pattern(
             self,

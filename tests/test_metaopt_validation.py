@@ -42,6 +42,7 @@ VALID_SLOT_MODES = {
 }
 VALID_MODEL_CLASSES = {"strong_coder", "strong_reasoner", "general_worker"}
 VALID_REMOTE_BATCH_STATUSES = {"queued", "running", "completed", "failed"}
+SHA256_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 LEGACY_MAX_BATCH_RETRIES_KEY = "max_batch_" "retries"
 
 
@@ -71,6 +72,10 @@ def _require_number(value: object, message: str) -> None:
     assert isinstance(value, (int, float)) and not isinstance(value, bool), message
 
 
+def _require_sha256_digest(value: object, message: str) -> None:
+    assert isinstance(value, str) and SHA256_DIGEST_RE.fullmatch(value), message
+
+
 def _validate_backend_payload(kind: str, payload: dict) -> None:
     assert isinstance(payload, dict), "backend payload must be an object"
     assert isinstance(payload.get("batch_id"), str) and payload["batch_id"], "batch_id is required"
@@ -91,7 +96,7 @@ def _validate_backend_payload(kind: str, payload: dict) -> None:
         aggregate = payload.get("best_aggregate_result")
         assert isinstance(aggregate, dict), "best_aggregate_result is required"
         assert isinstance(aggregate.get("metric"), str) and aggregate["metric"], "aggregate metric is required"
-        assert isinstance(aggregate.get("value"), (int, float)), "aggregate value is required"
+        _require_number(aggregate.get("value"), "aggregate value must be numeric")
         per_dataset = payload.get("per_dataset")
         assert isinstance(per_dataset, dict) and per_dataset, "per_dataset results are required"
         artifact_locations = payload.get("artifact_locations")
@@ -160,6 +165,8 @@ def _validate_state_payload(payload: dict) -> None:
     missing = required_keys - payload.keys()
     assert not missing, f"missing required state keys: {sorted(missing)}"
     assert payload["version"] == 3, "state fixture must use v3"
+    _require_sha256_digest(payload["campaign_identity_hash"], "campaign_identity_hash must be a sha256 digest")
+    _require_sha256_digest(payload["runtime_config_hash"], "runtime_config_hash must be a sha256 digest")
     assert payload["status"] in VALID_STATE_STATUSES, "invalid coarse status"
     assert payload["machine_state"] in VALID_MACHINE_STATES, "invalid machine state"
 
@@ -250,6 +257,21 @@ def _validate_state_payload(payload: dict) -> None:
         _require_non_empty_string(
             apply_result.get("status"),
             "apply_results entries must include non-empty status",
+        )
+
+    assert isinstance(payload["remote_batches"], list), "remote_batches must be a list"
+    for remote_batch in payload["remote_batches"]:
+        assert isinstance(remote_batch, dict), "remote_batches entries must be objects"
+        _require_non_empty_string(
+            remote_batch.get("batch_id"),
+            "remote_batches entries must include non-empty batch_id",
+        )
+        _require_non_empty_string(
+            remote_batch.get("queue_ref"),
+            "remote_batches entries must include non-empty queue_ref",
+        )
+        assert remote_batch.get("status") in VALID_REMOTE_BATCH_STATUSES, (
+            "remote_batches entries must include valid status"
         )
 
 
@@ -371,6 +393,11 @@ class MetaoptValidationTests(unittest.TestCase):
             self,
             contracts,
             r"## Local Changeset Contract.*`apply_results\[\]`.*`patch_path`.*`status`",
+        )
+        _require_pattern(
+            self,
+            contracts,
+            r"## State File.*`remote_batches\[\]`.*`batch_id`.*`queue_ref`.*`status`",
         )
         _require_pattern(
             self,
@@ -661,6 +688,32 @@ class MetaoptValidationTests(unittest.TestCase):
             AssertionError, r"selected_experiment.sanity_attempts must be a non-negative integer"
         ):
             _validate_state_payload(invalid_selected_experiment_attempts)
+
+    def test_state_validator_rejects_invalid_hash_format_and_remote_batches(self) -> None:
+        fixture = _read_json("tests/fixtures/state/running.json")
+
+        invalid_campaign_hash = copy.deepcopy(fixture)
+        invalid_campaign_hash["campaign_identity_hash"] = "sha256:ABC123"
+        with self.assertRaisesRegex(AssertionError, r"campaign_identity_hash must be a sha256 digest"):
+            _validate_state_payload(invalid_campaign_hash)
+
+        invalid_runtime_hash = copy.deepcopy(fixture)
+        invalid_runtime_hash["runtime_config_hash"] = "not-a-digest"
+        with self.assertRaisesRegex(AssertionError, r"runtime_config_hash must be a sha256 digest"):
+            _validate_state_payload(invalid_runtime_hash)
+
+        malformed_remote_batch = copy.deepcopy(fixture)
+        malformed_remote_batch["remote_batches"] = [{"batch_id": "batch-20260405-0001", "queue_ref": "", "status": "running"}]
+        with self.assertRaisesRegex(AssertionError, r"remote_batches entries must include non-empty queue_ref"):
+            _validate_state_payload(malformed_remote_batch)
+
+    def test_results_validator_rejects_boolean_aggregate_value(self) -> None:
+        fixture = _read_json("tests/fixtures/backend/results-valid.json")
+
+        boolean_aggregate = copy.deepcopy(fixture)
+        boolean_aggregate["best_aggregate_result"]["value"] = True
+        with self.assertRaisesRegex(AssertionError, r"aggregate value must be numeric"):
+            _validate_backend_payload("results", boolean_aggregate)
 
 
 if __name__ == "__main__":

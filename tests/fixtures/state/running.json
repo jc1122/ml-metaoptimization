@@ -43,13 +43,13 @@
     {
       "slot_id": "aux-1",
       "slot_class": "auxiliary",
-      "mode": "analysis",
+      "mode": "materialization",
       "model_class": "strong_reasoner",
       "requested_model": "Opus 4.6 fast",
       "resolved_model": "Opus 4.6 fast",
-      "status": "queued",
+      "status": "running",
       "attempt": 1,
-      "task_summary": "Prepare post-run analysis context"
+      "task_summary": "Retain materialization context for the aux-1 patch bundle while the remote batch runs"
     }
   ],
   "current_proposals": [],

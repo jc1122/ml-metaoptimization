@@ -88,6 +88,11 @@ Required top-level keys:
 - `ideation_rounds_by_slot` as a map of non-empty `slot_id` strings to non-negative integer round counts
 - `shortfall_reason`
 
+Each `remote_batches[]` entry must be an object with:
+- `batch_id`
+- `queue_ref`
+- `status` using one of `queued`, `running`, `completed`, or `failed`
+
 Recommended additional keys when useful:
 - `event_log_tail`
 - `sanity_attempts_current_experiment`

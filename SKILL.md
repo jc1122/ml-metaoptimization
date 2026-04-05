@@ -111,12 +111,19 @@ Dispatch 8 subagents in parallel. Assign roles dynamically — all 8 can cover d
 **Context to pass to every subagent:**
 `goal`, `metric`, `baseline`, `key_learnings`, `completed_experiments`, `pending_proposals` from state file, plus any task-specific context (e.g. relevant code, data schema).
 
-**Continuous operation:** When any subagent finishes, immediately assign it a new task on a different angle. Never let a subagent be idle.
+**Continuous operation:** When any subagent finishes, immediately assign it a new task. Never let a subagent be idle.
 
-**Orchestrator idle rule:** If the orchestrator ever finds itself with no brainstorming subagents running (e.g. waiting for cluster results between phases), immediately dispatch a GPT-5.4 subagent to do a full repository code audit — reviewing all supporting code for bugs, leakages, inefficiencies, and incorrect assumptions. When the audit completes, dispatch one Opus 4.6 fast subagent with the full audit output to implement the fixes. Do not wait for the cluster — use the idle time.
+**`next_proposals` cap — 20 entries.** Once `next_proposals` reaches 20, the list is considered saturated. From that point, stop assigning idea-generation roles entirely and switch all 8 agents exclusively to maintenance roles until the next iteration begins. New idea proposals beyond 20 are discarded without being recorded.
 
-**Role pool (assign dynamically based on what advances the goal most):**
-feature engineering, HPO space design, leakage audit, code speedup/profiling, model architecture variants, target formulation variants, data quality analysis, ensemble design, **code review** (bugs, silent errors, incorrect assumptions in supporting code), **leakage audit in code** (data leakage introduced by preprocessing or feature construction logic, not just config), **infrastructure code review** (inefficiencies in data loading, batching, or result serialization that waste cluster CPU/memory), and any other angle relevant to the current goal.
+**Role assignment priority:**
+- While `next_proposals` < 20: assign idea-generation and maintenance roles dynamically based on what advances the goal most
+- Once `next_proposals` = 20: assign maintenance roles only — no new idea proposals
+
+**Idea-generation roles:** feature engineering, HPO space design, model architecture variants, target formulation variants, data quality analysis, ensemble design
+
+**Maintenance roles (higher priority once cap is hit):** code review (bugs, silent errors, incorrect assumptions), leakage audit in code (preprocessing/feature construction logic), infrastructure code review (data loading, batching, serialization inefficiencies), code speedup/profiling
+
+**Orchestrator idle rule:** If the orchestrator ever finds itself with no subagents running (e.g. waiting between phases), immediately dispatch a GPT-5.4 subagent to do a full repository code audit. When the audit completes, dispatch one Opus 4.6 fast subagent to implement the fixes. Idle time is never wasted.
 
 **Proposal threshold:** Brainstorm until `current_proposals` contains 8 distinct, non-overlapping proposals. If a subagent returns a duplicate or overlapping proposal, reassign it to a different angle immediately — it does not count. **Floor:** if all 8 subagents have each completed at least 2 rounds (16 total attempts) and fewer than 8 distinct proposals exist, proceed to synthesis with what is available. Fewer than 4 proposals is a red flag — record it in `key_learnings`.
 

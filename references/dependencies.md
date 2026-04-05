@@ -6,6 +6,17 @@
 - `git` with worktree support
 - unified-diff-compatible mechanical patch application capability
 - host reinvocation mechanism compatible with the `AGENTS.md` resume hook
+- target repository files:
+  - `ml_metaopt_campaign.yaml`
+  - `AGENTS.md`
+  - `.ml-metaopt/state.json`
+- skill repo assets:
+  - `SKILL.md`
+  - `references/contracts.md`
+  - `references/state-machine.md`
+  - `references/worker-lanes.md`
+  - `references/backend-contract.md`
+  - `ml_metaopt_campaign.example.yaml`
 - PyYAML for the validation suite
 
 ## Queue Backend Dependency

@@ -343,6 +343,14 @@ class MetaoptValidationTests(unittest.TestCase):
         _require_pattern(self, dependencies, r"`git`.*worktree")
         _require_pattern(self, dependencies, r"PyYAML")
         _require_pattern(self, dependencies, r"host reinvocation mechanism")
+        _require_pattern(self, dependencies, r"`ml_metaopt_campaign\.yaml`.*`AGENTS\.md`.*`\.ml-metaopt/state\.json`")
+        _require_pattern(
+            self,
+            dependencies,
+            r"`SKILL\.md`.*`references/contracts\.md`.*`references/state-machine\.md`.*"
+            r"`references/worker-lanes\.md`.*`references/backend-contract\.md`.*"
+            r"`ml_metaopt_campaign\.example\.yaml`",
+        )
 
     def test_backend_and_state_fixtures_validate(self) -> None:
         _validate_backend_payload("enqueue", _read_json("tests/fixtures/backend/enqueue-valid.json"))

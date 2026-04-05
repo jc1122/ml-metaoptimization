@@ -103,7 +103,6 @@ def _validate_state_payload(payload: dict) -> None:
         "current_iteration",
         "next_action",
         "objective_snapshot",
-        "proposal_cycle",
         "active_slots",
         "current_proposals",
         "next_proposals",
@@ -121,11 +120,13 @@ def _validate_state_payload(payload: dict) -> None:
     assert payload["status"] in VALID_STATE_STATUSES, "invalid coarse status"
     assert payload["machine_state"] in VALID_MACHINE_STATES, "invalid machine state"
 
+    assert "proposal_cycle" in payload, "proposal_cycle is required"
     proposal_cycle = payload["proposal_cycle"]
-    assert isinstance(proposal_cycle.get("cycle_id"), str) and proposal_cycle["cycle_id"]
-    assert isinstance(proposal_cycle.get("current_pool_frozen"), bool)
-    assert isinstance(proposal_cycle.get("ideation_rounds_by_slot"), dict)
-    assert "shortfall_reason" in proposal_cycle
+    assert isinstance(proposal_cycle, dict), "proposal_cycle must be an object"
+    assert isinstance(proposal_cycle.get("cycle_id"), str) and proposal_cycle["cycle_id"], "proposal_cycle.cycle_id is required"
+    assert isinstance(proposal_cycle.get("current_pool_frozen"), bool), "proposal_cycle.current_pool_frozen is required"
+    assert isinstance(proposal_cycle.get("ideation_rounds_by_slot"), dict), "proposal_cycle.ideation_rounds_by_slot is required"
+    assert "shortfall_reason" in proposal_cycle, "proposal_cycle.shortfall_reason is required"
 
     if payload["status"] == "RUNNING":
         assert payload["machine_state"] not in TERMINAL_MACHINE_STATES, "running state cannot point at a terminal machine state"
@@ -133,21 +134,24 @@ def _validate_state_payload(payload: dict) -> None:
         assert payload["machine_state"] == payload["status"], "terminal status must mirror machine_state"
         assert payload["active_slots"] == [], "terminal states must have no active slots"
 
+    assert isinstance(payload["active_slots"], list), "active_slots must be a list"
     for slot in payload["active_slots"]:
+        assert isinstance(slot, dict), "active_slots entries must be objects"
         assert slot.get("slot_class") in VALID_SLOT_CLASSES, "invalid slot_class"
         assert slot.get("mode") in VALID_SLOT_MODES, "invalid slot mode"
         assert slot.get("model_class") in VALID_MODEL_CLASSES, "invalid model_class"
-        assert isinstance(slot.get("requested_model"), str) and slot["requested_model"]
-        assert isinstance(slot.get("resolved_model"), str) and slot["resolved_model"]
+        assert isinstance(slot.get("requested_model"), str) and slot["requested_model"], "requested_model is required"
+        assert isinstance(slot.get("resolved_model"), str) and slot["resolved_model"], "resolved_model is required"
         assert isinstance(slot.get("task_summary"), str) and slot["task_summary"], "slot must have task_summary"
 
     local_changeset = payload["local_changeset"]
-    assert isinstance(local_changeset.get("integration_worktree"), str) and local_changeset["integration_worktree"]
+    assert isinstance(local_changeset, dict), "local_changeset must be an object"
+    assert isinstance(local_changeset.get("integration_worktree"), str) and local_changeset["integration_worktree"], "integration_worktree is required"
     assert isinstance(local_changeset.get("patch_artifacts"), list), "patch_artifacts list is required"
     assert isinstance(local_changeset.get("apply_results"), list), "apply_results list is required"
     assert isinstance(local_changeset.get("verification_notes"), list), "verification_notes list is required"
-    assert isinstance(local_changeset.get("code_artifact_uri"), str) and local_changeset["code_artifact_uri"]
-    assert isinstance(local_changeset.get("data_manifest_uri"), str) and local_changeset["data_manifest_uri"]
+    assert isinstance(local_changeset.get("code_artifact_uri"), str) and local_changeset["code_artifact_uri"], "code_artifact_uri is required"
+    assert isinstance(local_changeset.get("data_manifest_uri"), str) and local_changeset["data_manifest_uri"], "data_manifest_uri is required"
 
 
 class MetaoptValidationTests(unittest.TestCase):
@@ -279,14 +283,32 @@ class MetaoptValidationTests(unittest.TestCase):
         with self.assertRaises(AssertionError):
             _validate_state_payload(_read_json("tests/fixtures/state/invalid-status-pair.json"))
 
-        with self.assertRaises(AssertionError):
+        with self.assertRaisesRegex(AssertionError, r"proposal_cycle is required"):
             _validate_state_payload(_read_json("tests/fixtures/state/invalid-missing-proposal-cycle.json"))
 
-        with self.assertRaises(AssertionError):
+        with self.assertRaisesRegex(AssertionError, r"resolved_model is required"):
             _validate_state_payload(_read_json("tests/fixtures/state/invalid-missing-slot-model-resolution.json"))
 
-        with self.assertRaises(AssertionError):
+        with self.assertRaisesRegex(AssertionError, r"data_manifest_uri is required"):
             _validate_state_payload(_read_json("tests/fixtures/state/invalid-missing-local-changeset-metadata.json"))
+
+    def test_state_validator_rejects_malformed_nested_sections_with_clear_messages(self) -> None:
+        fixture = _read_json("tests/fixtures/state/running.json")
+
+        malformed_proposal_cycle = dict(fixture)
+        malformed_proposal_cycle["proposal_cycle"] = []
+        with self.assertRaisesRegex(AssertionError, r"proposal_cycle must be an object"):
+            _validate_state_payload(malformed_proposal_cycle)
+
+        malformed_active_slots = dict(fixture)
+        malformed_active_slots["active_slots"] = [[]]
+        with self.assertRaisesRegex(AssertionError, r"active_slots entries must be objects"):
+            _validate_state_payload(malformed_active_slots)
+
+        malformed_local_changeset = dict(fixture)
+        malformed_local_changeset["local_changeset"] = []
+        with self.assertRaisesRegex(AssertionError, r"local_changeset must be an object"):
+            _validate_state_payload(malformed_local_changeset)
 
 
 if __name__ == "__main__":

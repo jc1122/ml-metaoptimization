@@ -24,8 +24,9 @@ Two-layer autonomous loop: 8 parallel local brainstorming subagents run continuo
 
 ## Prerequisites
 
-- `jc1122/ray-hetzner` installed locally — provides full cluster infrastructure and deploy pattern
-- Ray cluster running (see ray-hetzner docs)
+- `jc1122/ray-hetzner` installed locally at a known path (e.g. `~/projects/ray-hetzner`)
+- Ray cluster running — see bootstrap instructions in the Ray Cluster Reference below
+- `config.env` present and populated (copy from `config.env.example`)
 
 ## Folder Structure
 
@@ -152,25 +153,79 @@ Checks:
 
 Brainstorming subagents continue running throughout this phase.
 
-## Phase 5 — Deploy to Ray Cluster
+## Phase 5 — Sync, Verify, and Deploy to Ray Cluster
+
+### 5a — Sync code and data
+
+Push all required project directories to the cluster. Every directory must be pushed to both the head and all workers (the head also executes tasks):
+
+```bash
+# First run of a campaign — include data:
+./push_code.sh ~/projects/Market
+./push_code.sh ~/projects/DegreeGraph2
+./push_code.sh ~/projects/MarketNN
+
+# Subsequent iterations — code changes only:
+./push_code.sh --no-data ~/projects/MarketNN
+```
+
+`push_code.sh` uses `rsync --delete` and targets `/root/<project-name>` on every node by default. Warn if only the head was found (no workers joined yet).
+
+### 5b — Verify cluster
+
+Run both checks before deploying any jobs:
+
+```bash
+python connect_test.py      # confirms Ray client connectivity from laptop
+python smoke_test.py        # submits one task per CPU, verifies work distributes across multiple nodes
+```
+
+`smoke_test.py` exits non-zero if all tasks ran on a single node — this means workers have not joined. Do not proceed until it passes.
+
+**If smoke_test.py fails:** dispatch Opus 4.6 fast subagent with the failure output and the ray-hetzner OPERATIONS.md. It diagnoses and returns a fix (common causes: workers not joined, Ray not started on head, network issue).
+
+### 5c — Deploy jobs
 
 **Goal: saturate all available workers immediately.** Deploy multiple parallel jobs — one per distinct trial configuration or search space partition — so every node is busy from the start. Do not deploy a single sequential job.
 
-Use the deploy pattern from jc1122/ray-hetzner. For each job launched, append an entry to `cluster_jobs` in the state file immediately after launch.
+Run long campaigns from the head inside tmux to survive laptop disconnects:
+
+```bash
+ssh root@$RAY_HEAD_IP
+tmux new -s run
+python /root/MarketNN/scripts/ray_runner.py
+```
+
+For each job launched, append an entry to `cluster_jobs` in the state file immediately after launch.
 
 **Do not stop brainstorming subagents** — they continue refining the next iteration while the cluster runs. Their proposals go into `next_proposals`.
 
-**Cluster monitoring:** dispatch one Opus 4.6 fast subagent with the ray-hetzner README and all running job details. It checks status of all jobs once and reports back: running, completed, or failed per job. Dispatch again when a status check is needed — do not poll continuously.
+**Cluster monitoring:** dispatch one Opus 4.6 fast subagent with the ray-hetzner OPERATIONS.md and all running job details. It runs `./status.sh` (shows Hetzner servers, network, and `ray status` on head) and checks job status once, then reports back: running, completed, or failed per job. Dispatch again when a status check is needed — do not poll continuously.
 
 **If any job fails:** dispatch Opus 4.6 fast subagent with:
 - Full error log for the failed job
-- ray-hetzner README (read from local installation)
+- ray-hetzner OPERATIONS.md (read from local installation)
 
 It diagnoses the failure and returns a fix. Apply and re-deploy the failed job — do not cancel healthy jobs.
 
 ## Phase 6 — Collect, Analyze, Update Baseline
 
-Collect results from all cluster jobs. Dispatch Opus 4.6 fast subagent with all results + current `baseline` to compare performance across parallel runs and extract learnings.
+Collect results from all cluster jobs using `collect_logs.sh`:
+
+```bash
+# Ray session logs only:
+./collect_logs.sh
+
+# Ray session logs + result directories from head and all workers:
+./collect_logs.sh --results /root/MarketNN/results
+
+# Per-job stdout/stderr (if job IDs are known):
+./collect_logs.sh job-id-1 job-id-2
+```
+
+Logs are saved to `logs/YYYYMMDD-HHMMSS/` in the ray-hetzner repo. Results from each node land in `logs/.../results/<node-name>/`.
+
+Dispatch Opus 4.6 fast subagent with all collected results + current `baseline` to compare performance across parallel runs and extract learnings.
 
 Update in state file: `baseline` (if improved), `key_learnings`, `completed_experiments`.
 
@@ -178,6 +233,131 @@ Update in state file: `baseline` (if improved), `key_learnings`, `completed_expe
 
 - `current_iteration < total_iterations` → move `next_proposals` into `current_proposals`, clear `next_proposals`, increment `current_iteration`, set `current_phase = 1`, update `next_action` to `"start brainstorming phase"`, go to Phase 1
 - Done → remove the resume hook from `AGENTS.md`, delete `ml_metaopt_state.json`
+
+## Ray Cluster Reference
+
+Complete operational reference for the `jc1122/ray-hetzner` infrastructure. Use this section to bootstrap, operate, diagnose, and tear down the cluster.
+
+### Topology
+
+```
+Laptop / driver process
+    |  ray.init("ray://<head-public-ip>:10001")
+    v
+ray-head (cx53)  ← also runs tasks; all 80 CPUs across 5 nodes are available
+    | private network: ray-net
+    +-- ray-worker-1 (cx53)
+    +-- ray-worker-2 (cx53)
+    +-- ray-worker-3 (cx53)
+    +-- ray-worker-4 (cx53)
+```
+
+Hard limit: **5 servers total** (account ceiling). Head + up to 4 workers. The head is `cx53` (same as workers) so it participates in task execution and no slot is wasted.
+
+### Config (`config.env`)
+
+Key variables populated in `config.env` (copy from `config.env.example`):
+
+| Variable | Purpose |
+|----------|---------|
+| `HETZNER_SSH_KEY` | SSH key name in your hcloud context |
+| `RAY_HEAD_IP` | Written by `setup_head.sh`; used by all scripts |
+| `RAY_HEAD_PRIVATE_IP` | Written by `setup_head.sh`; used for worker join |
+| `RAY_VERSION` | Ray version on all nodes (default `2.40.0`) |
+| `RAY_VENV` | Ray virtualenv path on each node (default `/opt/ray-env`) |
+| `RAY_HEAD_TYPE` / `RAY_WORKER_TYPE` | Server type (default `cx53`) |
+| `RAY_LOCATION` | Hetzner datacenter (default `hel1`) |
+| `RAY_NETWORK` | Private network name (default `ray-net`) |
+
+### One-Time Bootstrap
+
+Build the base snapshot before any cluster can be provisioned (only needed once):
+
+```bash
+./build_base_snapshot.sh
+```
+
+Creates a temporary server, installs Ray + ML deps (lightgbm, xgboost, pandas, scikit-learn, numpy, scipy, optuna), snapshots as `ray-worker-base-YYYYMMDD`, deletes the bootstrap server. `add_worker.sh` fails fast if this snapshot is missing.
+
+### Start the Cluster
+
+```bash
+./setup_head.sh          # creates ray-net if missing, creates or reuses head, starts Ray
+./add_worker.sh 1        # provisions ray-worker-1 from base snapshot, joins cluster
+./add_worker.sh 2        # repeat for each additional worker (max 4)
+```
+
+`setup_head.sh` is idempotent — it can reuse an existing head even at quota. Workers require `RAY_HEAD_PRIVATE_IP` to be set.
+
+### Verify the Cluster
+
+```bash
+python connect_test.py   # confirms Ray client connection from laptop; probes 4 tasks
+python smoke_test.py     # submits one task per CPU; fails if tasks do not span multiple nodes
+```
+
+`smoke_test.py` is the authoritative check — pass means all workers are joined and tasks distribute. Fail means workers are missing or Ray is misconfigured.
+
+### Check Live State
+
+```bash
+./status.sh              # shows Hetzner server list, network attachment, and `ray status` on head
+```
+
+Requires `RAY_HEAD_IP` in `config.env`. Prints a message instead of hanging if head is unreachable.
+
+### Code and Data Sync
+
+Push to **head and all workers** (head runs tasks too — missing code on head causes import failures):
+
+```bash
+./push_code.sh ~/projects/Market         # includes data/
+./push_code.sh ~/projects/MarketNN       # includes data/
+./push_code.sh --no-data ~/projects/MarketNN  # code-only for subsequent iterations
+```
+
+Destination defaults to `/root/<project-name>`. Uses `rsync --delete` — do not point at a remote directory with unrelated files.
+
+### Collect Logs and Results
+
+```bash
+./collect_logs.sh                              # Ray session logs from head only
+./collect_logs.sh --results /root/MarketNN/results  # + results from head and all workers
+./collect_logs.sh job-id-1 job-id-2            # + per-job stdout/stderr via `ray job logs`
+```
+
+Output lands in `logs/YYYYMMDD-HHMMSS/` inside the ray-hetzner repo. Results per node in `logs/.../results/<node-name>/`.
+
+### Tear Down
+
+```bash
+./remove_worker.sh ray-worker-1
+./remove_worker.sh ray-worker-2
+./teardown_head.sh          # stops Ray, deletes head, runs mop-up (clears stale IPs + lingering workers)
+```
+
+### Fault Diagnosis
+
+| Symptom | Likely cause | Fix |
+|---------|-------------|-----|
+| `add_worker.sh` fails fast | No `ray-worker-base-*` snapshot | Run `./build_base_snapshot.sh` |
+| `setup_head.sh` fails, quota full | All 5 slots used | Free a slot or reuse existing head |
+| SSH timeout during provisioning | Node never became reachable | Scripts exit with timeout message; re-run or check Hetzner console |
+| `smoke_test.py` — all tasks on one node | Workers not joined yet | Check `./status.sh`; re-run `./add_worker.sh` |
+| `connect_test.py` fails | Head unreachable or Ray not started | Check `RAY_HEAD_IP` in `config.env`; run `./status.sh` |
+| `push_code.sh` warns "head only" | No running workers found | Workers not provisioned yet or already removed |
+| Job fails with import error | Code not pushed to all nodes | Re-run `./push_code.sh` for the affected project |
+| Optional volume missing | Volume not mounted (non-fatal) | Preflight warns and continues — rsync-based data flow still works |
+
+### Dry-Run / Rehearsal
+
+All scripts support `--dry-run` (read-only, no server mutations). Use `--allow-missing-prereqs` (only valid with `--dry-run`) to continue planning when snapshot, head IP, or quota are missing:
+
+```bash
+./setup_head.sh --dry-run --allow-missing-prereqs
+./add_worker.sh --dry-run --allow-missing-prereqs 1
+./push_code.sh --dry-run --allow-missing-prereqs --no-data ~/projects/MarketNN
+```
 
 ## State Schema
 
@@ -224,10 +404,16 @@ Write this file to `{project_root}/ml_metaopt_state.json`. Update after every ph
 | Coding task assigned to GPT subagent | Coding → Opus 4.6 fast only |
 | Deploying to cluster before sanity check | Always complete Phase 4 first |
 | Running a full training loop in Phase 4 | Sanity check must finish in <60s — use minimal batches/iterations only; heavy work goes to Ray |
+| Skipping code sync before deploy | Always run push_code.sh for every project directory before launching jobs |
+| Pushing code to head only | push_code.sh pushes to head + all workers — head also runs tasks |
+| Skipping smoke_test.py before first job | smoke_test.py is the authoritative check that workers joined and tasks distribute |
+| Deploying jobs when smoke_test.py fails | Workers not joined = wasted jobs; fix the cluster first |
 | Ray cluster nodes sitting idle | Deploy multiple parallel jobs to fill all workers — one job per trial/partition |
 | Deploying a single sequential job | Design search space partitions so every worker has a job from the start |
 | Stopping subagents during cluster run | Keep all 8 running throughout the cluster jobs |
 | Cancelling all jobs when one fails | Only re-deploy the failed job — healthy jobs continue running |
+| Collecting results without --results flag | collect_logs.sh alone only pulls Ray session logs; use --results <path> to get experiment output from all nodes |
+| Running long jobs from laptop without tmux | SSH disconnects kill the process; use tmux on the head for long campaigns |
 | Subagent sits idle after finishing | Reassign to a new angle immediately |
 | Not passing state context to reassigned subagent | Always include relevant state fields per task |
 | Not updating state file after phase transition | Compaction will lose current progress |

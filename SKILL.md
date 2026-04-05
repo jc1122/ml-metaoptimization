@@ -123,7 +123,7 @@ The orchestrator must delegate:
 Key running states introduced by the v3 contract:
 - `DESIGN_EXPERIMENT` translates the winning proposal into an execution-ready experiment spec before code changes begin
 - `QUIESCE_SLOTS` drains finished work, cancels leftovers, and prepares either rollover or final cleanup
-- `MAINTAIN_BACKGROUND_POOL` keeps proposal-cycle bookkeeping continuous across reinvocations and freezes the current pool when selection begins
+- `MAINTAIN_BACKGROUND_POOL` keeps proposal-cycle bookkeeping continuous across reinvocations; the pool stays mutable there and freezes when `SELECT_EXPERIMENT` begins
 
 ```dot
 digraph machine {

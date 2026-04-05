@@ -285,8 +285,28 @@ class MetaoptValidationTests(unittest.TestCase):
         _require_pattern(self, skill, r"artifacts/.*code/.*data/.*manifests/.*patches/")
         _require_pattern(
             self,
+            skill,
+            r"`SELECT_EXPERIMENT` begins.*freeze|freeze.*when `SELECT_EXPERIMENT` begins",
+        )
+        _require_pattern(
+            self,
             machine,
             r"`proposal_cycle`.*`ideation_rounds_by_slot`.*floor rule",
+        )
+        _require_pattern(
+            self,
+            machine,
+            r"### `MAINTAIN_BACKGROUND_POOL`.*Create or reset `proposal_cycle\.cycle_id` when a new iteration first enters this state after `ROLL_ITERATION` or fresh initialization.*### `SELECT_EXPERIMENT`.*keep `proposal_cycle\.cycle_id` stable for auditability until the next iteration resets it",
+        )
+        _require_pattern(
+            self,
+            machine,
+            r"### `MAINTAIN_BACKGROUND_POOL`.*Set `proposal_cycle\.current_pool_frozen = false` when a new proposal cycle begins.*### `SELECT_EXPERIMENT`.*setting `proposal_cycle\.current_pool_frozen = true` once selection starts",
+        )
+        _require_pattern(
+            self,
+            machine,
+            r"### `MAINTAIN_BACKGROUND_POOL`.*Clear `proposal_cycle\.shortfall_reason` when a new cycle begins.*### `WAIT_FOR_PROPOSAL_THRESHOLD`.*set `proposal_cycle\.shortfall_reason` to the current blocking reason.*Clear `proposal_cycle\.shortfall_reason` once progress is allowed into `SELECT_EXPERIMENT`",
         )
         _require_pattern(
             self,

@@ -1,4 +1,5 @@
 .ml-metaopt/
+.worktrees/
 ml_metaopt_campaign.local.yaml
 .codex
 __pycache__/

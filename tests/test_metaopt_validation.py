@@ -113,7 +113,7 @@ def _validate_batch_manifest(payload: dict) -> None:
     assert isinstance(payload, dict), "batch manifest must be an object"
     assert payload.get("version") == 3, "batch manifest must use v3"
     _require_non_empty_string(payload.get("campaign_id"), "campaign_id is required")
-    assert isinstance(payload.get("iteration"), int) and payload["iteration"] >= 0, "iteration is required"
+    assert type(payload.get("iteration")) is int and payload["iteration"] > 0, "iteration is required"
     _require_non_empty_string(payload.get("batch_id"), "batch_id is required")
     experiment = payload.get("experiment")
     assert isinstance(experiment, dict) and experiment, "experiment is required"
@@ -165,10 +165,27 @@ def _validate_state_payload(payload: dict) -> None:
     missing = required_keys - payload.keys()
     assert not missing, f"missing required state keys: {sorted(missing)}"
     assert payload["version"] == 3, "state fixture must use v3"
+    _require_non_empty_string(payload["campaign_id"], "campaign_id is required")
     _require_sha256_digest(payload["campaign_identity_hash"], "campaign_identity_hash must be a sha256 digest")
     _require_sha256_digest(payload["runtime_config_hash"], "runtime_config_hash must be a sha256 digest")
     assert payload["status"] in VALID_STATE_STATUSES, "invalid coarse status"
     assert payload["machine_state"] in VALID_MACHINE_STATES, "invalid machine state"
+    assert type(payload["current_iteration"]) is int and payload["current_iteration"] > 0, (
+        "current_iteration must be a positive integer"
+    )
+    _require_non_empty_string(payload["next_action"], "next_action is required")
+
+    objective_snapshot = payload["objective_snapshot"]
+    assert isinstance(objective_snapshot, dict), "objective_snapshot must be an object"
+    _require_non_empty_string(objective_snapshot.get("metric"), "objective_snapshot.metric is required")
+    assert objective_snapshot.get("direction") in {"minimize", "maximize"}, (
+        "objective_snapshot.direction must be minimize or maximize"
+    )
+    assert isinstance(objective_snapshot.get("aggregation"), dict), "objective_snapshot.aggregation must be an object"
+    _require_number(
+        objective_snapshot.get("improvement_threshold"),
+        "objective_snapshot.improvement_threshold must be numeric",
+    )
 
     assert "proposal_cycle" in payload, "proposal_cycle is required"
     proposal_cycle = payload["proposal_cycle"]
@@ -202,6 +219,14 @@ def _validate_state_payload(payload: dict) -> None:
         _require_non_empty_string(slot.get("status"), "slot status is required")
         assert type(slot.get("attempt")) is int and slot["attempt"] > 0, "slot attempt must be a positive integer"
         assert isinstance(slot.get("task_summary"), str) and slot["task_summary"], "slot must have task_summary"
+
+    assert isinstance(payload["current_proposals"], list), "current_proposals must be a list"
+    for proposal in payload["current_proposals"]:
+        assert isinstance(proposal, dict), "current_proposals entries must be objects"
+
+    assert isinstance(payload["next_proposals"], list), "next_proposals must be a list"
+    for proposal in payload["next_proposals"]:
+        assert isinstance(proposal, dict), "next_proposals entries must be objects"
 
     selected_experiment = payload["selected_experiment"]
     assert isinstance(selected_experiment, dict), "selected_experiment must be an object"
@@ -273,6 +298,15 @@ def _validate_state_payload(payload: dict) -> None:
         assert remote_batch.get("status") in VALID_REMOTE_BATCH_STATUSES, (
             "remote_batches entries must include valid status"
         )
+
+    key_learnings = payload["key_learnings"]
+    assert isinstance(key_learnings, list), "key_learnings must be a list"
+    for learning in key_learnings:
+        _require_non_empty_string(learning, "key_learnings entries must be non-empty strings")
+
+    assert type(payload["no_improve_iterations"]) is int and payload["no_improve_iterations"] >= 0, (
+        "no_improve_iterations must be a non-negative integer"
+    )
 
 
 class MetaoptValidationTests(unittest.TestCase):
@@ -724,6 +758,81 @@ class MetaoptValidationTests(unittest.TestCase):
         ]
         with self.assertRaisesRegex(AssertionError, r"remote_batches entries must include valid status"):
             _validate_state_payload(invalid_remote_batch_status)
+
+    def test_state_validator_rejects_invalid_required_top_level_field_shapes(self) -> None:
+        fixture = _read_json("tests/fixtures/state/running.json")
+
+        blank_campaign_id = copy.deepcopy(fixture)
+        blank_campaign_id["campaign_id"] = ""
+        with self.assertRaisesRegex(AssertionError, r"campaign_id is required"):
+            _validate_state_payload(blank_campaign_id)
+
+        invalid_current_iteration = copy.deepcopy(fixture)
+        invalid_current_iteration["current_iteration"] = True
+        with self.assertRaisesRegex(AssertionError, r"current_iteration must be a positive integer"):
+            _validate_state_payload(invalid_current_iteration)
+
+        blank_next_action = copy.deepcopy(fixture)
+        blank_next_action["next_action"] = ""
+        with self.assertRaisesRegex(AssertionError, r"next_action is required"):
+            _validate_state_payload(blank_next_action)
+
+        blank_objective_metric = copy.deepcopy(fixture)
+        blank_objective_metric["objective_snapshot"] = dict(fixture["objective_snapshot"])
+        blank_objective_metric["objective_snapshot"]["metric"] = ""
+        with self.assertRaisesRegex(AssertionError, r"objective_snapshot.metric is required"):
+            _validate_state_payload(blank_objective_metric)
+
+        invalid_objective_direction = copy.deepcopy(fixture)
+        invalid_objective_direction["objective_snapshot"] = dict(fixture["objective_snapshot"])
+        invalid_objective_direction["objective_snapshot"]["direction"] = "sideways"
+        with self.assertRaisesRegex(AssertionError, r"objective_snapshot.direction must be minimize or maximize"):
+            _validate_state_payload(invalid_objective_direction)
+
+        invalid_objective_aggregation = copy.deepcopy(fixture)
+        invalid_objective_aggregation["objective_snapshot"] = dict(fixture["objective_snapshot"])
+        invalid_objective_aggregation["objective_snapshot"]["aggregation"] = []
+        with self.assertRaisesRegex(AssertionError, r"objective_snapshot.aggregation must be an object"):
+            _validate_state_payload(invalid_objective_aggregation)
+
+        invalid_objective_threshold = copy.deepcopy(fixture)
+        invalid_objective_threshold["objective_snapshot"] = dict(fixture["objective_snapshot"])
+        invalid_objective_threshold["objective_snapshot"]["improvement_threshold"] = True
+        with self.assertRaisesRegex(AssertionError, r"objective_snapshot.improvement_threshold must be numeric"):
+            _validate_state_payload(invalid_objective_threshold)
+
+        invalid_current_proposals = copy.deepcopy(fixture)
+        invalid_current_proposals["current_proposals"] = ["proposal"]
+        with self.assertRaisesRegex(AssertionError, r"current_proposals entries must be objects"):
+            _validate_state_payload(invalid_current_proposals)
+
+        invalid_next_proposals = copy.deepcopy(fixture)
+        invalid_next_proposals["next_proposals"] = [123]
+        with self.assertRaisesRegex(AssertionError, r"next_proposals entries must be objects"):
+            _validate_state_payload(invalid_next_proposals)
+
+        invalid_key_learnings = copy.deepcopy(fixture)
+        invalid_key_learnings["key_learnings"] = [""]
+        with self.assertRaisesRegex(AssertionError, r"key_learnings entries must be non-empty strings"):
+            _validate_state_payload(invalid_key_learnings)
+
+        invalid_no_improve_iterations = copy.deepcopy(fixture)
+        invalid_no_improve_iterations["no_improve_iterations"] = -1
+        with self.assertRaisesRegex(AssertionError, r"no_improve_iterations must be a non-negative integer"):
+            _validate_state_payload(invalid_no_improve_iterations)
+
+    def test_batch_manifest_rejects_non_positive_or_boolean_iteration(self) -> None:
+        fixture = _read_json("tests/fixtures/manifest/valid.json")
+
+        zero_iteration = dict(fixture)
+        zero_iteration["iteration"] = 0
+        with self.assertRaisesRegex(AssertionError, r"iteration is required"):
+            _validate_batch_manifest(zero_iteration)
+
+        boolean_iteration = dict(fixture)
+        boolean_iteration["iteration"] = True
+        with self.assertRaisesRegex(AssertionError, r"iteration is required"):
+            _validate_batch_manifest(boolean_iteration)
 
     def test_results_validator_rejects_boolean_aggregate_value(self) -> None:
         fixture = _read_json("tests/fixtures/backend/results-valid.json")

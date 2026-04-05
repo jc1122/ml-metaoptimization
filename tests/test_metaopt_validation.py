@@ -86,6 +86,8 @@ def _validate_backend_payload(kind: str, payload: dict) -> None:
         assert isinstance(per_dataset, dict) and per_dataset, "per_dataset results are required"
         artifact_locations = payload.get("artifact_locations")
         assert isinstance(artifact_locations, dict) and artifact_locations, "artifact_locations are required"
+        assert isinstance(artifact_locations.get("code"), str) and artifact_locations["code"], "artifact_locations.code is required"
+        assert isinstance(artifact_locations.get("data_manifest"), str) and artifact_locations["data_manifest"], "artifact_locations.data_manifest is required"
         assert isinstance(payload.get("logs_location"), str) and payload["logs_location"], "logs_location is required"
         return
 
@@ -242,6 +244,36 @@ class MetaoptValidationTests(unittest.TestCase):
             self,
             contracts,
             r"At the end of `ROLL_ITERATION`, after carry-over filtering is complete, emit",
+        )
+
+    def test_contract_docs_define_v3_state_manifest_and_retry_policy(self) -> None:
+        contracts = _read_text("references/contracts.md")
+        backend = _read_text("references/backend-contract.md")
+
+        _require_pattern(
+            self,
+            contracts,
+            r"## State File.*`proposal_cycle`.*`current_pool_frozen`.*`ideation_rounds_by_slot`",
+        )
+        _require_pattern(
+            self,
+            contracts,
+            r"## Slot Contract.*`model_class`.*`requested_model`.*`resolved_model`",
+        )
+        _require_pattern(
+            self,
+            contracts,
+            r"## Local Changeset Contract.*`integration_worktree`.*`patch_artifacts`.*`data_manifest_uri`",
+        )
+        _require_pattern(
+            self,
+            contracts,
+            r"## Batch Manifest Contract.*`artifacts\.code_artifact\.uri`.*`artifacts\.data_manifest\.uri`",
+        )
+        _require_pattern(
+            self,
+            backend,
+            r"## Retry Policy Contract.*backend.*must honor the declared retry policy",
         )
 
     def test_readme_documents_validation_command_and_agent_manifest(self) -> None:

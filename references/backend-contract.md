@@ -69,6 +69,10 @@ The backend must expose a stdout JSON object with:
 - `artifact_locations`
 - `logs_location`
 
+Required artifact location fields:
+- `artifact_locations.code`
+- `artifact_locations.data_manifest`
+
 ## Artifact Contract
 
 The backend must accept immutable artifacts, not mutable working tree paths.
@@ -77,6 +81,12 @@ Expected artifact behavior:
 - consume a content-addressed or fixed manifest reference
 - unpack or materialize into an isolated execution workspace
 - run the declared entrypoint there
+
+## Retry Policy Contract
+
+The orchestrator declares retry policy in the campaign spec and batch manifest.
+The backend must honor the declared retry policy.
+If the selected backend cannot honor it, the run must fail before enqueue.
 
 ## Utilization Contract
 

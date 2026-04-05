@@ -23,6 +23,7 @@ Required fields:
 - `artifacts`
 - `remote_queue`
 - `remote_queue.backend`
+- `remote_queue.retry_policy`
 - `execution`
 - `execution.entrypoint`
 
@@ -34,7 +35,7 @@ Sentinel placeholders such as angle-bracket paths, `YOUR_*`, and dataset fingerp
 
 ## Campaign Identity Hash Contract
 
-The v2 contract separates campaign identity from runtime configuration:
+The v3 contract separates campaign identity from runtime configuration:
 
 - `campaign_identity_hash`: canonical JSON over `version`, `campaign_id`, `objective.metric`, `objective.direction`, `objective.aggregation`, and the sorted dataset entries `{id, role, fingerprint}`
 - `runtime_config_hash`: canonical JSON over `sanity`, `artifacts`, `remote_queue`, and `execution`
@@ -69,6 +70,7 @@ Required top-level keys:
 - `current_iteration`
 - `next_action`
 - `objective_snapshot`
+- `proposal_cycle`
 - `active_slots`
 - `current_proposals`
 - `next_proposals`
@@ -79,6 +81,12 @@ Required top-level keys:
 - `completed_experiments`
 - `key_learnings`
 - `no_improve_iterations`
+
+`proposal_cycle` must record:
+- `cycle_id`
+- `current_pool_frozen`
+- `ideation_rounds_by_slot`
+- `shortfall_reason`
 
 Recommended additional keys when useful:
 - `event_log_tail`
@@ -108,7 +116,9 @@ Each active slot must record:
 - `slot_id`
 - `slot_class`
 - `mode`
-- `model`
+- `model_class`
+- `requested_model`
+- `resolved_model`
 - `status`
 - `attempt`
 - `task_summary`
@@ -126,6 +136,16 @@ Each active slot must record:
 - `diagnosis`
 - `analysis`
 
+## Local Changeset Contract
+
+Each `local_changeset` must record:
+- `integration_worktree`
+- `patch_artifacts`
+- `apply_results`
+- `verification_notes`
+- `code_artifact_uri`
+- `data_manifest_uri`
+
 ## Batch Manifest Contract
 
 The orchestrator enqueues exactly one immutable batch manifest per experiment batch.
@@ -138,14 +158,10 @@ Required manifest fields:
 - `iteration`
 - `batch_id`
 - `experiment`
+- `retry_policy`
 - `artifacts.code_artifact.uri`
+- `artifacts.data_manifest.uri`
 - `execution.entrypoint`
-
-Expected additional fields:
-- objective metadata
-- data manifest or fingerprints
-- retry policy
-- results contract
 
 ## Batch Status / Result Contract
 

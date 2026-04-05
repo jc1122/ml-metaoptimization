@@ -1,3 +1,5 @@
 .ml-metaopt/
 ml_metaopt_campaign.local.yaml
 .codex
+__pycache__/
+*.pyc

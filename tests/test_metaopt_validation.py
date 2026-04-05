@@ -620,6 +620,11 @@ class MetaoptValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, r"slot attempt must be a positive integer"):
             _validate_state_payload(invalid_slot_attempt)
 
+        zero_slot_attempt = copy.deepcopy(fixture)
+        zero_slot_attempt["active_slots"][0]["attempt"] = 0
+        with self.assertRaisesRegex(AssertionError, r"slot attempt must be a positive integer"):
+            _validate_state_payload(zero_slot_attempt)
+
         boolean_baseline_aggregate = copy.deepcopy(fixture)
         boolean_baseline_aggregate["baseline"]["aggregate"] = True
         with self.assertRaisesRegex(AssertionError, r"baseline.aggregate must be numeric"):

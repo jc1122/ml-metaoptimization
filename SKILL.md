@@ -113,15 +113,30 @@ Dispatch 8 subagents in parallel. Assign roles dynamically — all 8 can cover d
 
 **Continuous operation:** When any subagent finishes, immediately assign it a new task. Never let a subagent be idle.
 
-**`next_proposals` cap — 20 entries.** Once `next_proposals` reaches 20, the list is considered saturated. From that point, stop assigning idea-generation roles entirely and switch all 8 agents exclusively to maintenance roles until the next iteration begins. New idea proposals beyond 20 are discarded without being recorded.
+**`next_proposals` cap — 200 entries.** Once `next_proposals` reaches 200, the list is considered saturated. From that point, stop assigning idea-generation roles entirely and switch all 8 agents exclusively to maintenance roles until the next iteration begins. New idea proposals beyond 200 are discarded without being recorded.
 
 **Role assignment priority:**
-- While `next_proposals` < 20: assign idea-generation and maintenance roles dynamically based on what advances the goal most
-- Once `next_proposals` = 20: assign maintenance roles only — no new idea proposals
+- While `next_proposals` < 200: assign idea-generation and maintenance roles dynamically based on what advances the goal most
+- Once `next_proposals` = 200: assign maintenance roles only — no new idea proposals
 
 **Idea-generation roles:** feature engineering, HPO space design, model architecture variants, target formulation variants, data quality analysis, ensemble design
 
 **Maintenance roles (higher priority once cap is hit):** code review (bugs, silent errors, incorrect assumptions), leakage audit in code (preprocessing/feature construction logic), infrastructure code review (data loading, batching, serialization inefficiencies), code speedup/profiling
+
+**Maintenance agent execution — local worktrees + repo-audit-refactor-optimize skill:**
+
+Maintenance agents run against the local repository using isolated git worktrees so changes do not interfere with the main working tree or each other. Each maintenance agent must invoke the `repo-audit-refactor-optimize` skill, which covers:
+- testing gap detection and test coverage improvements
+- performance profiling and optimization of local codebase
+- code quality, refactoring, and dead code removal
+- dependency and infrastructure hygiene
+
+Dispatch each maintenance agent with:
+1. The path to a fresh worktree (use `git worktree add` before dispatching)
+2. Instruction to invoke `repo-audit-refactor-optimize` skill
+3. Focus area (e.g. "testing gaps", "data loading performance", "feature pipeline efficiency")
+
+When the agent completes, merge its changes back to the main branch and remove the worktree. If changes conflict, dispatch an Opus 4.6 fast subagent to resolve.
 
 **Orchestrator idle rule:** If the orchestrator ever finds itself with no subagents running (e.g. waiting between phases), immediately dispatch a GPT-5.4 subagent to do a full repository code audit. When the audit completes, dispatch one Opus 4.6 fast subagent to implement the fixes. Idle time is never wasted.
 

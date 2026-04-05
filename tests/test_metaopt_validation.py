@@ -702,10 +702,28 @@ class MetaoptValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, r"runtime_config_hash must be a sha256 digest"):
             _validate_state_payload(invalid_runtime_hash)
 
+        blank_remote_batch_id = copy.deepcopy(fixture)
+        blank_remote_batch_id["remote_batches"] = [
+            {"batch_id": "", "queue_ref": "queue-20260405-0001", "status": "running"}
+        ]
+        with self.assertRaisesRegex(AssertionError, r"remote_batches entries must include non-empty batch_id"):
+            _validate_state_payload(blank_remote_batch_id)
+
         malformed_remote_batch = copy.deepcopy(fixture)
         malformed_remote_batch["remote_batches"] = [{"batch_id": "batch-20260405-0001", "queue_ref": "", "status": "running"}]
         with self.assertRaisesRegex(AssertionError, r"remote_batches entries must include non-empty queue_ref"):
             _validate_state_payload(malformed_remote_batch)
+
+        invalid_remote_batch_status = copy.deepcopy(fixture)
+        invalid_remote_batch_status["remote_batches"] = [
+            {
+                "batch_id": "batch-20260405-0001",
+                "queue_ref": "queue-20260405-0001",
+                "status": "waiting",
+            }
+        ]
+        with self.assertRaisesRegex(AssertionError, r"remote_batches entries must include valid status"):
+            _validate_state_payload(invalid_remote_batch_status)
 
     def test_results_validator_rejects_boolean_aggregate_value(self) -> None:
         fixture = _read_json("tests/fixtures/backend/results-valid.json")

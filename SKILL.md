@@ -265,8 +265,24 @@ Update in state file: `baseline` (if improved), `key_learnings`, `completed_expe
 
   If fewer than 4 proposals survive: do not proceed to synthesis yet — dispatch additional brainstorming subagents on new angles until the count reaches 4, then re-filter. Record the shortfall in `key_learnings`.
 
-  Move the filtered list into `current_proposals`, clear `next_proposals`, increment `current_iteration`, set `current_phase = 1`, update `next_action` to `"start brainstorming phase"`, go to Phase 1
-- Done → tear down the cluster, then clean up local state:
+  Move the filtered list into `current_proposals`, clear `next_proposals`, increment `current_iteration`, set `current_phase = 1`, update `next_action` to `"start brainstorming phase"`.
+
+**Before proceeding — mandatory iteration report (output directly to the user):**
+
+```
+=== Iteration <N> Report ===
+Experiments run:        <list of completed_experiments this iteration>
+Baseline before:        <metric> = <value>
+Baseline after:         <metric> = <value> (<+/- delta>)
+Key learnings:          <bullet list of new key_learnings added this iteration>
+Proposals carried over: <count> (after Phase 7 review, from <count before filter>)
+Maintenance work done:  <summary of code review / refactor / audit work completed>
+Next iteration focus:   <top proposal selected by synthesis>
+```
+
+**After report — re-read this skill in full before continuing.** Invoke the `ml-metaoptimization` skill again to reload the latest version, then go to Phase 1.
+
+- Done → output the final iteration report (same format as above, plus a campaign summary: total iterations, overall baseline improvement, top learnings), then tear down the cluster and clean up local state:
 
 ```bash
 ./remove_worker.sh ray-worker-1

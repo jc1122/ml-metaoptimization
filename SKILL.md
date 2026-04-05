@@ -160,13 +160,12 @@ Brainstorming subagents continue running throughout this phase.
 Push all required project directories to the cluster. Every directory must be pushed to both the head and all workers (the head also executes tasks):
 
 ```bash
-# First run of a campaign — include data:
-./push_code.sh ~/projects/Market
-./push_code.sh ~/projects/DegreeGraph2
-./push_code.sh ~/projects/MarketNN
+# First run of a campaign — include data (replace paths with actual project directories):
+./push_code.sh ~/projects/ProjectA
+./push_code.sh ~/projects/ProjectB
 
 # Subsequent iterations — code changes only:
-./push_code.sh --no-data ~/projects/MarketNN
+./push_code.sh --no-data ~/projects/ProjectB
 ```
 
 `push_code.sh` uses `rsync --delete` and targets `/root/<project-name>` on every node by default. Warn if only the head was found (no workers joined yet).
@@ -311,9 +310,10 @@ Requires `RAY_HEAD_IP` in `config.env`. Prints a message instead of hanging if h
 Push to **head and all workers** (head runs tasks too — missing code on head causes import failures):
 
 ```bash
-./push_code.sh ~/projects/Market         # includes data/
-./push_code.sh ~/projects/MarketNN       # includes data/
-./push_code.sh --no-data ~/projects/MarketNN  # code-only for subsequent iterations
+# Replace with actual project directories for the current campaign:
+./push_code.sh ~/projects/ProjectA              # includes data/
+./push_code.sh ~/projects/ProjectB              # includes data/
+./push_code.sh --no-data ~/projects/ProjectB   # code-only for subsequent iterations
 ```
 
 Destination defaults to `/root/<project-name>`. Uses `rsync --delete` — do not point at a remote directory with unrelated files.

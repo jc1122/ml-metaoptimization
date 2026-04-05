@@ -23,6 +23,7 @@ Required fields:
 - `artifacts`
 - `remote_queue`
 - `remote_queue.backend`
+- `remote_queue.retry_policy`
 - `execution`
 - `execution.entrypoint`
 
@@ -34,7 +35,7 @@ Sentinel placeholders such as angle-bracket paths, `YOUR_*`, and dataset fingerp
 
 ## Campaign Identity Hash Contract
 
-The v2 contract separates campaign identity from runtime configuration:
+The v3 contract separates campaign identity from runtime configuration:
 
 - `campaign_identity_hash`: canonical JSON over `version`, `campaign_id`, `objective.metric`, `objective.direction`, `objective.aggregation`, and the sorted dataset entries `{id, role, fingerprint}`
 - `runtime_config_hash`: canonical JSON over `sanity`, `artifacts`, `remote_queue`, and `execution`
@@ -69,6 +70,7 @@ Required top-level keys:
 - `current_iteration`
 - `next_action`
 - `objective_snapshot`
+- `proposal_cycle`
 - `active_slots`
 - `current_proposals`
 - `next_proposals`
@@ -79,6 +81,17 @@ Required top-level keys:
 - `completed_experiments`
 - `key_learnings`
 - `no_improve_iterations`
+
+`proposal_cycle` must record:
+- `cycle_id`
+- `current_pool_frozen`
+- `ideation_rounds_by_slot` as a map of non-empty `slot_id` strings to non-negative integer round counts
+- `shortfall_reason`
+
+Each `remote_batches[]` entry must be an object with:
+- `batch_id`
+- `queue_ref`
+- `status` using one of `queued`, `running`, `completed`, or `failed`
 
 Recommended additional keys when useful:
 - `event_log_tail`
@@ -108,10 +121,14 @@ Each active slot must record:
 - `slot_id`
 - `slot_class`
 - `mode`
-- `model`
+- `model_class`
+- `requested_model`
+- `resolved_model`
 - `status`
 - `attempt`
 - `task_summary`
+
+`slot_id` and `status` must be non-empty strings. `attempt` must be a positive integer.
 
 `slot_class` values:
 - `background`
@@ -126,6 +143,38 @@ Each active slot must record:
 - `diagnosis`
 - `analysis`
 
+`mode = materialization` requires `model_class = strong_coder`.
+
+## Selected Experiment Contract
+
+`selected_experiment` may be `null` until `SELECT_EXPERIMENT` persists a winner; once selected, it is an object with `proposal_id` and `sanity_attempts`.
+
+When present, `selected_experiment` must be an object with:
+- `proposal_id` as a non-empty string
+- `sanity_attempts` as a non-negative integer
+
+## Local Changeset Contract
+
+`local_changeset` may be `null` until `MATERIALIZE_CHANGESET` persists outputs; once present, it is an object with the documented fields.
+
+When present, each `local_changeset` must record:
+- `integration_worktree`
+- `patch_artifacts`
+- `apply_results`
+- `verification_notes`
+- `code_artifact_uri`
+- `data_manifest_uri`
+
+When present, each `patch_artifacts[]` entry must be an object with:
+- `producer_slot_id`
+- `purpose`
+- `patch_path`
+- `target_worktree`
+
+When present, each `apply_results[]` entry must be an object with:
+- `patch_path`
+- `status`
+
 ## Batch Manifest Contract
 
 The orchestrator enqueues exactly one immutable batch manifest per experiment batch.
@@ -138,14 +187,38 @@ Required manifest fields:
 - `iteration`
 - `batch_id`
 - `experiment`
+- `retry_policy`
 - `artifacts.code_artifact.uri`
+- `artifacts.data_manifest.uri`
 - `execution.entrypoint`
 
-Expected additional fields:
-- objective metadata
-- data manifest or fingerprints
-- retry policy
-- results contract
+Minimal manifest shape:
+
+```json
+{
+  "version": 3,
+  "campaign_id": "<campaign_id>",
+  "iteration": 3,
+  "batch_id": "<batch_id>",
+  "experiment": {
+    "proposal_id": "<proposal_id>"
+  },
+  "retry_policy": {
+    "max_attempts": 2
+  },
+  "artifacts": {
+    "code_artifact": {
+      "uri": "<code artifact uri>"
+    },
+    "data_manifest": {
+      "uri": "<data manifest uri>"
+    }
+  },
+  "execution": {
+    "entrypoint": "<command>"
+  }
+}
+```
 
 ## Batch Status / Result Contract
 
@@ -162,7 +235,9 @@ The backend must persist machine-readable status with:
 ## Aggregate Baseline Contract
 
 - `baseline.aggregate` is the authoritative campaign score
+- `baseline.aggregate` must be numeric
 - `baseline.by_dataset` is diagnostic but mandatory
+- `baseline.by_dataset` must be a non-empty object mapping non-empty dataset ids to numeric values
 - `objective.direction` determines improvement checks
 - `objective.aggregation` determines how dataset scores roll up into the aggregate
 - `objective.improvement_threshold` determines whether an iteration counts as an improvement

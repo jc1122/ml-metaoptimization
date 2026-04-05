@@ -49,22 +49,29 @@
 - Ensure exactly `dispatch_policy.background_slots` background slots exist
 - Prefer ideation when `current_proposals` is below target and `next_proposals` is below cap
 - Otherwise assign maintenance work
-- The current proposal cycle starts on the first entry into this state for an iteration and ends when `SELECT_EXPERIMENT` begins
-- Increment `ideation_rounds_this_cycle` each time a background ideation slot finishes and its output is persisted
+- The current proposal cycle starts on the first entry into this state for an iteration
+- Create or reset `proposal_cycle.cycle_id` when a new iteration first enters this state after `ROLL_ITERATION` or fresh initialization
+- Set `proposal_cycle.current_pool_frozen = false` when a new proposal cycle begins and keep it false while `current_proposals` may still grow
+- Clear `proposal_cycle.shortfall_reason` when a new cycle begins or when the target threshold is later satisfied
+- Persist round bookkeeping in `proposal_cycle.ideation_rounds_by_slot`
+- Increment `proposal_cycle.ideation_rounds_by_slot[slot_id]` each time a background ideation slot finishes and its output is persisted
 - If the machine reaches this state with zero active slots, refill background slots here rather than launching ad hoc workers outside the slot accounting rules
 
 ### `WAIT_FOR_PROPOSAL_THRESHOLD`
 
 - Require `proposal_policy.current_target` distinct, non-overlapping proposals in `current_proposals`
-- Floor rule: if every background slot has completed two ideation rounds in the current cycle and fewer than the target exist, allow progress once `proposal_policy.current_floor` is reached
-- If the floor is still not met, continue background ideation and record the shortfall
+- `proposal_cycle` uses persisted `ideation_rounds_by_slot` bookkeeping for the floor rule so reinvocations resume the same round counts instead of restarting them
+- Floor rule: if the persisted `proposal_cycle.ideation_rounds_by_slot` bookkeeping shows every background slot has completed two ideation rounds in the current cycle and fewer than the target exist, allow progress once `proposal_policy.current_floor` is reached
+- If the floor is still not met, continue background ideation and set `proposal_cycle.shortfall_reason` to the current blocking reason
+- Clear `proposal_cycle.shortfall_reason` once progress is allowed into `SELECT_EXPERIMENT`
 
 ### `SELECT_EXPERIMENT`
 
 - Dispatch one `strong_reasoner` subagent
 - Input: `current_proposals`, baseline context, prior learnings, and completed experiments
 - Output: exactly one winning proposal and a short ranking rationale
-- Freeze `current_proposals` once selection starts
+- Freeze `current_proposals` by setting `proposal_cycle.current_pool_frozen = true` once selection starts
+- The current proposal cycle ends when this state begins; keep `proposal_cycle.cycle_id` stable for auditability until the next iteration resets it
 
 ### `DESIGN_EXPERIMENT`
 
@@ -79,6 +86,8 @@
 - Count these coders against `auxiliary_slots` with `mode = materialization`
 - The orchestrator may perform only clean, mechanical integration after subagents finish
 - Package an immutable code artifact under `.ml-metaopt/artifacts/code/`
+- Package the manifest-linked data artifact inputs under `.ml-metaopt/artifacts/data/`
+- Persist one unified diff patch artifact for each code-modifying worker under `.ml-metaopt/artifacts/patches/`
 - Write a batch manifest under `.ml-metaopt/artifacts/manifests/`
 
 ### `LOCAL_SANITY`
@@ -133,7 +142,8 @@
 - Stop launching new work
 - Persist any finished slot output before changing slot ownership
 - Wait up to a 60-second drain window for in-flight slots to complete
-- cancel leftovers after the 60-second drain window and record cancellation reasons in state
+- cancel leftovers after the 60-second drain window
+- record cancellation reasons in state and append any mechanical patch-application outcome to `apply_results` in `local_changeset`
 - If the campaign continues, set `machine_state = MAINTAIN_BACKGROUND_POOL`, keep `status = RUNNING`, and re-invoke `ml-metaoptimization`
 - If the campaign stops, transition to `COMPLETE`
 

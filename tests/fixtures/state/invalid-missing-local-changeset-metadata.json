@@ -43,13 +43,13 @@
     {
       "slot_id": "aux-1",
       "slot_class": "auxiliary",
-      "mode": "materialization",
-      "model_class": "strong_coder",
+      "mode": "analysis",
+      "model_class": "strong_reasoner",
       "requested_model": "Opus 4.6 fast",
       "resolved_model": "Opus 4.6 fast",
-      "status": "running",
+      "status": "queued",
       "attempt": 1,
-      "task_summary": "Retain materialization context for the aux-1 patch bundle while the remote batch runs"
+      "task_summary": "Prepare post-run analysis context"
     }
   ],
   "current_proposals": [],
@@ -65,25 +65,12 @@
   },
   "local_changeset": {
     "integration_worktree": ".ml-metaopt/worktrees/iter-3-materialization",
-    "patch_artifacts": [
-      {
-        "producer_slot_id": "aux-1",
-        "purpose": "candidate patch bundle",
-        "patch_path": ".ml-metaopt/artifacts/patches/batch-20260405-0001/aux-1.patch",
-        "target_worktree": ".ml-metaopt/worktrees/iter-3-materialization"
-      }
-    ],
-    "apply_results": [
-      {
-        "patch_path": ".ml-metaopt/artifacts/patches/batch-20260405-0001/aux-1.patch",
-        "status": "applied"
-      }
-    ],
+    "patch_artifacts": [],
+    "apply_results": [],
     "verification_notes": [
       "local sanity has not rerun yet"
     ],
-    "code_artifact_uri": ".ml-metaopt/artifacts/code/batch-20260405-0001.tar.gz",
-    "data_manifest_uri": ".ml-metaopt/artifacts/data/batch-20260405-0001.json"
+    "code_artifact_uri": ".ml-metaopt/artifacts/code/batch-20260405-0001.tar.gz"
   },
   "remote_batches": [
     {
@@ -96,7 +83,7 @@
     "aggregate": 0.1284,
     "by_dataset": {
       "ds_main": 0.1269,
-      "ds_holdout": 0.1320
+      "ds_holdout": 0.132
     }
   },
   "completed_experiments": [

@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "campaign_id": "market-forecast-v3",
   "campaign_identity_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
   "runtime_config_hash": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
@@ -19,6 +19,12 @@
     },
     "improvement_threshold": 0.0005
   },
+  "proposal_cycle": {
+    "cycle_id": "iter-7-cycle-1",
+    "current_pool_frozen": true,
+    "ideation_rounds_by_slot": {},
+    "shortfall_reason": ""
+  },
   "active_slots": [],
   "current_proposals": [],
   "next_proposals": [],
@@ -27,7 +33,14 @@
     "sanity_attempts": 0
   },
   "local_changeset": {
-    "code_artifact_uri": ".ml-metaopt/artifacts/code/batch-20260405-0007.tar.gz"
+    "integration_worktree": ".ml-metaopt/worktrees/iter-7-materialization",
+    "patch_artifacts": [],
+    "apply_results": [],
+    "verification_notes": [
+      "final verification completed before archive"
+    ],
+    "code_artifact_uri": ".ml-metaopt/artifacts/code/batch-20260405-0007.tar.gz",
+    "data_manifest_uri": ".ml-metaopt/artifacts/data/batch-20260405-0007.json"
   },
   "remote_batches": [
     {

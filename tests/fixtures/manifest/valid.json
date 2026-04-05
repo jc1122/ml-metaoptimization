@@ -1,0 +1,23 @@
+{
+  "version": 3,
+  "campaign_id": "market-forecast-v3",
+  "iteration": 3,
+  "batch_id": "batch-20260405-0001",
+  "experiment": {
+    "proposal_id": "p-16"
+  },
+  "retry_policy": {
+    "max_attempts": 2
+  },
+  "artifacts": {
+    "code_artifact": {
+      "uri": ".ml-metaopt/artifacts/code/batch-20260405-0001.tar.gz"
+    },
+    "data_manifest": {
+      "uri": ".ml-metaopt/artifacts/data/batch-20260405-0001.json"
+    }
+  },
+  "execution": {
+    "entrypoint": "python3 -m trainer.remote_entrypoint"
+  }
+}

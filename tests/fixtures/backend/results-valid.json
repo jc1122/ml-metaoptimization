@@ -11,6 +11,7 @@
   },
   "artifact_locations": {
     "code": "s3://metaopt/artifacts/code/batch-20260405-0001.tar.gz",
+    "data_manifest": "s3://metaopt/artifacts/data/batch-20260405-0001.json",
     "metrics": "s3://metaopt/results/batch-20260405-0001/metrics.json"
   },
   "logs_location": "s3://metaopt/results/batch-20260405-0001/logs.txt"

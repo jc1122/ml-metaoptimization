@@ -3,10 +3,10 @@
   "campaign_id": "market-forecast-v3",
   "campaign_identity_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
   "runtime_config_hash": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-  "status": "COMPLETE",
+  "status": "RUNNING",
   "machine_state": "WAIT_FOR_REMOTE_BATCH",
   "current_iteration": 3,
-  "next_action": "this fixture should fail",
+  "next_action": "poll remote batch status",
   "objective_snapshot": {
     "metric": "rmse",
     "direction": "minimize",
@@ -18,14 +18,6 @@
       }
     },
     "improvement_threshold": 0.0005
-  },
-  "proposal_cycle": {
-    "cycle_id": "iter-3-cycle-1",
-    "current_pool_frozen": true,
-    "ideation_rounds_by_slot": {
-      "bg-1": 2
-    },
-    "shortfall_reason": ""
   },
   "active_slots": [],
   "current_proposals": [],

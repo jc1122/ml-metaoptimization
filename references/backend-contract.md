@@ -64,9 +64,25 @@ Input:
 - exactly one `batch_id`
 
 The backend must expose a stdout JSON object with:
+- `batch_id`
+- `status`
 - `best_aggregate_result`
+- `best_aggregate_result.metric`
+- `best_aggregate_result.value`
 - `per_dataset`
 - `artifact_locations`
+- `logs_location`
+
+Required results behavior:
+- echo the requested `batch_id` exactly
+- report `status = "completed"`
+- provide `best_aggregate_result.metric` as a non-empty metric name
+- provide `best_aggregate_result.value` as the numeric aggregate score for that metric
+- return non-empty artifact locations for the immutable code artifact, immutable data manifest, and execution logs
+
+Required artifact location fields:
+- `artifact_locations.code`
+- `artifact_locations.data_manifest`
 - `logs_location`
 
 ## Artifact Contract
@@ -77,6 +93,12 @@ Expected artifact behavior:
 - consume a content-addressed or fixed manifest reference
 - unpack or materialize into an isolated execution workspace
 - run the declared entrypoint there
+
+## Retry Policy Contract
+
+The orchestrator declares retry policy in the campaign spec and batch manifest.
+The backend must honor the declared retry policy.
+If the selected backend cannot honor it, the run must fail before enqueue.
 
 ## Utilization Contract
 

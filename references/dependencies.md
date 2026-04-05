@@ -2,21 +2,22 @@
 
 ## Hard Runtime Dependencies
 
-- GitHub Copilot agent runtime with:
-  - subagent dispatch
-  - model selection across multiple models
-  - read/write access in the target repository
-- Target repository files:
+- GitHub Copilot agent runtime with subagent dispatch
+- `git` with worktree support
+- unified-diff-compatible mechanical patch application capability
+- host reinvocation mechanism compatible with the `AGENTS.md` resume hook
+- target repository files:
   - `ml_metaopt_campaign.yaml`
   - `AGENTS.md`
-  - `.ml-metaopt/state.json` for resume after initialization; create it on first run if absent
-- This skill repo assets:
+  - `.ml-metaopt/state.json` (created on first run if absent, then reused for resume)
+- skill repo assets:
   - `SKILL.md`
   - `references/contracts.md`
   - `references/state-machine.md`
   - `references/worker-lanes.md`
   - `references/backend-contract.md`
   - `ml_metaopt_campaign.example.yaml`
+- PyYAML for the validation suite
 
 ## Queue Backend Dependency
 

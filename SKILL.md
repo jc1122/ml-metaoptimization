@@ -136,9 +136,13 @@ It returns a complete Ray campaign specification: script design, search space, a
 
 ## Phase 4 — Local Sanity Check
 
-Run a fast local check — 1 dataset, minimal iterations:
-1. **Temporal leakage check** — must pass with zero leakage
-2. **Performance check** — no bottlenecks, runtime acceptable for cluster scale
+**Purpose:** verify configs are correct and infrastructure is wired up. This is not a performance or training run — all heavy computation is delegated to the Ray cluster, which must be kept saturated.
+
+**Hard constraint: the check must complete in under 60 seconds.** Use the smallest possible subset: 1 dataset, 1–2 batches or iterations, no warmup, no evaluation loop. If the script does not support a fast-exit flag, dispatch an Opus 4.6 fast subagent to add one before running.
+
+Checks:
+1. **Config validity** — script loads, hyperparameters parse, no import or path errors
+2. **Temporal leakage** — must pass with zero leakage
 
 **If either fails:** dispatch Opus 4.6 fast subagent with the failure output. It diagnoses and returns a fix. Apply and re-run. Do not deploy until both checks pass.
 
@@ -209,6 +213,8 @@ Write this file to `{project_root}/ml_metaopt_state.json`. Update after every ph
 | Asking the user a question | Dispatch Opus 4.6 fast subagent to decide instead |
 | Coding task assigned to GPT subagent | Coding → Opus 4.6 fast only |
 | Deploying to cluster before sanity check | Always complete Phase 4 first |
+| Running a full training loop in Phase 4 | Sanity check must finish in <60s — use minimal batches/iterations only; heavy work goes to Ray |
+| Ray cluster nodes sitting idle | Keep nodes saturated — deploy as soon as Phase 4 passes |
 | Stopping subagents during cluster run | Keep all 8 running throughout the cluster job |
 | Subagent sits idle after finishing | Reassign to a new angle immediately |
 | Not passing state context to reassigned subagent | Always include relevant state fields per task |

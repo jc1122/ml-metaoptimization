@@ -9,7 +9,7 @@
 - target repository files:
   - `ml_metaopt_campaign.yaml`
   - `AGENTS.md`
-  - `.ml-metaopt/state.json`
+  - `.ml-metaopt/state.json` (created on first run if absent, then reused for resume)
 - skill repo assets:
   - `SKILL.md`
   - `references/contracts.md`

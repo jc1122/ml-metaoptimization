@@ -65,8 +65,20 @@
   },
   "local_changeset": {
     "integration_worktree": ".ml-metaopt/worktrees/iter-3-materialization",
-    "patch_artifacts": [],
-    "apply_results": [],
+    "patch_artifacts": [
+      {
+        "producer_slot_id": "aux-1",
+        "purpose": "candidate patch bundle",
+        "patch_path": ".ml-metaopt/artifacts/patches/batch-20260405-0001/aux-1.patch",
+        "target_worktree": ".ml-metaopt/worktrees/iter-3-materialization"
+      }
+    ],
+    "apply_results": [
+      {
+        "patch_path": ".ml-metaopt/artifacts/patches/batch-20260405-0001/aux-1.patch",
+        "status": "applied"
+      }
+    ],
     "verification_notes": [
       "local sanity has not rerun yet"
     ],

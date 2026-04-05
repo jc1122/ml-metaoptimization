@@ -62,6 +62,10 @@ def _require_pattern(test_case: unittest.TestCase, text: str, pattern: str) -> N
     test_case.assertRegex(text, re.compile(pattern, re.MULTILINE | re.DOTALL))
 
 
+def _require_non_empty_string(value: object, message: str) -> None:
+    assert isinstance(value, str) and value, message
+
+
 def _validate_backend_payload(kind: str, payload: dict) -> None:
     assert isinstance(payload, dict), "backend payload must be an object"
     assert isinstance(payload.get("batch_id"), str) and payload["batch_id"], "batch_id is required"
@@ -93,6 +97,30 @@ def _validate_backend_payload(kind: str, payload: dict) -> None:
         return
 
     raise AssertionError(f"unsupported payload kind: {kind}")
+
+
+def _validate_batch_manifest(payload: dict) -> None:
+    assert isinstance(payload, dict), "batch manifest must be an object"
+    assert payload.get("version") == 3, "batch manifest must use v3"
+    _require_non_empty_string(payload.get("campaign_id"), "campaign_id is required")
+    assert isinstance(payload.get("iteration"), int) and payload["iteration"] >= 0, "iteration is required"
+    _require_non_empty_string(payload.get("batch_id"), "batch_id is required")
+    assert isinstance(payload.get("experiment"), dict) and payload["experiment"], "experiment is required"
+    assert isinstance(payload.get("retry_policy"), dict) and payload["retry_policy"], "retry_policy is required"
+
+    artifacts = payload.get("artifacts")
+    assert isinstance(artifacts, dict), "artifacts is required"
+    code_artifact = artifacts.get("code_artifact")
+    assert isinstance(code_artifact, dict), "artifacts.code_artifact is required"
+    _require_non_empty_string(code_artifact.get("uri"), "artifacts.code_artifact.uri is required")
+
+    data_manifest = artifacts.get("data_manifest")
+    assert isinstance(data_manifest, dict), "artifacts.data_manifest is required"
+    _require_non_empty_string(data_manifest.get("uri"), "artifacts.data_manifest.uri is required")
+
+    execution = payload.get("execution")
+    assert isinstance(execution, dict), "execution is required"
+    _require_non_empty_string(execution.get("entrypoint"), "execution.entrypoint is required")
 
 
 def _validate_state_payload(payload: dict) -> None:
@@ -128,7 +156,13 @@ def _validate_state_payload(payload: dict) -> None:
     assert isinstance(proposal_cycle, dict), "proposal_cycle must be an object"
     assert isinstance(proposal_cycle.get("cycle_id"), str) and proposal_cycle["cycle_id"], "proposal_cycle.cycle_id is required"
     assert isinstance(proposal_cycle.get("current_pool_frozen"), bool), "proposal_cycle.current_pool_frozen is required"
-    assert isinstance(proposal_cycle.get("ideation_rounds_by_slot"), dict), "proposal_cycle.ideation_rounds_by_slot is required"
+    ideation_rounds_by_slot = proposal_cycle.get("ideation_rounds_by_slot")
+    assert isinstance(ideation_rounds_by_slot, dict), "proposal_cycle.ideation_rounds_by_slot is required"
+    for slot_id, rounds in ideation_rounds_by_slot.items():
+        _require_non_empty_string(slot_id, "proposal_cycle.ideation_rounds_by_slot keys must be non-empty strings")
+        assert isinstance(rounds, int) and rounds >= 0, (
+            "proposal_cycle.ideation_rounds_by_slot values must be non-negative integers"
+        )
     assert "shortfall_reason" in proposal_cycle, "proposal_cycle.shortfall_reason is required"
 
     if payload["status"] == "RUNNING":
@@ -155,6 +189,34 @@ def _validate_state_payload(payload: dict) -> None:
     assert isinstance(local_changeset.get("verification_notes"), list), "verification_notes list is required"
     assert isinstance(local_changeset.get("code_artifact_uri"), str) and local_changeset["code_artifact_uri"], "code_artifact_uri is required"
     assert isinstance(local_changeset.get("data_manifest_uri"), str) and local_changeset["data_manifest_uri"], "data_manifest_uri is required"
+    for patch_artifact in local_changeset["patch_artifacts"]:
+        assert isinstance(patch_artifact, dict), "patch_artifacts entries must be objects"
+        _require_non_empty_string(
+            patch_artifact.get("producer_slot_id"),
+            "patch_artifacts entries must include non-empty producer_slot_id",
+        )
+        _require_non_empty_string(
+            patch_artifact.get("purpose"),
+            "patch_artifacts entries must include non-empty purpose",
+        )
+        _require_non_empty_string(
+            patch_artifact.get("patch_path"),
+            "patch_artifacts entries must include non-empty patch_path",
+        )
+        _require_non_empty_string(
+            patch_artifact.get("target_worktree"),
+            "patch_artifacts entries must include non-empty target_worktree",
+        )
+    for apply_result in local_changeset["apply_results"]:
+        assert isinstance(apply_result, dict), "apply_results entries must be objects"
+        _require_non_empty_string(
+            apply_result.get("patch_path"),
+            "apply_results entries must include non-empty patch_path",
+        )
+        _require_non_empty_string(
+            apply_result.get("status"),
+            "apply_results entries must include non-empty status",
+        )
 
 
 class MetaoptValidationTests(unittest.TestCase):
@@ -264,12 +326,22 @@ class MetaoptValidationTests(unittest.TestCase):
         _require_pattern(
             self,
             contracts,
-            r"## Local Changeset Contract.*`integration_worktree`.*`patch_artifacts`.*`data_manifest_uri`",
+            r"## Local Changeset Contract.*`integration_worktree`.*`patch_artifacts`.*`apply_results`.*`data_manifest_uri`",
         )
         _require_pattern(
             self,
             contracts,
-            r"## Batch Manifest Contract.*`artifacts\.code_artifact\.uri`.*`artifacts\.data_manifest\.uri`",
+            r"## Local Changeset Contract.*`patch_artifacts\[\]`.*`producer_slot_id`.*`purpose`.*`patch_path`.*`target_worktree`",
+        )
+        _require_pattern(
+            self,
+            contracts,
+            r"## Local Changeset Contract.*`apply_results\[\]`.*`patch_path`.*`status`",
+        )
+        _require_pattern(
+            self,
+            contracts,
+            r"## Batch Manifest Contract.*`version`.*`campaign_id`.*`iteration`.*`batch_id`.*`experiment`.*`retry_policy`.*`artifacts\.code_artifact\.uri`.*`artifacts\.data_manifest\.uri`.*`execution\.entrypoint`",
         )
         _require_pattern(
             self,
@@ -343,7 +415,11 @@ class MetaoptValidationTests(unittest.TestCase):
         _require_pattern(self, dependencies, r"`git`.*worktree")
         _require_pattern(self, dependencies, r"PyYAML")
         _require_pattern(self, dependencies, r"host reinvocation mechanism")
-        _require_pattern(self, dependencies, r"`ml_metaopt_campaign\.yaml`.*`AGENTS\.md`.*`\.ml-metaopt/state\.json`")
+        _require_pattern(
+            self,
+            dependencies,
+            r"`ml_metaopt_campaign\.yaml`.*`AGENTS\.md`.*`\.ml-metaopt/state\.json`.*created on first run if absent",
+        )
         _require_pattern(
             self,
             dependencies,
@@ -358,6 +434,7 @@ class MetaoptValidationTests(unittest.TestCase):
         _validate_backend_payload("results", _read_json("tests/fixtures/backend/results-valid.json"))
         _validate_state_payload(_read_json("tests/fixtures/state/running.json"))
         _validate_state_payload(_read_json("tests/fixtures/state/complete.json"))
+        _validate_batch_manifest(_read_json("tests/fixtures/manifest/valid.json"))
 
     def test_v3_state_fixtures_require_resume_and_changeset_metadata(self) -> None:
         running = _read_json("tests/fixtures/state/running.json")
@@ -393,6 +470,9 @@ class MetaoptValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, r"data_manifest_uri is required"):
             _validate_state_payload(_read_json("tests/fixtures/state/invalid-missing-local-changeset-metadata.json"))
 
+        with self.assertRaisesRegex(AssertionError, r"artifacts.data_manifest is required"):
+            _validate_batch_manifest(_read_json("tests/fixtures/manifest/invalid-missing-data-manifest.json"))
+
     def test_state_validator_rejects_malformed_nested_sections_with_clear_messages(self) -> None:
         fixture = _read_json("tests/fixtures/state/running.json")
 
@@ -410,6 +490,47 @@ class MetaoptValidationTests(unittest.TestCase):
         malformed_local_changeset["local_changeset"] = []
         with self.assertRaisesRegex(AssertionError, r"local_changeset must be an object"):
             _validate_state_payload(malformed_local_changeset)
+
+        malformed_rounds = dict(fixture)
+        malformed_rounds["proposal_cycle"] = dict(fixture["proposal_cycle"])
+        malformed_rounds["proposal_cycle"]["ideation_rounds_by_slot"] = {"": 1}
+        with self.assertRaisesRegex(
+            AssertionError, r"proposal_cycle.ideation_rounds_by_slot keys must be non-empty strings"
+        ):
+            _validate_state_payload(malformed_rounds)
+
+        negative_rounds = dict(fixture)
+        negative_rounds["proposal_cycle"] = dict(fixture["proposal_cycle"])
+        negative_rounds["proposal_cycle"]["ideation_rounds_by_slot"] = {"bg-1": -1}
+        with self.assertRaisesRegex(
+            AssertionError, r"proposal_cycle.ideation_rounds_by_slot values must be non-negative integers"
+        ):
+            _validate_state_payload(negative_rounds)
+
+        malformed_patch_artifacts = dict(fixture)
+        malformed_patch_artifacts["local_changeset"] = dict(fixture["local_changeset"])
+        malformed_patch_artifacts["local_changeset"]["patch_artifacts"] = [
+            {
+                "producer_slot_id": "",
+                "purpose": "review",
+                "patch_path": "artifacts/patch.diff",
+                "target_worktree": ".ml-metaopt/worktrees/iter-3-materialization",
+            }
+        ]
+        with self.assertRaisesRegex(
+            AssertionError, r"patch_artifacts entries must include non-empty producer_slot_id"
+        ):
+            _validate_state_payload(malformed_patch_artifacts)
+
+        malformed_apply_results = dict(fixture)
+        malformed_apply_results["local_changeset"] = dict(fixture["local_changeset"])
+        malformed_apply_results["local_changeset"]["apply_results"] = [
+            {"patch_path": "", "status": "applied"}
+        ]
+        with self.assertRaisesRegex(
+            AssertionError, r"apply_results entries must include non-empty patch_path"
+        ):
+            _validate_state_payload(malformed_apply_results)
 
 
 if __name__ == "__main__":

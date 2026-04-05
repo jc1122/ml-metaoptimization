@@ -85,7 +85,7 @@ Required top-level keys:
 `proposal_cycle` must record:
 - `cycle_id`
 - `current_pool_frozen`
-- `ideation_rounds_by_slot`
+- `ideation_rounds_by_slot` as a map of non-empty `slot_id` strings to non-negative integer round counts
 - `shortfall_reason`
 
 Recommended additional keys when useful:
@@ -146,6 +146,16 @@ Each `local_changeset` must record:
 - `code_artifact_uri`
 - `data_manifest_uri`
 
+When present, each `patch_artifacts[]` entry must be an object with:
+- `producer_slot_id`
+- `purpose`
+- `patch_path`
+- `target_worktree`
+
+When present, each `apply_results[]` entry must be an object with:
+- `patch_path`
+- `status`
+
 ## Batch Manifest Contract
 
 The orchestrator enqueues exactly one immutable batch manifest per experiment batch.
@@ -162,6 +172,34 @@ Required manifest fields:
 - `artifacts.code_artifact.uri`
 - `artifacts.data_manifest.uri`
 - `execution.entrypoint`
+
+Minimal manifest shape:
+
+```json
+{
+  "version": 3,
+  "campaign_id": "<campaign_id>",
+  "iteration": 3,
+  "batch_id": "<batch_id>",
+  "experiment": {
+    "proposal_id": "<proposal_id>"
+  },
+  "retry_policy": {
+    "max_attempts": 2
+  },
+  "artifacts": {
+    "code_artifact": {
+      "uri": "<code artifact uri>"
+    },
+    "data_manifest": {
+      "uri": "<data manifest uri>"
+    }
+  },
+  "execution": {
+    "entrypoint": "<command>"
+  }
+}
+```
 
 ## Batch Status / Result Contract
 

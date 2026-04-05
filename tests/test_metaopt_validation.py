@@ -283,6 +283,11 @@ class MetaoptValidationTests(unittest.TestCase):
 
         _require_pattern(self, skill, r"not a self-scheduling daemon")
         _require_pattern(self, skill, r"persists state, exits, and resumes")
+        _require_pattern(
+            self,
+            skill,
+            r"host runtime or user invocation re-enters it",
+        )
         _require_pattern(self, skill, r"artifacts/.*code/.*data/.*manifests/.*patches/")
         _require_pattern(
             self,

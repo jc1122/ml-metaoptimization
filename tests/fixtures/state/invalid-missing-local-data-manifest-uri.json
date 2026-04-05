@@ -23,7 +23,8 @@
     "cycle_id": "iter-3-cycle-1",
     "current_pool_frozen": true,
     "ideation_rounds_by_slot": {
-      "bg-1": 2
+      "bg-1": 2,
+      "bg-2": 2
     },
     "shortfall_reason": ""
   },
@@ -38,23 +39,61 @@
       "status": "running",
       "attempt": 1,
       "task_summary": "Read-only maintenance audit while the remote batch runs"
+    },
+    {
+      "slot_id": "aux-1",
+      "slot_class": "auxiliary",
+      "mode": "analysis",
+      "model_class": "strong_reasoner",
+      "requested_model": "Opus 4.6 fast",
+      "resolved_model": "Opus 4.6 fast",
+      "status": "queued",
+      "attempt": 1,
+      "task_summary": "Prepare post-run analysis context"
     }
   ],
   "current_proposals": [],
-  "next_proposals": [],
-  "selected_experiment": {},
+  "next_proposals": [
+    {
+      "proposal_id": "p-17",
+      "summary": "Tighten rolling-window validation"
+    }
+  ],
+  "selected_experiment": {
+    "proposal_id": "p-16",
+    "sanity_attempts": 1
+  },
   "local_changeset": {
+    "integration_worktree": ".ml-metaopt/worktrees/iter-3-materialization",
+    "patch_artifacts": [],
+    "apply_results": [],
+    "verification_notes": [
+      "local sanity has not rerun yet"
+    ],
     "code_artifact_uri": ".ml-metaopt/artifacts/code/batch-20260405-0001.tar.gz"
   },
-  "remote_batches": [],
+  "remote_batches": [
+    {
+      "batch_id": "batch-20260405-0001",
+      "queue_ref": "ray-queue-123",
+      "status": "running"
+    }
+  ],
   "baseline": {
     "aggregate": 0.1284,
     "by_dataset": {
       "ds_main": 0.1269,
-      "ds_holdout": 0.1320
+      "ds_holdout": 0.132
     }
   },
-  "completed_experiments": [],
-  "key_learnings": [],
-  "no_improve_iterations": 1
+  "completed_experiments": [
+    {
+      "batch_id": "batch-20260401-0004",
+      "aggregate": 0.1279
+    }
+  ],
+  "key_learnings": [
+    "Leakage checks must run in local sanity before enqueue"
+  ],
+  "no_improve_iterations": 2
 }

@@ -258,14 +258,16 @@ class MetaoptValidationTests(unittest.TestCase):
         running = _read_json("tests/fixtures/state/running.json")
         complete = _read_json("tests/fixtures/state/complete.json")
 
-        self.assertEqual(running["version"], 3)
-        self.assertEqual(complete["version"], 3)
-        self.assertIn("proposal_cycle", running)
-        self.assertIn("integration_worktree", running["local_changeset"])
-        self.assertIn("data_manifest_uri", running["local_changeset"])
-        self.assertIn("model_class", running["active_slots"][0])
-        self.assertIn("requested_model", running["active_slots"][0])
-        self.assertIn("resolved_model", running["active_slots"][0])
+        for fixture in (running, complete):
+            self.assertEqual(fixture["version"], 3)
+            self.assertIn("proposal_cycle", fixture)
+            self.assertIn("integration_worktree", fixture["local_changeset"])
+            self.assertIn("data_manifest_uri", fixture["local_changeset"])
+
+        for slot in running["active_slots"]:
+            self.assertIn("model_class", slot)
+            self.assertIn("requested_model", slot)
+            self.assertIn("resolved_model", slot)
 
     def test_invalid_fixtures_are_rejected(self) -> None:
         with self.assertRaises(AssertionError):
@@ -281,10 +283,10 @@ class MetaoptValidationTests(unittest.TestCase):
             _validate_state_payload(_read_json("tests/fixtures/state/invalid-missing-proposal-cycle.json"))
 
         with self.assertRaises(AssertionError):
-            _validate_state_payload(_read_json("tests/fixtures/state/invalid-missing-slot-model-resolution.json"))
+            _validate_state_payload(_read_json("tests/fixtures/state/invalid-missing-slot-resolved-model.json"))
 
         with self.assertRaises(AssertionError):
-            _validate_state_payload(_read_json("tests/fixtures/state/invalid-missing-local-changeset-metadata.json"))
+            _validate_state_payload(_read_json("tests/fixtures/state/invalid-missing-local-data-manifest-uri.json"))
 
 
 if __name__ == "__main__":

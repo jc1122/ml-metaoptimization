@@ -1,6 +1,6 @@
 ---
 name: ml-metaoptimization
-description: Use when running a continuous ML improvement campaign that must autonomously maintain proposal generation, package validated experiment batches, and drive a queue backend through persisted campaign and state files. Keywords: metaoptimization, continuous improvement loop, proposal pool, campaign spec, state machine, queue backend, background subagents, leakage audit, experiment batch.
+description: "Use when running a continuous ML improvement campaign that must autonomously maintain proposal generation, package validated experiment batches, and drive a queue backend through persisted campaign and state files. Keywords: metaoptimization, continuous improvement loop, proposal pool, campaign spec, state machine, queue backend, background subagents, leakage audit, experiment batch."
 ---
 
 # ml-metaoptimization

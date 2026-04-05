@@ -1,13 +1,15 @@
 ---
 name: ml-metaoptimization
-description: "Use when running a continuous ML improvement campaign that must autonomously maintain proposal generation, package validated experiment batches, and drive a queue backend through persisted campaign and state files. Keywords: metaoptimization, continuous improvement loop, proposal pool, campaign spec, state machine, queue backend, background subagents, leakage audit, experiment batch."
+description: "Use when running a continuous ML improvement campaign that persists state, resumes across reinvocations, packages validated experiment batches, and drives a queue backend through persisted campaign and state files. Keywords: metaoptimization, continuous improvement loop, proposal pool, campaign spec, state machine, queue backend, background subagents, leakage audit, experiment batch."
 ---
 
 # ml-metaoptimization
 
 ## Overview
 
-Run a continuous ML metaoptimization campaign as a deterministic state machine.
+Run a continuous ML metaoptimization campaign as a deterministic state machine continuous across reinvocations.
+This skill is not a self-scheduling daemon.
+It persists state, exits, and resumes when a host runtime or user invocation re-enters it.
 
 This skill is the control plane only. The orchestrator owns validation, persistence, slot scheduling, artifact packaging, queue interaction, and iteration transitions. It never performs semantic coding, experiment design, debugging, or result analysis itself.
 
@@ -35,7 +37,9 @@ Always use the strongest available model in the same class and record the substi
     state.json
     artifacts/
       code/
+      data/
       manifests/
+      patches/
 ```
 
 Append this block to `AGENTS.md` on initialization if it is not already present:
@@ -116,9 +120,10 @@ The orchestrator must delegate:
 
 ## Quick Flow
 
-Key running states introduced by the v2 contract:
+Key running states introduced by the v3 contract:
 - `DESIGN_EXPERIMENT` translates the winning proposal into an execution-ready experiment spec before code changes begin
 - `QUIESCE_SLOTS` drains finished work, cancels leftovers, and prepares either rollover or final cleanup
+- `MAINTAIN_BACKGROUND_POOL` keeps proposal-cycle bookkeeping continuous across reinvocations and freezes the current pool when selection begins
 
 ```dot
 digraph machine {

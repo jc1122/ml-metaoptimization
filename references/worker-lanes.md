@@ -64,6 +64,10 @@ Execution rules:
 - the orchestrator applies maintenance patch artifacts mechanically in a dedicated integration worktree
 - if patch application conflicts or requires a non-trivial merge, dispatch `strong_coder` for conflict resolution instead of merging manually
 
+Patch artifact contract:
+- code-modifying maintenance and materialization workers must emit one unified diff patch artifact
+- each unified diff patch artifact must record `producer_slot_id`, `purpose`, `patch_path`, and `target_worktree`
+
 Compatibility rule:
 - only bypass `repo-audit-refactor-optimize` when the worker task is explicitly incompatible with that skill or with the repository state
 - when bypassing, fall back to findings-only maintenance and record the incompatibility reason in output and state
@@ -93,7 +97,7 @@ Purpose:
 - turn the designed experiment into concrete code changes, packageable artifacts, and a manifest-ready local changeset
 
 Output:
-- code changes or patch artifacts suitable for mechanical integration
+- one unified diff patch artifact suitable for mechanical integration
 - immutable artifact inputs for the batch manifest
 - local verification notes for `LOCAL_SANITY`
 

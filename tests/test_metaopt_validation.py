@@ -276,6 +276,29 @@ class MetaoptValidationTests(unittest.TestCase):
             r"## Retry Policy Contract.*backend.*must honor the declared retry policy",
         )
 
+    def test_runtime_docs_define_reinvocation_and_patch_artifacts(self) -> None:
+        skill = _read_text("SKILL.md")
+        machine = _read_text("references/state-machine.md")
+        lanes = _read_text("references/worker-lanes.md")
+
+        _require_pattern(self, skill, r"continuous across reinvocations")
+        _require_pattern(self, skill, r"artifacts/.*code/.*data/.*manifests/.*patches/")
+        _require_pattern(
+            self,
+            machine,
+            r"`proposal_cycle`.*`ideation_rounds_by_slot`.*floor rule",
+        )
+        _require_pattern(
+            self,
+            machine,
+            r"record cancellation reasons in state.*`apply_results`",
+        )
+        _require_pattern(
+            self,
+            lanes,
+            r"unified diff patch artifact.*`producer_slot_id`.*`patch_path`",
+        )
+
     def test_readme_documents_validation_command_and_agent_manifest(self) -> None:
         readme = _read_text("README.md")
 

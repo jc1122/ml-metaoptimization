@@ -50,13 +50,13 @@
 - Prefer ideation when `current_proposals` is below target and `next_proposals` is below cap
 - Otherwise assign maintenance work
 - The current proposal cycle starts on the first entry into this state for an iteration and ends when `SELECT_EXPERIMENT` begins
-- Increment `ideation_rounds_this_cycle` each time a background ideation slot finishes and its output is persisted
+- Increment the persisted `proposal_cycle.ideation_rounds_by_slot[slot_id]` counter each time a background ideation slot finishes and its output is persisted
 - If the machine reaches this state with zero active slots, refill background slots here rather than launching ad hoc workers outside the slot accounting rules
 
 ### `WAIT_FOR_PROPOSAL_THRESHOLD`
 
 - Require `proposal_policy.current_target` distinct, non-overlapping proposals in `current_proposals`
-- Floor rule: if every background slot has completed two ideation rounds in the current cycle and fewer than the target exist, allow progress once `proposal_policy.current_floor` is reached
+- Floor rule: if the persisted `proposal_cycle.ideation_rounds_by_slot` bookkeeping shows every background slot has completed two ideation rounds in the current cycle and fewer than the target exist, allow progress once `proposal_policy.current_floor` is reached
 - If the floor is still not met, continue background ideation and record the shortfall
 
 ### `SELECT_EXPERIMENT`

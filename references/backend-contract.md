@@ -64,14 +64,22 @@ Input:
 - exactly one `batch_id`
 
 The backend must expose a stdout JSON object with:
+- `batch_id`
+- `status`
 - `best_aggregate_result`
 - `per_dataset`
 - `artifact_locations`
 - `logs_location`
 
+Required results behavior:
+- echo the requested `batch_id` exactly
+- report `status = "completed"`
+- return non-empty artifact locations for the immutable code artifact, immutable data manifest, and execution logs
+
 Required artifact location fields:
 - `artifact_locations.code`
 - `artifact_locations.data_manifest`
+- `logs_location`
 
 ## Artifact Contract
 

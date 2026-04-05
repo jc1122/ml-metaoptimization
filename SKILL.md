@@ -230,8 +230,18 @@ Update in state file: `baseline` (if improved), `key_learnings`, `completed_expe
 
 ## Phase 7 — Iterate or Complete
 
+**Keep the cluster running between iterations** — do not tear down and reprovision between iterations; that wastes time and quota. The cluster stays up until all iterations are complete.
+
 - `current_iteration < total_iterations` → move `next_proposals` into `current_proposals`, clear `next_proposals`, increment `current_iteration`, set `current_phase = 1`, update `next_action` to `"start brainstorming phase"`, go to Phase 1
-- Done → remove the resume hook from `AGENTS.md`, delete `ml_metaopt_state.json`
+- Done → tear down the cluster, then clean up local state:
+
+```bash
+./remove_worker.sh ray-worker-1
+./remove_worker.sh ray-worker-2   # repeat for each worker
+./teardown_head.sh                # stops Ray, deletes head, mop-up clears stale IPs in config.env
+```
+
+Then: remove the resume hook from `AGENTS.md`, delete `ml_metaopt_state.json`.
 
 ## Ray Cluster Reference
 
@@ -277,6 +287,8 @@ Build the base snapshot before any cluster can be provisioned (only needed once)
 ```
 
 Creates a temporary server, installs Ray + ML deps (lightgbm, xgboost, pandas, scikit-learn, numpy, scipy, optuna), snapshots as `ray-worker-base-YYYYMMDD`, deletes the bootstrap server. `add_worker.sh` fails fast if this snapshot is missing.
+
+**Nodes are cattle** — they are never snapshotted on teardown. If ML dependencies change (new package required), re-run `build_base_snapshot.sh` to produce a fresh snapshot before provisioning new workers. Workers booted from a stale snapshot will be missing the new dependency.
 
 ### Start the Cluster
 
@@ -330,11 +342,24 @@ Output lands in `logs/YYYYMMDD-HHMMSS/` inside the ray-hetzner repo. Results per
 
 ### Tear Down
 
+Only tear down after all iterations are complete — keep the cluster running between iterations.
+
+Preview destructive actions before executing:
+
+```bash
+./remove_worker.sh --dry-run ray-worker-1
+./teardown_head.sh --dry-run
+```
+
+Then execute:
+
 ```bash
 ./remove_worker.sh ray-worker-1
-./remove_worker.sh ray-worker-2
-./teardown_head.sh          # stops Ray, deletes head, runs mop-up (clears stale IPs + lingering workers)
+./remove_worker.sh ray-worker-2   # repeat for each active worker
+./teardown_head.sh                # stops Ray, deletes head, runs mop-up (clears stale IPs in config.env + any lingering ray-worker-* servers)
 ```
+
+After `teardown_head.sh`, `RAY_HEAD_IP` and `RAY_HEAD_PRIVATE_IP` are cleared from `config.env`. A fresh `./setup_head.sh` is needed before the cluster can be used again.
 
 ### Fault Diagnosis
 
@@ -420,4 +445,7 @@ Write this file to `{project_root}/ml_metaopt_state.json`. Update after every ph
 | Writing Phase 5 proposals into current_proposals | During cluster run, new proposals go into next_proposals only |
 | Forgetting to swap next_proposals → current_proposals at iteration start | Phase 7: move queues before incrementing iteration |
 | Counting duplicate/overlapping proposals toward the 8 | Reassign subagent to a new angle — duplicates don't count |
+| Tearing down cluster between iterations | Keep cluster running across iterations — only tear down when all iterations are done |
+| Adding a new dependency without rebuilding snapshot | Nodes are cattle; re-run build_base_snapshot.sh when deps change, then reprovision workers |
+| Running teardown without --dry-run preview | Always dry-run destructive ops first to confirm what will be deleted |
 | Forgetting to clean up AGENTS.md on completion | Final step: remove hook + delete state file |

@@ -39,6 +39,7 @@ VALID_SLOT_MODES = {
     "diagnosis",
     "analysis",
 }
+VALID_MODEL_CLASSES = {"strong_coder", "strong_reasoner", "general_worker"}
 VALID_REMOTE_BATCH_STATUSES = {"queued", "running", "completed", "failed"}
 
 
@@ -102,6 +103,7 @@ def _validate_state_payload(payload: dict) -> None:
         "current_iteration",
         "next_action",
         "objective_snapshot",
+        "proposal_cycle",
         "active_slots",
         "current_proposals",
         "next_proposals",
@@ -115,9 +117,15 @@ def _validate_state_payload(payload: dict) -> None:
     }
     missing = required_keys - payload.keys()
     assert not missing, f"missing required state keys: {sorted(missing)}"
-    assert payload["version"] == 2, "state fixture must use v2"
+    assert payload["version"] == 3, "state fixture must use v3"
     assert payload["status"] in VALID_STATE_STATUSES, "invalid coarse status"
     assert payload["machine_state"] in VALID_MACHINE_STATES, "invalid machine state"
+
+    proposal_cycle = payload["proposal_cycle"]
+    assert isinstance(proposal_cycle.get("cycle_id"), str) and proposal_cycle["cycle_id"]
+    assert isinstance(proposal_cycle.get("current_pool_frozen"), bool)
+    assert isinstance(proposal_cycle.get("ideation_rounds_by_slot"), dict)
+    assert "shortfall_reason" in proposal_cycle
 
     if payload["status"] == "RUNNING":
         assert payload["machine_state"] not in TERMINAL_MACHINE_STATES, "running state cannot point at a terminal machine state"
@@ -126,9 +134,20 @@ def _validate_state_payload(payload: dict) -> None:
         assert payload["active_slots"] == [], "terminal states must have no active slots"
 
     for slot in payload["active_slots"]:
-        assert slot["slot_class"] in VALID_SLOT_CLASSES, "invalid slot_class"
-        assert slot["mode"] in VALID_SLOT_MODES, "invalid slot mode"
-        assert isinstance(slot["task_summary"], str) and slot["task_summary"], "slot must have task_summary"
+        assert slot.get("slot_class") in VALID_SLOT_CLASSES, "invalid slot_class"
+        assert slot.get("mode") in VALID_SLOT_MODES, "invalid slot mode"
+        assert slot.get("model_class") in VALID_MODEL_CLASSES, "invalid model_class"
+        assert isinstance(slot.get("requested_model"), str) and slot["requested_model"]
+        assert isinstance(slot.get("resolved_model"), str) and slot["resolved_model"]
+        assert isinstance(slot.get("task_summary"), str) and slot["task_summary"], "slot must have task_summary"
+
+    local_changeset = payload["local_changeset"]
+    assert isinstance(local_changeset.get("integration_worktree"), str) and local_changeset["integration_worktree"]
+    assert isinstance(local_changeset.get("patch_artifacts"), list), "patch_artifacts list is required"
+    assert isinstance(local_changeset.get("apply_results"), list), "apply_results list is required"
+    assert isinstance(local_changeset.get("verification_notes"), list), "verification_notes list is required"
+    assert isinstance(local_changeset.get("code_artifact_uri"), str) and local_changeset["code_artifact_uri"]
+    assert isinstance(local_changeset.get("data_manifest_uri"), str) and local_changeset["data_manifest_uri"]
 
 
 class MetaoptValidationTests(unittest.TestCase):
@@ -235,6 +254,19 @@ class MetaoptValidationTests(unittest.TestCase):
         _validate_state_payload(_read_json("tests/fixtures/state/running.json"))
         _validate_state_payload(_read_json("tests/fixtures/state/complete.json"))
 
+    def test_v3_state_fixtures_require_resume_and_changeset_metadata(self) -> None:
+        running = _read_json("tests/fixtures/state/running.json")
+        complete = _read_json("tests/fixtures/state/complete.json")
+
+        self.assertEqual(running["version"], 3)
+        self.assertEqual(complete["version"], 3)
+        self.assertIn("proposal_cycle", running)
+        self.assertIn("integration_worktree", running["local_changeset"])
+        self.assertIn("data_manifest_uri", running["local_changeset"])
+        self.assertIn("model_class", running["active_slots"][0])
+        self.assertIn("requested_model", running["active_slots"][0])
+        self.assertIn("resolved_model", running["active_slots"][0])
+
     def test_invalid_fixtures_are_rejected(self) -> None:
         with self.assertRaises(AssertionError):
             _validate_backend_payload("enqueue", _read_json("tests/fixtures/backend/enqueue-invalid-missing-batch-id.json"))
@@ -244,6 +276,15 @@ class MetaoptValidationTests(unittest.TestCase):
 
         with self.assertRaises(AssertionError):
             _validate_state_payload(_read_json("tests/fixtures/state/invalid-status-pair.json"))
+
+        with self.assertRaises(AssertionError):
+            _validate_state_payload(_read_json("tests/fixtures/state/invalid-missing-proposal-cycle.json"))
+
+        with self.assertRaises(AssertionError):
+            _validate_state_payload(_read_json("tests/fixtures/state/invalid-missing-slot-model-resolution.json"))
+
+        with self.assertRaises(AssertionError):
+            _validate_state_payload(_read_json("tests/fixtures/state/invalid-missing-local-changeset-metadata.json"))
 
 
 if __name__ == "__main__":

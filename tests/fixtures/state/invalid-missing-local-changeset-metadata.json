@@ -3,10 +3,10 @@
   "campaign_id": "market-forecast-v3",
   "campaign_identity_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
   "runtime_config_hash": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-  "status": "COMPLETE",
+  "status": "RUNNING",
   "machine_state": "WAIT_FOR_REMOTE_BATCH",
   "current_iteration": 3,
-  "next_action": "this fixture should fail",
+  "next_action": "poll remote batch status",
   "objective_snapshot": {
     "metric": "rmse",
     "direction": "minimize",
@@ -27,17 +27,24 @@
     },
     "shortfall_reason": ""
   },
-  "active_slots": [],
+  "active_slots": [
+    {
+      "slot_id": "bg-1",
+      "slot_class": "background",
+      "mode": "maintenance",
+      "model_class": "general_worker",
+      "requested_model": "GPT-5.4",
+      "resolved_model": "GPT-5.4",
+      "status": "running",
+      "attempt": 1,
+      "task_summary": "Read-only maintenance audit while the remote batch runs"
+    }
+  ],
   "current_proposals": [],
   "next_proposals": [],
   "selected_experiment": {},
   "local_changeset": {
-    "integration_worktree": ".ml-metaopt/worktrees/iter-3-materialization",
-    "patch_artifacts": [],
-    "apply_results": [],
-    "verification_notes": [],
-    "code_artifact_uri": ".ml-metaopt/artifacts/code/batch-20260405-0001.tar.gz",
-    "data_manifest_uri": ".ml-metaopt/artifacts/data/batch-20260405-0001.json"
+    "code_artifact_uri": ".ml-metaopt/artifacts/code/batch-20260405-0001.tar.gz"
   },
   "remote_batches": [],
   "baseline": {

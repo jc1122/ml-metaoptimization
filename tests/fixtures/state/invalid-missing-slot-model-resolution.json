@@ -3,10 +3,10 @@
   "campaign_id": "market-forecast-v3",
   "campaign_identity_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
   "runtime_config_hash": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-  "status": "COMPLETE",
+  "status": "RUNNING",
   "machine_state": "WAIT_FOR_REMOTE_BATCH",
   "current_iteration": 3,
-  "next_action": "this fixture should fail",
+  "next_action": "poll remote batch status",
   "objective_snapshot": {
     "metric": "rmse",
     "direction": "minimize",
@@ -27,7 +27,16 @@
     },
     "shortfall_reason": ""
   },
-  "active_slots": [],
+  "active_slots": [
+    {
+      "slot_id": "bg-1",
+      "slot_class": "background",
+      "mode": "maintenance",
+      "status": "running",
+      "attempt": 1,
+      "task_summary": "Read-only maintenance audit while the remote batch runs"
+    }
+  ],
   "current_proposals": [],
   "next_proposals": [],
   "selected_experiment": {},

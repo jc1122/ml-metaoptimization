@@ -330,6 +330,36 @@ Push to **head and all workers** (head runs tasks too — missing code on head c
 
 Destination defaults to `/root/<project-name>`. Uses `rsync --delete` — do not point at a remote directory with unrelated files.
 
+### Large Dataset Sharing — ObjectRef Ownership Problem
+
+**Symptom:** workers cannot retrieve data that the head loaded via `ray.put()`. The head runs out of memory serializing multiple large datasets, or workers on remote nodes get ownership/timeout errors when reading ObjectRefs created on the head.
+
+**Root cause:** `ray.put()` places the object in the head's local plasma store. The ObjectRef is owned by the process that called `ray.put()`. When many large datasets are loaded this way, the head exhausts memory serializing them, and remote workers must fetch data over the network from a single bottlenecked node.
+
+**Fix — each worker loads its own data from local disk:**
+
+Since `push_code.sh` rsyncs all data to every node, each worker already has a local copy of every dataset. Do not pass data through the object store at all:
+
+```python
+# BAD — loads all datasets on head, passes refs to workers:
+datasets = {name: ray.put(load(path)) for name, path in dataset_paths.items()}
+
+@ray.remote
+def train(dataset_ref):
+    data = ray.get(dataset_ref)  # fetches from head over network
+    ...
+
+# GOOD — each worker loads its own local copy:
+@ray.remote
+def train(dataset_path):
+    data = load(dataset_path)    # reads from local disk on the worker node
+    ...
+```
+
+**If data must be shared via object store** (e.g. results, small intermediate tensors), keep individual objects small. Never `ray.put()` multiple large DataFrames from the head in a single driver script — split into separate jobs or use the local-load pattern above.
+
+**Design rule for experiment scripts:** the campaign script should pass file paths (strings) to Ray tasks, not pre-loaded data objects. Each task is responsible for loading its own data.
+
 ### Collect Logs and Results
 
 ```bash
@@ -445,6 +475,7 @@ Write this file to `{project_root}/ml_metaopt_state.json`. Update after every ph
 | Writing Phase 5 proposals into current_proposals | During cluster run, new proposals go into next_proposals only |
 | Forgetting to swap next_proposals → current_proposals at iteration start | Phase 7: move queues before incrementing iteration |
 | Counting duplicate/overlapping proposals toward the 8 | Reassign subagent to a new angle — duplicates don't count |
+| Loading datasets on head and passing ray.put() refs to workers | Workers load their own data from local disk (data is rsynced to all nodes) — pass file paths, not ObjectRefs |
 | Tearing down cluster between iterations | Keep cluster running across iterations — only tear down when all iterations are done |
 | Adding a new dependency without rebuilding snapshot | Nodes are cattle; re-run build_base_snapshot.sh when deps change, then reprovision workers |
 | Running teardown without --dry-run preview | Always dry-run destructive ops first to confirm what will be deleted |

@@ -1,0 +1,56 @@
+{
+  "version": 2,
+  "campaign_id": "market-forecast-v3",
+  "campaign_identity_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "runtime_config_hash": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+  "status": "COMPLETE",
+  "machine_state": "COMPLETE",
+  "current_iteration": 7,
+  "next_action": "emit final report and remove orchestration hook",
+  "objective_snapshot": {
+    "metric": "rmse",
+    "direction": "minimize",
+    "aggregation": {
+      "method": "weighted_mean",
+      "weights": {
+        "ds_main": 0.7,
+        "ds_holdout": 0.3
+      }
+    },
+    "improvement_threshold": 0.0005
+  },
+  "active_slots": [],
+  "current_proposals": [],
+  "next_proposals": [],
+  "selected_experiment": {
+    "proposal_id": "p-29",
+    "sanity_attempts": 0
+  },
+  "local_changeset": {
+    "code_artifact_uri": ".ml-metaopt/artifacts/code/batch-20260405-0007.tar.gz"
+  },
+  "remote_batches": [
+    {
+      "batch_id": "batch-20260405-0007",
+      "queue_ref": "ray-queue-999",
+      "status": "completed"
+    }
+  ],
+  "baseline": {
+    "aggregate": 0.1201,
+    "by_dataset": {
+      "ds_main": 0.1198,
+      "ds_holdout": 0.1208
+    }
+  },
+  "completed_experiments": [
+    {
+      "batch_id": "batch-20260405-0007",
+      "aggregate": 0.1201
+    }
+  ],
+  "key_learnings": [
+    "Weighted holdout stabilization improved the aggregate metric"
+  ],
+  "no_improve_iterations": 0
+}

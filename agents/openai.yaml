@@ -1,11 +1,14 @@
+# Catalog metadata for OpenAI/Codex-style runtimes.
+# This file is not consumed by the GitHub Copilot orchestration runtime described in SKILL.md.
 interface:
   display_name: "ML Metaoptimization"
-  short_description: "Systematic ML improvement via parallel brainstorming subagents and Ray cluster execution"
+  short_description: "State-machine ML metaoptimization via Copilot subagents and a queue-backend contract"
   categories:
     - ml
     - research
     - distributed
   default_prompt: >
-    Run a systematic ML metaoptimization campaign toward the stated goal.
-    Dispatch 8 parallel brainstorming subagents continuously, synthesize proposals,
-    validate locally, and execute on the Ray cluster. Persist state in ml_metaopt_state.json.
+    Run the continuous ML metaoptimization state machine for the configured campaign.
+    Read `ml_metaopt_campaign.yaml`, hydrate or create `.ml-metaopt/state.json`,
+    maintain the background slot pool, package validated experiment batches, and
+    drive the remote Ray queue runner through the declared queue commands.

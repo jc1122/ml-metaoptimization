@@ -1,0 +1,38 @@
+{
+  "version": 2,
+  "campaign_id": "market-forecast-v3",
+  "campaign_identity_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "runtime_config_hash": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+  "status": "COMPLETE",
+  "machine_state": "WAIT_FOR_REMOTE_BATCH",
+  "current_iteration": 3,
+  "next_action": "this fixture should fail",
+  "objective_snapshot": {
+    "metric": "rmse",
+    "direction": "minimize",
+    "aggregation": {
+      "method": "weighted_mean",
+      "weights": {
+        "ds_main": 0.7,
+        "ds_holdout": 0.3
+      }
+    },
+    "improvement_threshold": 0.0005
+  },
+  "active_slots": [],
+  "current_proposals": [],
+  "next_proposals": [],
+  "selected_experiment": {},
+  "local_changeset": {},
+  "remote_batches": [],
+  "baseline": {
+    "aggregate": 0.1284,
+    "by_dataset": {
+      "ds_main": 0.1269,
+      "ds_holdout": 0.1320
+    }
+  },
+  "completed_experiments": [],
+  "key_learnings": [],
+  "no_improve_iterations": 1
+}

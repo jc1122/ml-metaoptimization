@@ -1,0 +1,144 @@
+# State Machine
+
+## States
+
+- `LOAD_CAMPAIGN`
+- `HYDRATE_STATE`
+- `MAINTAIN_BACKGROUND_POOL`
+- `WAIT_FOR_PROPOSAL_THRESHOLD`
+- `SELECT_EXPERIMENT`
+- `DESIGN_EXPERIMENT`
+- `MATERIALIZE_CHANGESET`
+- `LOCAL_SANITY`
+- `ENQUEUE_REMOTE_BATCH`
+- `WAIT_FOR_REMOTE_BATCH`
+- `ANALYZE_RESULTS`
+- `ROLL_ITERATION`
+- `QUIESCE_SLOTS`
+- `COMPLETE`
+- `BLOCKED_CONFIG`
+- `FAILED`
+
+## Event Priority
+
+1. Persist completed slot output
+2. Refill an empty background slot
+3. Process remote batch status changes
+4. Evaluate transition guards
+
+## Transition Semantics
+
+### `LOAD_CAMPAIGN`
+
+- Read `ml_metaopt_campaign.yaml`
+- Validate required fields and schema shape
+- Reject sentinel placeholders such as angle-bracket paths, `YOUR_*`, and dataset fingerprints containing `replace-me`
+- Compute `campaign_identity_hash` and `runtime_config_hash` using the canonical rules from `references/contracts.md`
+- If validation fails, write `status = BLOCKED_CONFIG`, set `next_action = "repair ml_metaopt_campaign.yaml"`, and stop
+
+### `HYDRATE_STATE`
+
+- If `.ml-metaopt/state.json` exists and `campaign_identity_hash` matches the campaign identity, resume from `machine_state`
+- If `.ml-metaopt/state.json` exists and there is a campaign identity hash mismatch, transition to `BLOCKED_CONFIG`, preserve the stale state in place, set `next_action = "archive or remove the stale state before starting a new campaign"`, remove the `AGENTS.md` hook, and stop
+- Otherwise initialize fresh state from the campaign spec
+- If `AGENTS.md` does not exist, create it
+- Ensure the marked `AGENTS.md` hook is present only while `status = RUNNING`
+
+### `MAINTAIN_BACKGROUND_POOL`
+
+- Ensure exactly `dispatch_policy.background_slots` background slots exist
+- Prefer ideation when `current_proposals` is below target and `next_proposals` is below cap
+- Otherwise assign maintenance work
+- The current proposal cycle starts on the first entry into this state for an iteration and ends when `SELECT_EXPERIMENT` begins
+- Increment `ideation_rounds_this_cycle` each time a background ideation slot finishes and its output is persisted
+- If the machine reaches this state with zero active slots, refill background slots here rather than launching ad hoc workers outside the slot accounting rules
+
+### `WAIT_FOR_PROPOSAL_THRESHOLD`
+
+- Require `proposal_policy.current_target` distinct, non-overlapping proposals in `current_proposals`
+- Floor rule: if every background slot has completed two ideation rounds in the current cycle and fewer than the target exist, allow progress once `proposal_policy.current_floor` is reached
+- If the floor is still not met, continue background ideation and record the shortfall
+
+### `SELECT_EXPERIMENT`
+
+- Dispatch one `strong_reasoner` subagent
+- Input: `current_proposals`, baseline context, prior learnings, and completed experiments
+- Output: exactly one winning proposal and a short ranking rationale
+- Freeze `current_proposals` once selection starts
+
+### `DESIGN_EXPERIMENT`
+
+- Dispatch one `strong_reasoner` subagent
+- Input: the winning proposal, baseline context, queue/backend constraints, and prior learnings
+- Output: exactly one concrete experiment specification plus execution assumptions and artifact expectations
+- Persist the experiment design before any coder starts `MATERIALIZE_CHANGESET`
+
+### `MATERIALIZE_CHANGESET`
+
+- Dispatch `strong_coder` subagents in isolated worktrees
+- Count these coders against `auxiliary_slots` with `mode = materialization`
+- The orchestrator may perform only clean, mechanical integration after subagents finish
+- Package an immutable code artifact under `.ml-metaopt/artifacts/code/`
+- Write a batch manifest under `.ml-metaopt/artifacts/manifests/`
+
+### `LOCAL_SANITY`
+
+- Run `sanity.command`
+- Enforce `sanity.max_duration_seconds`
+- Required checks:
+  - config loads
+  - fast path executes
+  - temporal leakage passes when required
+- Allow a maximum 3 remediation attempts for the selected experiment
+- If sanity fails, dispatch a `strong_coder` subagent with the failure output, apply the returned fix mechanically, and rerun `LOCAL_SANITY`
+- If the maximum 3 remediation attempts is exceeded, transition to `FAILED`
+
+### `ENQUEUE_REMOTE_BATCH`
+
+- Call `remote_queue.enqueue_command`
+- Pass exactly one immutable batch manifest
+- Expect one stdout JSON object containing `batch_id`, `queue_ref`, and `status = "queued"`
+- Record `batch_id` and queue reference in state
+
+### `WAIT_FOR_REMOTE_BATCH`
+
+- Continue background-slot work while the batch runs
+- Poll only `remote_queue.status_command`
+- Never inspect raw cluster jobs directly from this skill
+- If `stop_conditions.max_wallclock_hours` is exceeded, set `next_action = "finish current batch and stop"`, stop launching new work, and continue polling the current batch to completion
+- If all slots are unexpectedly idle during this state, transition through `MAINTAIN_BACKGROUND_POOL` to restore the declared slot set before doing any lower-priority work
+
+### `ANALYZE_RESULTS`
+
+- Call `remote_queue.results_command`
+- Dispatch one `strong_reasoner` subagent to compare the result against the aggregate baseline and extract learnings
+- If the aggregate result clears `objective.improvement_threshold` in the configured direction, update the baseline and reset `no_improve_iterations` to `0`
+- Otherwise leave the baseline unchanged and increment `no_improve_iterations`
+- Update completed experiments and learnings in both cases
+
+### `ROLL_ITERATION`
+
+- Dispatch one `strong_reasoner` subagent
+- Input: `next_proposals`, fresh `key_learnings`, completed experiment results, and updated baseline
+- Output: filtered carry-over proposals with duplicates, invalidated ideas, and overlaps removed plus short rationale for each removal
+- Move the filtered survivors into `current_proposals`
+- Clear `next_proposals`
+- Increment iteration counters
+- Check stop conditions using the aggregate metric
+- Emit the iteration report using the contract in `references/contracts.md`
+- Transition to `QUIESCE_SLOTS` regardless of whether the campaign continues or stops
+
+### `QUIESCE_SLOTS`
+
+- Stop launching new work
+- Persist any finished slot output before changing slot ownership
+- Wait up to a 60-second drain window for in-flight slots to complete
+- cancel leftovers after the 60-second drain window and record cancellation reasons in state
+- If the campaign continues, set `machine_state = MAINTAIN_BACKGROUND_POOL`, keep `status = RUNNING`, and re-invoke `ml-metaoptimization`
+- If the campaign stops, transition to `COMPLETE`
+
+### Terminal States
+
+- `COMPLETE`: emit the final report using the contract in `references/contracts.md` after all slots have already been drained or canceled, remove the `AGENTS.md` hook, delete `.ml-metaopt/state.json`, and stop
+- `BLOCKED_CONFIG`: remove the `AGENTS.md` hook, leave state and artifacts intact so the campaign can resume after config repair, and stop
+- `FAILED`: remove the `AGENTS.md` hook, write the terminal error, preserve state, and stop

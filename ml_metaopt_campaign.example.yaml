@@ -1,0 +1,83 @@
+version: 2
+campaign_id: market-forecast-v3
+goal: Improve out-of-sample forecast quality without temporal leakage.
+
+objective:
+  metric: rmse
+  direction: minimize
+  aggregation:
+    method: weighted_mean
+    weights:
+      ds_main: 0.7
+      ds_holdout: 0.3
+  improvement_threshold: 0.0005
+
+datasets:
+  - id: ds_main
+    local_path: data/main.parquet
+    role: train_eval
+    fingerprint: sha256:1111111111111111111111111111111111111111111111111111111111111111
+  - id: ds_holdout
+    local_path: data/holdout.parquet
+    role: eval_only
+    fingerprint: sha256:2222222222222222222222222222222222222222222222222222222222222222
+
+baseline:
+  aggregate: 0.1284
+  by_dataset:
+    ds_main: 0.1269
+    ds_holdout: 0.1320
+
+stop_conditions:
+  max_iterations: 20
+  max_no_improve_iterations: 4
+  target_metric: 0.1200
+  max_wallclock_hours: 72
+
+proposal_policy:
+  current_target: 8
+  current_floor: 4
+  next_cap: 200
+  distinctness_rule: non_overlapping
+
+dispatch_policy:
+  background_slots: 8
+  auxiliary_slots: 2
+
+sanity:
+  # Project-provided fast sanity entrypoint.
+  command: python3 scripts/local_sanity.py --fast
+  max_duration_seconds: 60
+  require_zero_temporal_leakage: true
+  require_config_load: true
+
+artifacts:
+  code_roots:
+    - .
+  data_roots:
+    - data
+  exclude:
+    - .git
+    - .venv
+    - logs
+    - .ml-metaopt
+
+remote_queue:
+  backend: ray-hetzner
+  # The orchestrator appends one shell-escaped argument: manifest path for enqueue, batch_id for status/results.
+  enqueue_command: python3 /opt/ray-hetzner/metaopt/enqueue_batch.py
+  status_command: python3 /opt/ray-hetzner/metaopt/get_batch_status.py
+  results_command: python3 /opt/ray-hetzner/metaopt/fetch_batch_results.py
+
+execution:
+  runner_type: ray_queue_runner
+  # This path is container-specific and must match where the backend materializes the immutable artifact.
+  entrypoint: python3 /srv/metaopt/project/scripts/ray_runner.py
+  target_cluster_utilization: 0.95
+  max_batch_retries: 2
+  trial_budget:
+    kind: fixed_trials
+    value: 128
+  search_strategy:
+    kind: optuna_tpe
+    seed: 1337

@@ -1,0 +1,80 @@
+{
+  "version": 2,
+  "campaign_id": "market-forecast-v3",
+  "campaign_identity_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "runtime_config_hash": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+  "status": "RUNNING",
+  "machine_state": "WAIT_FOR_REMOTE_BATCH",
+  "current_iteration": 3,
+  "next_action": "poll remote batch status",
+  "objective_snapshot": {
+    "metric": "rmse",
+    "direction": "minimize",
+    "aggregation": {
+      "method": "weighted_mean",
+      "weights": {
+        "ds_main": 0.7,
+        "ds_holdout": 0.3
+      }
+    },
+    "improvement_threshold": 0.0005
+  },
+  "active_slots": [
+    {
+      "slot_id": "bg-1",
+      "slot_class": "background",
+      "mode": "maintenance",
+      "model": "GPT-5.4",
+      "status": "running",
+      "attempt": 1,
+      "task_summary": "Read-only maintenance audit while the remote batch runs"
+    },
+    {
+      "slot_id": "aux-1",
+      "slot_class": "auxiliary",
+      "mode": "analysis",
+      "model": "Opus 4.6 fast",
+      "status": "queued",
+      "attempt": 1,
+      "task_summary": "Prepare post-run analysis context"
+    }
+  ],
+  "current_proposals": [],
+  "next_proposals": [
+    {
+      "proposal_id": "p-17",
+      "summary": "Tighten rolling-window validation"
+    }
+  ],
+  "selected_experiment": {
+    "proposal_id": "p-16",
+    "sanity_attempts": 1
+  },
+  "local_changeset": {
+    "code_artifact_uri": ".ml-metaopt/artifacts/code/batch-20260405-0001.tar.gz"
+  },
+  "remote_batches": [
+    {
+      "batch_id": "batch-20260405-0001",
+      "queue_ref": "ray-queue-123",
+      "status": "running"
+    }
+  ],
+  "baseline": {
+    "aggregate": 0.1284,
+    "by_dataset": {
+      "ds_main": 0.1269,
+      "ds_holdout": 0.1320
+    }
+  },
+  "completed_experiments": [
+    {
+      "batch_id": "batch-20260401-0004",
+      "aggregate": 0.1279
+    }
+  ],
+  "key_learnings": [
+    "Leakage checks must run in local sanity before enqueue"
+  ],
+  "no_improve_iterations": 2
+}

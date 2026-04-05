@@ -1,0 +1,9 @@
+{
+  "batch_id": "batch-20260405-0001",
+  "status": "running",
+  "timestamps": {
+    "queued_at": "2026-04-05T10:00:00Z",
+    "started_at": "2026-04-05T10:02:00Z"
+  },
+  "utilization": 0.92
+}

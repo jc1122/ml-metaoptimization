@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import re
 import unittest
@@ -64,6 +65,10 @@ def _require_pattern(test_case: unittest.TestCase, text: str, pattern: str) -> N
 
 def _require_non_empty_string(value: object, message: str) -> None:
     assert isinstance(value, str) and value, message
+
+
+def _require_number(value: object, message: str) -> None:
+    assert isinstance(value, (int, float)) and not isinstance(value, bool), message
 
 
 def _validate_backend_payload(kind: str, payload: dict) -> None:
@@ -181,12 +186,34 @@ def _validate_state_payload(payload: dict) -> None:
     assert isinstance(payload["active_slots"], list), "active_slots must be a list"
     for slot in payload["active_slots"]:
         assert isinstance(slot, dict), "active_slots entries must be objects"
+        _require_non_empty_string(slot.get("slot_id"), "slot_id is required")
         assert slot.get("slot_class") in VALID_SLOT_CLASSES, "invalid slot_class"
         assert slot.get("mode") in VALID_SLOT_MODES, "invalid slot mode"
         assert slot.get("model_class") in VALID_MODEL_CLASSES, "invalid model_class"
         assert isinstance(slot.get("requested_model"), str) and slot["requested_model"], "requested_model is required"
         assert isinstance(slot.get("resolved_model"), str) and slot["resolved_model"], "resolved_model is required"
+        _require_non_empty_string(slot.get("status"), "slot status is required")
+        assert type(slot.get("attempt")) is int and slot["attempt"] > 0, "slot attempt must be a positive integer"
         assert isinstance(slot.get("task_summary"), str) and slot["task_summary"], "slot must have task_summary"
+
+    selected_experiment = payload["selected_experiment"]
+    assert isinstance(selected_experiment, dict), "selected_experiment must be an object"
+    _require_non_empty_string(
+        selected_experiment.get("proposal_id"),
+        "selected_experiment.proposal_id is required",
+    )
+    assert type(selected_experiment.get("sanity_attempts")) is int and selected_experiment["sanity_attempts"] >= 0, (
+        "selected_experiment.sanity_attempts must be a non-negative integer"
+    )
+
+    baseline = payload["baseline"]
+    assert isinstance(baseline, dict), "baseline must be an object"
+    _require_number(baseline.get("aggregate"), "baseline.aggregate must be numeric")
+    by_dataset = baseline.get("by_dataset")
+    assert isinstance(by_dataset, dict) and by_dataset, "baseline.by_dataset must be a non-empty object"
+    for dataset_id, aggregate in by_dataset.items():
+        _require_non_empty_string(dataset_id, "baseline.by_dataset keys must be non-empty strings")
+        _require_number(aggregate, "baseline.by_dataset values must be numeric")
 
     local_changeset = payload["local_changeset"]
     assert isinstance(local_changeset, dict), "local_changeset must be an object"
@@ -574,6 +601,61 @@ class MetaoptValidationTests(unittest.TestCase):
             AssertionError, r"apply_results entries must include non-empty patch_path"
         ):
             _validate_state_payload(malformed_apply_results)
+
+    def test_state_validator_rejects_malformed_slot_baseline_and_selected_experiment_shapes(self) -> None:
+        fixture = _read_json("tests/fixtures/state/running.json")
+
+        blank_slot_id = copy.deepcopy(fixture)
+        blank_slot_id["active_slots"][0]["slot_id"] = ""
+        with self.assertRaisesRegex(AssertionError, r"slot_id is required"):
+            _validate_state_payload(blank_slot_id)
+
+        blank_slot_status = copy.deepcopy(fixture)
+        blank_slot_status["active_slots"][0]["status"] = ""
+        with self.assertRaisesRegex(AssertionError, r"slot status is required"):
+            _validate_state_payload(blank_slot_status)
+
+        invalid_slot_attempt = copy.deepcopy(fixture)
+        invalid_slot_attempt["active_slots"][0]["attempt"] = False
+        with self.assertRaisesRegex(AssertionError, r"slot attempt must be a positive integer"):
+            _validate_state_payload(invalid_slot_attempt)
+
+        boolean_baseline_aggregate = copy.deepcopy(fixture)
+        boolean_baseline_aggregate["baseline"]["aggregate"] = True
+        with self.assertRaisesRegex(AssertionError, r"baseline.aggregate must be numeric"):
+            _validate_state_payload(boolean_baseline_aggregate)
+
+        empty_baseline_by_dataset = copy.deepcopy(fixture)
+        empty_baseline_by_dataset["baseline"]["by_dataset"] = {}
+        with self.assertRaisesRegex(AssertionError, r"baseline.by_dataset must be a non-empty object"):
+            _validate_state_payload(empty_baseline_by_dataset)
+
+        blank_baseline_dataset_key = copy.deepcopy(fixture)
+        blank_baseline_dataset_key["baseline"]["by_dataset"] = {"": 0.1269}
+        with self.assertRaisesRegex(AssertionError, r"baseline.by_dataset keys must be non-empty strings"):
+            _validate_state_payload(blank_baseline_dataset_key)
+
+        boolean_baseline_dataset_value = copy.deepcopy(fixture)
+        boolean_baseline_dataset_value["baseline"]["by_dataset"] = {"ds_main": False}
+        with self.assertRaisesRegex(AssertionError, r"baseline.by_dataset values must be numeric"):
+            _validate_state_payload(boolean_baseline_dataset_value)
+
+        malformed_selected_experiment = copy.deepcopy(fixture)
+        malformed_selected_experiment["selected_experiment"] = []
+        with self.assertRaisesRegex(AssertionError, r"selected_experiment must be an object"):
+            _validate_state_payload(malformed_selected_experiment)
+
+        blank_selected_experiment_proposal = copy.deepcopy(fixture)
+        blank_selected_experiment_proposal["selected_experiment"]["proposal_id"] = ""
+        with self.assertRaisesRegex(AssertionError, r"selected_experiment.proposal_id is required"):
+            _validate_state_payload(blank_selected_experiment_proposal)
+
+        invalid_selected_experiment_attempts = copy.deepcopy(fixture)
+        invalid_selected_experiment_attempts["selected_experiment"]["sanity_attempts"] = True
+        with self.assertRaisesRegex(
+            AssertionError, r"selected_experiment.sanity_attempts must be a non-negative integer"
+        ):
+            _validate_state_payload(invalid_selected_experiment_attempts)
 
 
 if __name__ == "__main__":

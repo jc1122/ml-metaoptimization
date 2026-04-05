@@ -123,6 +123,8 @@ Each active slot must record:
 - `attempt`
 - `task_summary`
 
+`slot_id` and `status` must be non-empty strings. `attempt` must be a positive integer.
+
 `slot_class` values:
 - `background`
 - `auxiliary`
@@ -135,6 +137,12 @@ Each active slot must record:
 - `materialization`
 - `diagnosis`
 - `analysis`
+
+## Selected Experiment Contract
+
+`selected_experiment` must be an object with:
+- `proposal_id` as a non-empty string
+- `sanity_attempts` as a non-negative integer
 
 ## Local Changeset Contract
 
@@ -216,7 +224,9 @@ The backend must persist machine-readable status with:
 ## Aggregate Baseline Contract
 
 - `baseline.aggregate` is the authoritative campaign score
+- `baseline.aggregate` must be numeric
 - `baseline.by_dataset` is diagnostic but mandatory
+- `baseline.by_dataset` must be a non-empty object mapping non-empty dataset ids to numeric values
 - `objective.direction` determines improvement checks
 - `objective.aggregation` determines how dataset scores roll up into the aggregate
 - `objective.improvement_threshold` determines whether an iteration counts as an improvement

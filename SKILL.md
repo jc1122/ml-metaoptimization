@@ -113,6 +113,8 @@ Dispatch 8 subagents in parallel. Assign roles dynamically — all 8 can cover d
 
 **Continuous operation:** When any subagent finishes, immediately assign it a new task on a different angle. Never let a subagent be idle.
 
+**Orchestrator idle rule:** If the orchestrator ever finds itself with no brainstorming subagents running (e.g. waiting for cluster results between phases), immediately dispatch a GPT-5.4 subagent to do a full repository code audit — reviewing all supporting code for bugs, leakages, inefficiencies, and incorrect assumptions. When the audit completes, dispatch one Opus 4.6 fast subagent with the full audit output to implement the fixes. Do not wait for the cluster — use the idle time.
+
 **Role pool (assign dynamically based on what advances the goal most):**
 feature engineering, HPO space design, leakage audit, code speedup/profiling, model architecture variants, target formulation variants, data quality analysis, ensemble design, **code review** (bugs, silent errors, incorrect assumptions in supporting code), **leakage audit in code** (data leakage introduced by preprocessing or feature construction logic, not just config), **infrastructure code review** (inefficiencies in data loading, batching, or result serialization that waste cluster CPU/memory), and any other angle relevant to the current goal.
 

@@ -114,7 +114,7 @@ Dispatch 8 subagents in parallel. Assign roles dynamically — all 8 can cover d
 **Continuous operation:** When any subagent finishes, immediately assign it a new task on a different angle. Never let a subagent be idle.
 
 **Role pool (assign dynamically based on what advances the goal most):**
-feature engineering, HPO space design, leakage audit, code speedup/profiling, model architecture variants, target formulation variants, data quality analysis, ensemble design, and any other angle relevant to the current goal.
+feature engineering, HPO space design, leakage audit, code speedup/profiling, model architecture variants, target formulation variants, data quality analysis, ensemble design, **code review** (bugs, silent errors, incorrect assumptions in supporting code), **leakage audit in code** (data leakage introduced by preprocessing or feature construction logic, not just config), **infrastructure code review** (inefficiencies in data loading, batching, or result serialization that waste cluster CPU/memory), and any other angle relevant to the current goal.
 
 **Proposal threshold:** Brainstorm until `current_proposals` contains 8 distinct, non-overlapping proposals. If a subagent returns a duplicate or overlapping proposal, reassign it to a different angle immediately — it does not count. **Floor:** if all 8 subagents have each completed at least 2 rounds (16 total attempts) and fewer than 8 distinct proposals exist, proceed to synthesis with what is available. Fewer than 4 proposals is a red flag — record it in `key_learnings`.
 
@@ -232,7 +232,16 @@ Update in state file: `baseline` (if improved), `key_learnings`, `completed_expe
 
 **Keep the cluster running between iterations** — do not tear down and reprovision between iterations; that wastes time and quota. The cluster stays up until all iterations are complete.
 
-- `current_iteration < total_iterations` → move `next_proposals` into `current_proposals`, clear `next_proposals`, increment `current_iteration`, set `current_phase = 1`, update `next_action` to `"start brainstorming phase"`, go to Phase 1
+- `current_iteration < total_iterations` → before starting the next iteration, run a proposal review:
+
+  **Dispatch one Opus 4.6 fast subagent** with `next_proposals`, the fresh `baseline`, and `key_learnings` from Phase 6. It:
+  1. Removes proposals that are now redundant or invalidated by the results (e.g. proposed tuning a dimension Phase 6 showed is already saturated)
+  2. Removes duplicates and near-overlapping proposals, keeping the highest-leverage variant
+  3. Returns the filtered list with a short rationale for each removal
+
+  If fewer than 4 proposals survive: do not proceed to synthesis yet — dispatch additional brainstorming subagents on new angles until the count reaches 4, then re-filter. Record the shortfall in `key_learnings`.
+
+  Move the filtered list into `current_proposals`, clear `next_proposals`, increment `current_iteration`, set `current_phase = 1`, update `next_action` to `"start brainstorming phase"`, go to Phase 1
 - Done → tear down the cluster, then clean up local state:
 
 ```bash

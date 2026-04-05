@@ -192,7 +192,7 @@ Run long campaigns from the head inside tmux to survive laptop disconnects:
 ```bash
 ssh root@$RAY_HEAD_IP
 tmux new -s run
-python /root/MarketNN/scripts/ray_runner.py
+python /root/<project>/scripts/ray_runner.py   # replace with actual script path
 ```
 
 For each job launched, append an entry to `cluster_jobs` in the state file immediately after launch.
@@ -216,7 +216,7 @@ Collect results from all cluster jobs using `collect_logs.sh`:
 ./collect_logs.sh
 
 # Ray session logs + result directories from head and all workers:
-./collect_logs.sh --results /root/MarketNN/results
+./collect_logs.sh --results /root/<project>/results
 
 # Per-job stdout/stderr (if job IDs are known):
 ./collect_logs.sh job-id-1 job-id-2
@@ -322,7 +322,7 @@ Destination defaults to `/root/<project-name>`. Uses `rsync --delete` — do not
 
 ```bash
 ./collect_logs.sh                              # Ray session logs from head only
-./collect_logs.sh --results /root/MarketNN/results  # + results from head and all workers
+./collect_logs.sh --results /root/<project>/results  # + results from head and all workers
 ./collect_logs.sh job-id-1 job-id-2            # + per-job stdout/stderr via `ray job logs`
 ```
 

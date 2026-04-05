@@ -143,15 +143,21 @@ Each active slot must record:
 - `diagnosis`
 - `analysis`
 
+`mode = materialization` requires `model_class = strong_coder`.
+
 ## Selected Experiment Contract
 
-`selected_experiment` must be an object with:
+`selected_experiment` may be `null` until `SELECT_EXPERIMENT` persists a winner; once selected, it is an object with `proposal_id` and `sanity_attempts`.
+
+When present, `selected_experiment` must be an object with:
 - `proposal_id` as a non-empty string
 - `sanity_attempts` as a non-negative integer
 
 ## Local Changeset Contract
 
-Each `local_changeset` must record:
+`local_changeset` may be `null` until `MATERIALIZE_CHANGESET` persists outputs; once present, it is an object with the documented fields.
+
+When present, each `local_changeset` must record:
 - `integration_worktree`
 - `patch_artifacts`
 - `apply_results`

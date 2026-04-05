@@ -44,7 +44,7 @@
       "slot_id": "aux-1",
       "slot_class": "auxiliary",
       "mode": "materialization",
-      "model_class": "strong_reasoner",
+      "model_class": "strong_coder",
       "requested_model": "Opus 4.6 fast",
       "resolved_model": "Opus 4.6 fast",
       "status": "running",

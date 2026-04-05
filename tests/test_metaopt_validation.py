@@ -42,6 +42,17 @@ VALID_SLOT_MODES = {
 }
 VALID_MODEL_CLASSES = {"strong_coder", "strong_reasoner", "general_worker"}
 VALID_REMOTE_BATCH_STATUSES = {"queued", "running", "completed", "failed"}
+PRE_SELECTION_MACHINE_STATES = {
+    "LOAD_CAMPAIGN",
+    "HYDRATE_STATE",
+    "MAINTAIN_BACKGROUND_POOL",
+    "WAIT_FOR_PROPOSAL_THRESHOLD",
+    "SELECT_EXPERIMENT",
+}
+PRE_MATERIALIZATION_MACHINE_STATES = PRE_SELECTION_MACHINE_STATES | {
+    "DESIGN_EXPERIMENT",
+    "MATERIALIZE_CHANGESET",
+}
 SHA256_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 LEGACY_MAX_BATCH_RETRIES_KEY = "max_batch_" "retries"
 
@@ -214,6 +225,10 @@ def _validate_state_payload(payload: dict) -> None:
         assert slot.get("slot_class") in VALID_SLOT_CLASSES, "invalid slot_class"
         assert slot.get("mode") in VALID_SLOT_MODES, "invalid slot mode"
         assert slot.get("model_class") in VALID_MODEL_CLASSES, "invalid model_class"
+        if slot["mode"] == "materialization":
+            assert slot["model_class"] == "strong_coder", (
+                "materialization slots must use model_class strong_coder"
+            )
         assert isinstance(slot.get("requested_model"), str) and slot["requested_model"], "requested_model is required"
         assert isinstance(slot.get("resolved_model"), str) and slot["resolved_model"], "resolved_model is required"
         _require_non_empty_string(slot.get("status"), "slot status is required")
@@ -229,14 +244,19 @@ def _validate_state_payload(payload: dict) -> None:
         assert isinstance(proposal, dict), "next_proposals entries must be objects"
 
     selected_experiment = payload["selected_experiment"]
-    assert isinstance(selected_experiment, dict), "selected_experiment must be an object"
-    _require_non_empty_string(
-        selected_experiment.get("proposal_id"),
-        "selected_experiment.proposal_id is required",
-    )
-    assert type(selected_experiment.get("sanity_attempts")) is int and selected_experiment["sanity_attempts"] >= 0, (
-        "selected_experiment.sanity_attempts must be a non-negative integer"
-    )
+    if selected_experiment is None:
+        assert payload["machine_state"] in PRE_SELECTION_MACHINE_STATES | {"BLOCKED_CONFIG"}, (
+            "selected_experiment must be populated once SELECT_EXPERIMENT completes"
+        )
+    else:
+        assert isinstance(selected_experiment, dict), "selected_experiment must be an object"
+        _require_non_empty_string(
+            selected_experiment.get("proposal_id"),
+            "selected_experiment.proposal_id is required",
+        )
+        assert type(selected_experiment.get("sanity_attempts")) is int and selected_experiment["sanity_attempts"] >= 0, (
+            "selected_experiment.sanity_attempts must be a non-negative integer"
+        )
 
     baseline = payload["baseline"]
     assert isinstance(baseline, dict), "baseline must be an object"
@@ -248,41 +268,46 @@ def _validate_state_payload(payload: dict) -> None:
         _require_number(aggregate, "baseline.by_dataset values must be numeric")
 
     local_changeset = payload["local_changeset"]
-    assert isinstance(local_changeset, dict), "local_changeset must be an object"
-    assert isinstance(local_changeset.get("integration_worktree"), str) and local_changeset["integration_worktree"], "integration_worktree is required"
-    assert isinstance(local_changeset.get("patch_artifacts"), list), "patch_artifacts list is required"
-    assert isinstance(local_changeset.get("apply_results"), list), "apply_results list is required"
-    assert isinstance(local_changeset.get("verification_notes"), list), "verification_notes list is required"
-    assert isinstance(local_changeset.get("code_artifact_uri"), str) and local_changeset["code_artifact_uri"], "code_artifact_uri is required"
-    assert isinstance(local_changeset.get("data_manifest_uri"), str) and local_changeset["data_manifest_uri"], "data_manifest_uri is required"
-    for patch_artifact in local_changeset["patch_artifacts"]:
-        assert isinstance(patch_artifact, dict), "patch_artifacts entries must be objects"
-        _require_non_empty_string(
-            patch_artifact.get("producer_slot_id"),
-            "patch_artifacts entries must include non-empty producer_slot_id",
+    if local_changeset is None:
+        assert payload["machine_state"] in PRE_MATERIALIZATION_MACHINE_STATES | {"BLOCKED_CONFIG"}, (
+            "local_changeset must be populated once MATERIALIZE_CHANGESET completes"
         )
-        _require_non_empty_string(
-            patch_artifact.get("purpose"),
-            "patch_artifacts entries must include non-empty purpose",
-        )
-        _require_non_empty_string(
-            patch_artifact.get("patch_path"),
-            "patch_artifacts entries must include non-empty patch_path",
-        )
-        _require_non_empty_string(
-            patch_artifact.get("target_worktree"),
-            "patch_artifacts entries must include non-empty target_worktree",
-        )
-    for apply_result in local_changeset["apply_results"]:
-        assert isinstance(apply_result, dict), "apply_results entries must be objects"
-        _require_non_empty_string(
-            apply_result.get("patch_path"),
-            "apply_results entries must include non-empty patch_path",
-        )
-        _require_non_empty_string(
-            apply_result.get("status"),
-            "apply_results entries must include non-empty status",
-        )
+    else:
+        assert isinstance(local_changeset, dict), "local_changeset must be an object"
+        assert isinstance(local_changeset.get("integration_worktree"), str) and local_changeset["integration_worktree"], "integration_worktree is required"
+        assert isinstance(local_changeset.get("patch_artifacts"), list), "patch_artifacts list is required"
+        assert isinstance(local_changeset.get("apply_results"), list), "apply_results list is required"
+        assert isinstance(local_changeset.get("verification_notes"), list), "verification_notes list is required"
+        assert isinstance(local_changeset.get("code_artifact_uri"), str) and local_changeset["code_artifact_uri"], "code_artifact_uri is required"
+        assert isinstance(local_changeset.get("data_manifest_uri"), str) and local_changeset["data_manifest_uri"], "data_manifest_uri is required"
+        for patch_artifact in local_changeset["patch_artifacts"]:
+            assert isinstance(patch_artifact, dict), "patch_artifacts entries must be objects"
+            _require_non_empty_string(
+                patch_artifact.get("producer_slot_id"),
+                "patch_artifacts entries must include non-empty producer_slot_id",
+            )
+            _require_non_empty_string(
+                patch_artifact.get("purpose"),
+                "patch_artifacts entries must include non-empty purpose",
+            )
+            _require_non_empty_string(
+                patch_artifact.get("patch_path"),
+                "patch_artifacts entries must include non-empty patch_path",
+            )
+            _require_non_empty_string(
+                patch_artifact.get("target_worktree"),
+                "patch_artifacts entries must include non-empty target_worktree",
+            )
+        for apply_result in local_changeset["apply_results"]:
+            assert isinstance(apply_result, dict), "apply_results entries must be objects"
+            _require_non_empty_string(
+                apply_result.get("patch_path"),
+                "apply_results entries must include non-empty patch_path",
+            )
+            _require_non_empty_string(
+                apply_result.get("status"),
+                "apply_results entries must include non-empty status",
+            )
 
     assert isinstance(payload["remote_batches"], list), "remote_batches must be a list"
     for remote_batch in payload["remote_batches"]:
@@ -410,6 +435,25 @@ class MetaoptValidationTests(unittest.TestCase):
             self,
             contracts,
             r"At the end of `ROLL_ITERATION`, after carry-over filtering is complete, emit",
+        )
+
+    def test_contracts_define_state_lifecycle_nullability_and_materialization_worker_pairing(self) -> None:
+        contracts = _read_text("references/contracts.md")
+
+        _require_pattern(
+            self,
+            contracts,
+            r"## Selected Experiment Contract.*`selected_experiment` may be `null` until `SELECT_EXPERIMENT` persists a winner; once selected, it is an object with `proposal_id` and `sanity_attempts`",
+        )
+        _require_pattern(
+            self,
+            contracts,
+            r"## Local Changeset Contract.*`local_changeset` may be `null` until `MATERIALIZE_CHANGESET` persists outputs; once present, it is an object with the documented fields",
+        )
+        _require_pattern(
+            self,
+            contracts,
+            r"`mode = materialization` requires `model_class = strong_coder`",
         )
 
     def test_contract_docs_define_v3_state_manifest_and_retry_policy(self) -> None:
@@ -558,6 +602,10 @@ class MetaoptValidationTests(unittest.TestCase):
             self.assertIn("model_class", slot)
             self.assertIn("requested_model", slot)
             self.assertIn("resolved_model", slot)
+
+        materialization_slots = [slot for slot in running["active_slots"] if slot["mode"] == "materialization"]
+        self.assertEqual(len(materialization_slots), 1)
+        self.assertEqual(materialization_slots[0]["model_class"], "strong_coder")
 
     def test_invalid_fixtures_are_rejected(self) -> None:
         with self.assertRaises(AssertionError):
@@ -735,6 +783,52 @@ class MetaoptValidationTests(unittest.TestCase):
             AssertionError, r"selected_experiment.sanity_attempts must be a non-negative integer"
         ):
             _validate_state_payload(invalid_selected_experiment_attempts)
+
+    def test_state_validator_enforces_selected_experiment_and_local_changeset_lifecycle(self) -> None:
+        fixture = _read_json("tests/fixtures/state/running.json")
+
+        pre_selection = copy.deepcopy(fixture)
+        pre_selection["machine_state"] = "WAIT_FOR_PROPOSAL_THRESHOLD"
+        pre_selection["selected_experiment"] = None
+        pre_selection["local_changeset"] = None
+        _validate_state_payload(pre_selection)
+
+        post_selection_pre_materialization = copy.deepcopy(fixture)
+        post_selection_pre_materialization["machine_state"] = "DESIGN_EXPERIMENT"
+        post_selection_pre_materialization["local_changeset"] = None
+        _validate_state_payload(post_selection_pre_materialization)
+
+        blocked_config = copy.deepcopy(fixture)
+        blocked_config["status"] = "BLOCKED_CONFIG"
+        blocked_config["machine_state"] = "BLOCKED_CONFIG"
+        blocked_config["active_slots"] = []
+        blocked_config["selected_experiment"] = None
+        blocked_config["local_changeset"] = None
+        _validate_state_payload(blocked_config)
+
+        missing_selected_experiment = copy.deepcopy(fixture)
+        missing_selected_experiment["selected_experiment"] = None
+        with self.assertRaisesRegex(
+            AssertionError, r"selected_experiment must be populated once SELECT_EXPERIMENT completes"
+        ):
+            _validate_state_payload(missing_selected_experiment)
+
+        missing_local_changeset = copy.deepcopy(fixture)
+        missing_local_changeset["local_changeset"] = None
+        with self.assertRaisesRegex(
+            AssertionError, r"local_changeset must be populated once MATERIALIZE_CHANGESET completes"
+        ):
+            _validate_state_payload(missing_local_changeset)
+
+    def test_state_validator_rejects_non_strong_coder_materialization_slot(self) -> None:
+        fixture = _read_json("tests/fixtures/state/running.json")
+
+        invalid_materialization_slot = copy.deepcopy(fixture)
+        invalid_materialization_slot["active_slots"][1]["model_class"] = "strong_reasoner"
+        with self.assertRaisesRegex(
+            AssertionError, r"materialization slots must use model_class strong_coder"
+        ):
+            _validate_state_payload(invalid_materialization_slot)
 
     def test_state_validator_rejects_invalid_hash_format_and_remote_batches(self) -> None:
         fixture = _read_json("tests/fixtures/state/running.json")

@@ -283,10 +283,10 @@ class MetaoptValidationTests(unittest.TestCase):
             _validate_state_payload(_read_json("tests/fixtures/state/invalid-missing-proposal-cycle.json"))
 
         with self.assertRaises(AssertionError):
-            _validate_state_payload(_read_json("tests/fixtures/state/invalid-missing-slot-resolved-model.json"))
+            _validate_state_payload(_read_json("tests/fixtures/state/invalid-missing-slot-model-resolution.json"))
 
         with self.assertRaises(AssertionError):
-            _validate_state_payload(_read_json("tests/fixtures/state/invalid-missing-local-data-manifest-uri.json"))
+            _validate_state_payload(_read_json("tests/fixtures/state/invalid-missing-local-changeset-metadata.json"))
 
 
 if __name__ == "__main__":

@@ -332,6 +332,17 @@ class MetaoptValidationTests(unittest.TestCase):
         self.assertIn("`agents/openai.yaml`", readme)
         _require_pattern(self, readme, r"OpenAI|Codex")
 
+    def test_readme_and_dependencies_document_runtime_prereqs(self) -> None:
+        readme = _read_text("README.md")
+        dependencies = _read_text("references/dependencies.md")
+
+        self.assertTrue((ROOT / "requirements.txt").exists())
+        self.assertIn("python3 -m pip install --user -r requirements.txt", readme)
+        self.assertIn("contract-only scope", readme)
+        _require_pattern(self, dependencies, r"`git`.*worktree")
+        _require_pattern(self, dependencies, r"PyYAML")
+        _require_pattern(self, dependencies, r"host reinvocation mechanism")
+
     def test_backend_and_state_fixtures_validate(self) -> None:
         _validate_backend_payload("enqueue", _read_json("tests/fixtures/backend/enqueue-valid.json"))
         _validate_backend_payload("status", _read_json("tests/fixtures/backend/status-valid.json"))

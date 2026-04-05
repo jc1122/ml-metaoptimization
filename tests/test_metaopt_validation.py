@@ -299,6 +299,19 @@ def _validate_state_payload(payload: dict) -> None:
             "remote_batches entries must include valid status"
         )
 
+    completed_experiments = payload["completed_experiments"]
+    assert isinstance(completed_experiments, list), "completed_experiments must be a list"
+    for completed_experiment in completed_experiments:
+        assert isinstance(completed_experiment, dict), "completed_experiments entries must be objects"
+        _require_non_empty_string(
+            completed_experiment.get("batch_id"),
+            "completed_experiments entries must include non-empty batch_id",
+        )
+        _require_number(
+            completed_experiment.get("aggregate"),
+            "completed_experiments aggregate must be numeric",
+        )
+
     key_learnings = payload["key_learnings"]
     assert isinstance(key_learnings, list), "key_learnings must be a list"
     for learning in key_learnings:
@@ -758,6 +771,31 @@ class MetaoptValidationTests(unittest.TestCase):
         ]
         with self.assertRaisesRegex(AssertionError, r"remote_batches entries must include valid status"):
             _validate_state_payload(invalid_remote_batch_status)
+
+    def test_state_validator_rejects_malformed_completed_experiments(self) -> None:
+        fixture = _read_json("tests/fixtures/state/running.json")
+
+        malformed_completed_experiments = copy.deepcopy(fixture)
+        malformed_completed_experiments["completed_experiments"] = {}
+        with self.assertRaisesRegex(AssertionError, r"completed_experiments must be a list"):
+            _validate_state_payload(malformed_completed_experiments)
+
+        non_object_completed_experiment = copy.deepcopy(fixture)
+        non_object_completed_experiment["completed_experiments"] = ["batch-20260401-0004"]
+        with self.assertRaisesRegex(AssertionError, r"completed_experiments entries must be objects"):
+            _validate_state_payload(non_object_completed_experiment)
+
+        blank_completed_experiment_batch_id = copy.deepcopy(fixture)
+        blank_completed_experiment_batch_id["completed_experiments"][0]["batch_id"] = ""
+        with self.assertRaisesRegex(
+            AssertionError, r"completed_experiments entries must include non-empty batch_id"
+        ):
+            _validate_state_payload(blank_completed_experiment_batch_id)
+
+        boolean_completed_experiment_aggregate = copy.deepcopy(fixture)
+        boolean_completed_experiment_aggregate["completed_experiments"][0]["aggregate"] = True
+        with self.assertRaisesRegex(AssertionError, r"completed_experiments aggregate must be numeric"):
+            _validate_state_payload(boolean_completed_experiment_aggregate)
 
     def test_state_validator_rejects_invalid_required_top_level_field_shapes(self) -> None:
         fixture = _read_json("tests/fixtures/state/running.json")

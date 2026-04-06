@@ -186,11 +186,39 @@ Each active slot must record:
 
 ## Selected Experiment Contract
 
-`selected_experiment` may be `null` until `SELECT_EXPERIMENT` persists a winner; once selected, it is an object with `proposal_id` and `sanity_attempts`.
+`selected_experiment` may be `null` until `SELECT_EXPERIMENT` persists a winner. Once set, it is the authoritative handoff object for the current experiment across all states from `SELECT_EXPERIMENT` through `ANALYZE_RESULTS`.
 
 When present, `selected_experiment` must be an object with:
-- `proposal_id` as a non-empty string
-- `sanity_attempts` as a non-negative integer
+
+**Set by SELECT_EXPERIMENT:**
+- `proposal_id`: non-empty string — the winning proposal's identifier
+- `proposal_snapshot`: object — a frozen copy of the full proposal record (all orchestrator-owned and worker-provided fields from the Proposal Record Shape)
+- `selection_rationale`: string — the ranking rationale from the selection worker
+- `sanity_attempts`: non-negative integer — initialized to `0`
+
+**Set by DESIGN_EXPERIMENT:**
+- `design`: object or `null` — the full experiment design returned by the design worker. `null` until DESIGN_EXPERIMENT completes. Once set, this is the authoritative input for MATERIALIZE_CHANGESET.
+
+**Set by LOCAL_SANITY (on failure):**
+- `diagnosis_history`: array — ordered list of diagnosis records from `metaopt-sanity-diagnosis`. Empty array until a sanity failure occurs. Each entry is an object with:
+  - `attempt`: positive integer
+  - `root_cause`: string
+  - `classification`: string (one of `code_error`, `config_error`, `data_error`, `infra_error`, `design_error`)
+  - `action`: string (`"fix"`, `"adjust_config"`, or `"abandon"`)
+  - `code_guidance`: string or `null`
+  - `config_guidance`: string or `null`
+  - `diagnosed_at`: ISO 8601 timestamp
+
+**Set by ANALYZE_RESULTS:**
+- `analysis_summary`: object or `null` — the structured analysis output. `null` until ANALYZE_RESULTS completes. When set, contains:
+  - `judgment`: string (`"improvement"`, `"regression"`, or `"neutral"`)
+  - `new_aggregate`: number — the post-experiment aggregate score
+  - `delta`: number — signed change from baseline
+  - `learnings`: array of strings — new key insights
+  - `invalidations`: array — proposal invalidation recommendations
+  - `carry_over_candidates`: array — aspects worth further exploration
+
+The orchestrator must clear `selected_experiment` (set to `null`) during `ROLL_ITERATION` after persisting the completed experiment to `completed_experiments`.
 
 ## Local Changeset Contract
 

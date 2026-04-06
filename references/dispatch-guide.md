@@ -125,7 +125,7 @@ Every worker subagent prompt includes a standard envelope plus state-specific fi
 
 ### Output → State
 
-- Write `state.selected_experiment = { proposal_id: <winner.proposal_id>, sanity_attempts: 0 }`
+- Write `state.selected_experiment = { proposal_id: <winner.proposal_id>, proposal_snapshot: <full proposal object>, selection_rationale: <ranking_rationale>, sanity_attempts: 0, design: null, diagnosis_history: [], analysis_summary: null }`
 - Set `state.proposal_cycle.current_pool_frozen = true`
 
 ## DESIGN_EXPERIMENT
@@ -148,8 +148,8 @@ Every worker subagent prompt includes a standard envelope plus state-specific fi
 
 ### Output → State
 
-- Persist the full experiment design in `state.selected_experiment.design` (or a dedicated state field)
-- The design becomes the input for `MATERIALIZE_CHANGESET`
+- Persist the full experiment design in `state.selected_experiment.design`
+- The design is the authoritative input for `MATERIALIZE_CHANGESET`
 
 ## MATERIALIZE_CHANGESET
 
@@ -224,6 +224,7 @@ Every worker subagent prompt includes a standard envelope plus state-specific fi
 - Append returned learnings to `state.key_learnings`
 - Append experiment record to `state.completed_experiments`
 - Carry proposal invalidations and carry-over candidates forward to `ROLL_ITERATION`
+- Persist the structured analysis in `state.selected_experiment.analysis_summary` with `judgment`, `new_aggregate`, `delta`, `learnings`, `invalidations`, and `carry_over_candidates`
 
 ## ROLL_ITERATION — Rollover
 

@@ -134,6 +134,7 @@
 - Move the filtered survivors into `current_proposals`
 - Clear `next_proposals`
 - Increment iteration counters
+- Clear `selected_experiment` (set to `null`) after persisting the completed experiment record to `completed_experiments`
 - Check stop conditions using the aggregate metric
 - Emit the iteration report using the contract in `references/contracts.md`
 - Transition to `QUIESCE_SLOTS` regardless of whether the campaign continues or stops

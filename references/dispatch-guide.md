@@ -107,6 +107,16 @@ Every worker subagent prompt includes a standard envelope plus state-specific fi
 - Findings-only: append findings summary to `state.maintenance_summary`
 - Code-modifying: write one unified diff patch artifact to `.ml-metaopt/artifacts/patches/`; orchestrator integrates mechanically
 
+### Prompt Bridge
+
+Because `repo-audit-refactor-optimize` is a generic skill, the orchestrator must include in its subagent prompt:
+- The patch artifact contract from `references/worker-lanes.md` (unified diff format, metadata fields)
+- The target worktree path
+- The campaign goal context for focus area selection
+- An explicit instruction to produce either findings-only output or one unified diff patch with the required metadata fields
+
+If the maintenance worker returns output that does not match the expected patch artifact shape, treat it as findings-only and append to `state.maintenance_summary`.
+
 ## SELECT_EXPERIMENT
 
 **Skill:** `metaopt-experiment-selection`
@@ -256,6 +266,7 @@ Dispatched only when `remote_queue.status_command` returns `status = "failed"`.
   - `"fix"`: transition to `FAILED` — remote code failures cannot be patched and re-run without a full re-enqueue cycle
   - `"adjust_config"`: transition to `BLOCKED_CONFIG` with `next_action = <config_guidance>`
   - `"abandon"`: transition to `FAILED` with `root_cause` as terminal error
+- Remote retries are the backend's responsibility via `remote_queue.retry_policy`. The orchestrator never re-enqueues a failed batch.
 
 ## ANALYZE_RESULTS
 
@@ -302,6 +313,7 @@ Dispatched only when `remote_queue.status_command` returns `status = "failed"`.
 ### Output → State
 
 - Move filtered carry-over proposals into `state.current_proposals`
+- For merged proposals, enrich the merged candidate with a new `proposal_id` (using `<campaign_id>-p<sequence_number>`), set `source_slot_id = "rollover"` and `creation_iteration` to the new iteration, then append to `state.current_proposals`
 - Clear `state.next_proposals`
 - If `needs_fresh_ideation == true`, the orchestrator prioritizes ideation in the next `MAINTAIN_BACKGROUND_POOL` entry
 - Increment `state.current_iteration`

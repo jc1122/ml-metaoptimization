@@ -132,6 +132,7 @@
     - `"adjust_config"`: transition to `BLOCKED_CONFIG` with `next_action = <config_guidance>`
     - `"abandon"`: transition to `FAILED` with the diagnosis `root_cause` as the terminal error
   - In all cases, append remote failure learnings to `state.key_learnings` before transitioning
+  - Remote retries are the backend's responsibility via `remote_queue.retry_policy`; the orchestrator never re-enqueues a failed batch
 
 ### `ANALYZE_RESULTS`
 

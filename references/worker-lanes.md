@@ -68,6 +68,11 @@ Execution rules:
 - the orchestrator applies maintenance patch artifacts mechanically in a dedicated integration worktree
 - if patch application conflicts or requires a non-trivial merge, dispatch `metaopt-experiment-materialization` in conflict-resolution mode with the conflicting patches, the base worktree state, and the experiment design context
 
+Metaoptimization bridge requirements:
+- The orchestrator must include the patch artifact contract (format, metadata fields, and integration path) in the maintenance worker's subagent prompt, because `repo-audit-refactor-optimize` does not natively encode these requirements
+- Maintenance workers must be told to emit one unified diff patch artifact with `producer_slot_id`, `purpose`, `patch_path`, and `target_worktree` metadata when producing code-modifying output
+- If the maintenance worker does not produce a patch artifact in the expected format, the orchestrator must treat the output as findings-only and record the format mismatch in `key_learnings`
+
 Patch artifact contract:
 - code-modifying maintenance and materialization workers must emit one unified diff patch artifact
 - each unified diff patch artifact must record `producer_slot_id`, `purpose`, `patch_path`, and `target_worktree`

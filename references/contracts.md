@@ -140,6 +140,8 @@ Each proposal record in `current_proposals` or `next_proposals` must contain:
 
 The orchestrator must enrich every ideation candidate with the orchestrator-owned fields before appending to a pool. Workers never generate `proposal_id` — that is the orchestrator's responsibility.
 
+When `metaopt-proposal-rollover` returns a merged proposal, the merged result contains only worker-provided fields (`title`, `rationale`, `expected_impact`, `target_area`). The orchestrator enriches it with a new `proposal_id`, `source_slot_id = "rollover"`, `creation_iteration` set to the new iteration number, and `created_at` before appending to `current_proposals`.
+
 When `metaopt-experiment-selection` receives `current_proposals`, every proposal already has all fields above. Selection returns the winning proposal object unchanged.
 
 When `metaopt-proposal-rollover` receives `next_proposals`, every proposal has all fields above. Carry-over proposals preserve all fields unchanged.

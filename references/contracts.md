@@ -93,7 +93,11 @@ Required top-level keys:
 - `cycle_id`
 - `current_pool_frozen`
 - `ideation_rounds_by_slot` as a map of non-empty `slot_id` strings to non-negative integer round counts
-- `shortfall_reason`
+- `shortfall_reason` — valid values:
+  - `"not_enough_proposals"` — pool has fewer than `min_proposals`
+  - `"floor_not_met"` — none of the proposals meet the quality floor
+  - `"all_proposals_attempted"` — all current proposals have already been run
+  - `""` (empty string) — no shortfall
 
 Each `remote_batches[]` entry must be an object with:
 - `batch_id`
@@ -240,9 +244,17 @@ When present, each `patch_artifacts[]` entry must be an object with:
 - `patch_path`
 - `target_worktree`
 
+When present, `verification_notes` is a list of strings, each a human-readable note about a verification step (e.g. `"pytest passed"`, `"mypy: 0 errors"`).
+
 When present, each `apply_results[]` entry must be an object with:
-- `patch_path`
-- `status`
+- `patch_path`: string — path to the patch artifact
+- `status`: one of `"applied"`, `"failed"`, or `"skipped"`
+- `error`: string or `null` — error message when `status` is `"failed"`, `null` otherwise
+
+Example entry:
+```json
+{"patch_path": "...", "status": "applied", "error": null}
+```
 
 ## Batch Manifest Contract
 

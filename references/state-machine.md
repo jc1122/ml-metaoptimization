@@ -39,7 +39,7 @@
 ### `HYDRATE_STATE`
 
 - If `.ml-metaopt/state.json` exists and `campaign_identity_hash` matches the campaign identity, resume from `machine_state`
-- If `.ml-metaopt/state.json` exists and there is a campaign identity hash mismatch, transition to `BLOCKED_CONFIG`, preserve the stale state in place, set `next_action = "archive or remove the stale state before starting a new campaign"`, remove the `AGENTS.md` hook, and stop
+- If `.ml-metaopt/state.json` exists and there is a campaign identity hash mismatch, transition to `BLOCKED_CONFIG`, preserve the stale state in place, set `next_action = "archive or remove the stale state before starting a new campaign"`, remove the `AGENTS.md` hook, and stop. (This removal calls the same operation as terminal-state cleanup — it strips only the `<!-- ml-metaoptimization:begin -->...<!-- ml-metaoptimization:end -->` block — but here it is a hard stop with no state-machine transition to a final state.)
 - Otherwise initialize fresh state from the campaign spec
 - If `AGENTS.md` does not exist, create it
 - Ensure the marked `AGENTS.md` hook is present only while `status = RUNNING`
@@ -50,6 +50,7 @@
 - Ensure exactly `dispatch_policy.background_slots` background slots exist
 - Prefer ideation via `metaopt-experiment-ideation` when `current_proposals` is below target and `next_proposals` is below cap
 - Otherwise assign maintenance work via `repo-audit-refactor-optimize`
+- **Patch integration timing:** maintenance workers may produce patch outputs, but those patches are NOT applied automatically during background work. The orchestrator collects completed maintenance outputs and defers patch application (if any) to `QUIESCE_SLOTS`, where mechanical integration happens before rollover.
 - The current proposal cycle starts on the first entry into this state for an iteration
 - Create or reset `proposal_cycle.cycle_id` when a new iteration first enters this state after `ROLL_ITERATION` or fresh initialization
 - Set `proposal_cycle.current_pool_frozen = false` when a new proposal cycle begins and keep it false while `current_proposals` may still grow
@@ -85,7 +86,8 @@
 
 - Dispatch `metaopt-experiment-materialization` as `strong_coder` subagents in isolated worktrees
 - Count these coders against `auxiliary_slots` with `mode = materialization`
-- The orchestrator may perform only clean, mechanical integration after subagents finish
+- The orchestrator performs clean, mechanical integration (clean merges only) immediately after the materialization subagent finishes
+- If mechanical integration fails due to conflicts (i.e. patches do not merge cleanly), the orchestrator dispatches `metaopt-experiment-materialization` in `conflict_resolution` mode to resolve them. This conflict-resolution dispatch is still part of the `MATERIALIZE_CHANGESET` state; the machine advances to `LOCAL_SANITY` only after successful integration.
 - Package an immutable code artifact under `.ml-metaopt/artifacts/code/`
 - Package the manifest-linked data artifact inputs under `.ml-metaopt/artifacts/data/`
 - Persist one unified diff patch artifact for each code-modifying worker under `.ml-metaopt/artifacts/patches/`
@@ -170,3 +172,5 @@
 - `COMPLETE`: emit the final report using the contract in `references/contracts.md` after all slots have already been drained or canceled, remove the `AGENTS.md` hook, delete `.ml-metaopt/state.json`, and stop
 - `BLOCKED_CONFIG`: remove the `AGENTS.md` hook, leave state and artifacts intact so the campaign can resume after config repair, and stop
 - `FAILED`: remove the `AGENTS.md` hook, write the terminal error, preserve state, and stop
+
+All three terminal states remove the `AGENTS.md` hook using the same operation as the identity-drift path in `HYDRATE_STATE`: strip only the `<!-- ml-metaoptimization:begin -->...<!-- ml-metaoptimization:end -->` block. The difference is that terminal-state cleanup transitions the machine to a final state (`COMPLETE`, `BLOCKED_CONFIG`, or `FAILED`), whereas the identity-drift path is a hard stop that does not advance the state machine.

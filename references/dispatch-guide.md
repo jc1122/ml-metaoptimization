@@ -170,7 +170,9 @@ If the maintenance worker returns output that does not match the expected patch 
 
 ### Input (from orchestrator context)
 
-The materialization worker operates in one of three modes. The orchestrator must pass `materialization_mode` to indicate which:
+The materialization worker operates in one of three modes. The orchestrator must pass `materialization_mode` to indicate which.
+
+> `materialization_mode` is a dispatch-specific parameter passed in the worker subagent prompt; it is not part of the Standard Envelope. Valid values: `"standard"`, `"remediation"`, `"conflict_resolution"`.
 
 **Standard mode** (`materialization_mode: "standard"` — during `MATERIALIZE_CHANGESET`):
 
@@ -281,7 +283,7 @@ Dispatched only when `remote_queue.status_command` returns `status = "failed"`.
 
 | Field | Source |
 |-------|--------|
-| Batch results payload | stdout JSON from `remote_queue.results_command <batch_id>` |
+| `batch_results` | Raw JSON object returned by `remote_queue.results_command <batch_id>` (passed as `batch_results` in the subagent prompt). Minimum expected keys: `batch_id`, `status`, `trials` (list), `summary_metrics`. |
 | Experiment context | Selected experiment design + winning proposal |
 
 ### Output → State

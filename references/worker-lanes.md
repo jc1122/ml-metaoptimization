@@ -117,9 +117,9 @@ Output:
 - local verification notes for `LOCAL_SANITY`
 
 Modes:
-- **standard**: implement an experiment design from scratch (dispatched during `MATERIALIZE_CHANGESET`)
-- **remediation**: apply diagnosis-guided code fixes to an existing patch (dispatched during `LOCAL_SANITY` after diagnosis)
-- **conflict-resolution**: resolve non-trivial merge conflicts between patches (dispatched when mechanical patch integration fails)
+- **standard** (`materialization_mode: "standard"`): implement an experiment design from scratch (dispatched during `MATERIALIZE_CHANGESET`)
+- **remediation** (`materialization_mode: "remediation"`): apply diagnosis-guided code fixes to an existing patch (dispatched during `LOCAL_SANITY` after diagnosis)
+- **conflict-resolution** (`materialization_mode: "conflict_resolution"`): resolve non-trivial merge conflicts between patches (dispatched when mechanical patch integration fails)
 
 All modes produce the same output shape (unified diff patch artifact + metadata). The orchestrator passes mode-specific context (experiment design for standard, diagnosis guidance for remediation, conflicting patches for conflict-resolution).
 

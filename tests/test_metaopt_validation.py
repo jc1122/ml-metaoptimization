@@ -1080,6 +1080,92 @@ class MetaoptValidationTests(unittest.TestCase):
         self.assertIn("metaopt-experiment-ideation", delegation_section)
         self.assertIn("metaopt-proposal-rollover", delegation_section)
 
+    def test_proposal_record_shape_documented(self) -> None:
+        """contracts.md must define proposal record shape with orchestrator-owned and worker-provided fields."""
+        contracts = _read_text("references/contracts.md")
+        _require_pattern(self, contracts, r"### Proposal Record Shape")
+        _require_pattern(self, contracts, r"proposal_id.*non-empty string.*unique within the campaign")
+        _require_pattern(self, contracts, r"source_slot_id.*non-empty string")
+        _require_pattern(self, contracts, r"creation_iteration.*positive integer")
+        _require_pattern(self, contracts, r"created_at.*ISO 8601")
+        _require_pattern(self, contracts, r"Workers never generate `proposal_id`")
+
+    def test_selected_experiment_expanded_shape(self) -> None:
+        """selected_experiment must document all lifecycle fields from SELECT through ANALYZE."""
+        contracts = _read_text("references/contracts.md")
+        _require_pattern(self, contracts, r"proposal_snapshot.*frozen copy")
+        _require_pattern(self, contracts, r"selection_rationale.*string")
+        _require_pattern(self, contracts, r"design.*object or `null`.*authoritative input for MATERIALIZE")
+        _require_pattern(self, contracts, r"diagnosis_history.*array.*ordered list")
+        _require_pattern(self, contracts, r"analysis_summary.*object or `null`.*structured analysis")
+        _require_pattern(self, contracts, r"clear `selected_experiment`.*ROLL_ITERATION")
+
+    def test_dispatch_guide_has_prompt_envelope(self) -> None:
+        """dispatch-guide.md must define the normalized prompt envelope."""
+        guide = _read_text("references/dispatch-guide.md")
+        _require_pattern(self, guide, r"## Prompt Envelope")
+        _require_pattern(self, guide, r"campaign_id.*string.*campaign.campaign_id")
+        _require_pattern(self, guide, r"aggregation_method.*string")
+        _require_pattern(self, guide, r"aggregation_weights.*object or null")
+        _require_pattern(self, guide, r"trial_budget.*object")
+        _require_pattern(self, guide, r"search_strategy.*object")
+
+    def test_remediation_flow_documented(self) -> None:
+        """state-machine.md must document the three-way diagnosis routing."""
+        sm = _read_text("references/state-machine.md")
+        _require_pattern(self, sm, r'"fix".*metaopt-experiment-materialization.*remediation')
+        _require_pattern(self, sm, r'"adjust_config".*BLOCKED_CONFIG')
+        _require_pattern(self, sm, r'"abandon".*FAILED')
+
+    def test_remote_failure_diagnosis_path(self) -> None:
+        """Remote failures must route through diagnosis before terminal transition."""
+        sm = _read_text("references/state-machine.md")
+        _require_pattern(self, sm, r"WAIT_FOR_REMOTE_BATCH.*status.*failed.*metaopt-sanity-diagnosis")
+        guide = _read_text("references/dispatch-guide.md")
+        _require_pattern(self, guide, r"WAIT_FOR_REMOTE_BATCH.*Remote Failure Diagnosis")
+
+    def test_materialization_modes_documented(self) -> None:
+        """dispatch-guide.md must document all three materialization modes."""
+        guide = _read_text("references/dispatch-guide.md")
+        _require_pattern(self, guide, r'materialization_mode.*"standard"')
+        _require_pattern(self, guide, r'materialization_mode.*"remediation"')
+        _require_pattern(self, guide, r'materialization_mode.*"conflict_resolution"')
+
+    def test_diagnosis_action_routing_complete(self) -> None:
+        """dispatch-guide.md LOCAL_SANITY section must route all three diagnosis actions."""
+        guide = _read_text("references/dispatch-guide.md")
+        local_sanity_section = guide.split("## LOCAL_SANITY")[1].split("## WAIT_FOR_REMOTE")[0]
+        self.assertIn('"fix"', local_sanity_section)
+        self.assertIn('"adjust_config"', local_sanity_section)
+        self.assertIn('"abandon"', local_sanity_section)
+        self.assertIn("BLOCKED_CONFIG", local_sanity_section)
+        self.assertIn("FAILED", local_sanity_section)
+
+    def test_runtime_capabilities_in_state_schema(self) -> None:
+        """contracts.md state file must include runtime_capabilities with skill verification fields."""
+        contracts = _read_text("references/contracts.md")
+        _require_pattern(self, contracts, r"runtime_capabilities")
+        _require_pattern(self, contracts, r"verified_at.*ISO 8601")
+        _require_pattern(self, contracts, r"available_skills.*array")
+        _require_pattern(self, contracts, r"missing_skills.*array")
+        _require_pattern(self, contracts, r"degraded_lanes.*array")
+
+    def test_conflict_resolution_routes_through_materialization(self) -> None:
+        """Conflict resolution must route through metaopt-experiment-materialization, not unnamed strong_coder."""
+        lanes = _read_text("references/worker-lanes.md")
+        _require_pattern(self, lanes, r"conflict.*metaopt-experiment-materialization")
+        skill_md = _read_text("SKILL.md")
+        _require_pattern(self, skill_md, r"conflict resolution.*metaopt-experiment-materialization")
+
+    def test_dispatch_guide_enrichment_step(self) -> None:
+        """dispatch-guide.md ideation output must document proposal enrichment by orchestrator."""
+        guide = _read_text("references/dispatch-guide.md")
+        ideation_section = guide.split("## MAINTAIN_BACKGROUND_POOL — Ideation")[1].split("## MAINTAIN_BACKGROUND_POOL — Maintenance")[0]
+        self.assertIn("proposal_id", ideation_section)
+        self.assertIn("source_slot_id", ideation_section)
+        self.assertIn("creation_iteration", ideation_section)
+        self.assertIn("created_at", ideation_section)
+
 
 if __name__ == "__main__":
     unittest.main()

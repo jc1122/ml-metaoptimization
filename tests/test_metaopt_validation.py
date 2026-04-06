@@ -443,7 +443,7 @@ class MetaoptValidationTests(unittest.TestCase):
         _require_pattern(
             self,
             contracts,
-            r"## Selected Experiment Contract.*`selected_experiment` may be `null` until `SELECT_EXPERIMENT` persists a winner; once selected, it is an object with `proposal_id` and `sanity_attempts`",
+            r"## Selected Experiment Contract.*`selected_experiment` may be `null` until `SELECT_EXPERIMENT` persists a winner.*authoritative handoff object",
         )
         _require_pattern(
             self,

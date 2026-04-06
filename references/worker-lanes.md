@@ -66,7 +66,7 @@ Execution rules:
 - code-modifying maintenance must use `strong_coder`
 - return either findings-only output or one patch artifact plus verification notes
 - the orchestrator applies maintenance patch artifacts mechanically in a dedicated integration worktree
-- if patch application conflicts or requires a non-trivial merge, dispatch `strong_coder` for conflict resolution instead of merging manually
+- if patch application conflicts or requires a non-trivial merge, dispatch `metaopt-experiment-materialization` in conflict-resolution mode with the conflicting patches, the base worktree state, and the experiment design context
 
 Patch artifact contract:
 - code-modifying maintenance and materialization workers must emit one unified diff patch artifact
@@ -110,6 +110,13 @@ Output:
 - one unified diff patch artifact suitable for mechanical integration
 - immutable artifact inputs for the batch manifest
 - local verification notes for `LOCAL_SANITY`
+
+Modes:
+- **standard**: implement an experiment design from scratch (dispatched during `MATERIALIZE_CHANGESET`)
+- **remediation**: apply diagnosis-guided code fixes to an existing patch (dispatched during `LOCAL_SANITY` after diagnosis)
+- **conflict-resolution**: resolve non-trivial merge conflicts between patches (dispatched when mechanical patch integration fails)
+
+All modes produce the same output shape (unified diff patch artifact + metadata). The orchestrator passes mode-specific context (experiment design for standard, diagnosis guidance for remediation, conflicting patches for conflict-resolution).
 
 ## Diagnosis Lane
 

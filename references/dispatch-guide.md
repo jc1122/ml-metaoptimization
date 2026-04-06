@@ -160,11 +160,34 @@ Every worker subagent prompt includes a standard envelope plus state-specific fi
 
 ### Input (from orchestrator context)
 
+The materialization worker operates in one of three modes. The orchestrator must pass `materialization_mode` to indicate which:
+
+**Standard mode** (`materialization_mode: "standard"` — during `MATERIALIZE_CHANGESET`):
+
 | Field | Source |
 |-------|--------|
-| Experiment design specification | Output from `DESIGN_EXPERIMENT` |
+| Experiment design specification | `state.selected_experiment.design` |
 | Campaign config | `campaign.artifacts` (code_roots, data_roots, exclude), `campaign.execution` |
 | Project codebase | Isolated worktree (created by orchestrator) |
+| Key learnings | `state.key_learnings` |
+
+**Remediation mode** (`materialization_mode: "remediation"` — during `LOCAL_SANITY` after diagnosis):
+
+| Field | Source |
+|-------|--------|
+| `code_guidance` | From diagnosis `fix_recommendation.code_guidance` |
+| Original experiment design | `state.selected_experiment.design` |
+| Current local changeset | `state.local_changeset` |
+| Diagnosis history | `state.selected_experiment.diagnosis_history` |
+| Project codebase | Isolated worktree with current patch applied |
+
+**Conflict-resolution mode** (`materialization_mode: "conflict_resolution"` — when mechanical patch integration fails):
+
+| Field | Source |
+|-------|--------|
+| Conflicting patches | The patches that failed to apply cleanly |
+| Base worktree state | The integration worktree at the point of conflict |
+| Experiment design context | `state.selected_experiment.design` (for intent understanding) |
 | Key learnings | `state.key_learnings` |
 
 ### Output → State
@@ -197,9 +220,42 @@ Every worker subagent prompt includes a standard envelope plus state-specific fi
 
 ### Output → State
 
-- If `action == "fix"`: orchestrator dispatches materialization (or applies code_guidance inline) and reruns `LOCAL_SANITY`
-- If `action == "abandon"`: orchestrator transitions to `FAILED`
+- Persist the diagnosis record to `state.selected_experiment.diagnosis_history` with `attempt`, `root_cause`, `classification`, `action`, `code_guidance`, `config_guidance`, and `diagnosed_at`
 - Increment `state.selected_experiment.sanity_attempts`
+- Route on `fix_recommendation.action`:
+  - `"fix"`: dispatch `metaopt-experiment-materialization` in **remediation mode** — pass the `code_guidance`, the original `state.selected_experiment.design`, the current `state.local_changeset`, and the `diagnosis_history`. The materialization worker produces an updated patch. After integration, rerun `LOCAL_SANITY`.
+  - `"adjust_config"`: transition to `BLOCKED_CONFIG` with `next_action = <config_guidance>`. The orchestrator does not modify campaign configuration autonomously.
+  - `"abandon"`: transition to `FAILED` with `root_cause` as the terminal error.
+
+## WAIT_FOR_REMOTE_BATCH — Remote Failure Diagnosis
+
+**Skill:** `metaopt-sanity-diagnosis`
+**Slot class:** `auxiliary`
+**Mode:** `diagnosis`
+**Model class:** `strong_reasoner`
+
+Dispatched only when `remote_queue.status_command` returns `status = "failed"`.
+
+### Input (from orchestrator context)
+
+| Field | Source |
+|-------|--------|
+| `failure_context` | Remote failure payload: `{ classification, message, returncode }` from `status_command` response |
+| `experiment_design` | `state.selected_experiment.design` |
+| `code_changes` | Patch summary from `state.local_changeset` |
+| `sanity_config` | `campaign.sanity` |
+| `previous_diagnoses` | `state.selected_experiment.diagnosis_history` |
+| `attempt_number` | `state.selected_experiment.sanity_attempts` |
+| `max_attempts` | 3 (hardcoded cap) |
+
+### Output → State
+
+- Persist diagnosis record to `state.selected_experiment.diagnosis_history`
+- Append learnings from diagnosis to `state.key_learnings` (remote failures always generate learnings even without reaching ANALYZE_RESULTS)
+- Route on `fix_recommendation.action`:
+  - `"fix"`: transition to `FAILED` — remote code failures cannot be patched and re-run without a full re-enqueue cycle
+  - `"adjust_config"`: transition to `BLOCKED_CONFIG` with `next_action = <config_guidance>`
+  - `"abandon"`: transition to `FAILED` with `root_cause` as terminal error
 
 ## ANALYZE_RESULTS
 

@@ -100,8 +100,15 @@
   - fast path executes
   - temporal leakage passes when required
 - Allow a maximum 3 remediation attempts for the selected experiment
-- If sanity fails, dispatch `metaopt-sanity-diagnosis` as a `strong_reasoner` subagent with the failure output, apply the returned fix mechanically, and rerun `LOCAL_SANITY`
-- If the maximum 3 remediation attempts is exceeded, transition to `FAILED`
+- If sanity fails and `sanity_attempts < 3`:
+  - Dispatch `metaopt-sanity-diagnosis` as a `strong_reasoner` subagent with the failure output, experiment design, patch summary, and prior diagnosis history from `state.selected_experiment.diagnosis_history`
+  - Persist the diagnosis record to `state.selected_experiment.diagnosis_history`
+  - Increment `state.selected_experiment.sanity_attempts`
+  - Route on `fix_recommendation.action`:
+    - `"fix"`: dispatch `metaopt-experiment-materialization` in remediation mode with `code_guidance` from the diagnosis, the original experiment design, and the current patch state. The materialization worker produces an updated unified diff patch. Rerun `LOCAL_SANITY` after integration.
+    - `"adjust_config"`: transition to `BLOCKED_CONFIG` with `next_action` set to the `config_guidance` from the diagnosis. The orchestrator cannot autonomously modify campaign configuration.
+    - `"abandon"`: transition to `FAILED` with the diagnosis `root_cause` as the terminal error
+- If `sanity_attempts >= 3`, transition to `FAILED` regardless of diagnosis output
 
 ### `ENQUEUE_REMOTE_BATCH`
 
@@ -117,6 +124,14 @@
 - Never inspect raw cluster jobs directly from this skill
 - If `stop_conditions.max_wallclock_hours` is exceeded, set `next_action = "finish current batch and stop"`, stop launching new work, and continue polling the current batch to completion
 - If all slots are unexpectedly idle during this state, transition through `MAINTAIN_BACKGROUND_POOL` to restore the declared slot set before doing any lower-priority work
+- If `status_command` returns `status = "failed"`:
+  - Dispatch `metaopt-sanity-diagnosis` as a `strong_reasoner` subagent with the remote failure context (`classification`, `message`, `returncode` from the backend response)
+  - Persist the diagnosis record to `state.selected_experiment.diagnosis_history`
+  - Route on `fix_recommendation.action`:
+    - `"fix"`: the failure was caused by experiment code — transition to `FAILED` (remote failures cannot be remediated locally without re-enqueueing)
+    - `"adjust_config"`: transition to `BLOCKED_CONFIG` with `next_action = <config_guidance>`
+    - `"abandon"`: transition to `FAILED` with the diagnosis `root_cause` as the terminal error
+  - In all cases, append remote failure learnings to `state.key_learnings` before transitioning
 
 ### `ANALYZE_RESULTS`
 

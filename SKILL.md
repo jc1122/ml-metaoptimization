@@ -120,7 +120,7 @@ The orchestrator must delegate:
 - debugging failing code or infra behavior (via `metaopt-sanity-diagnosis`)
 - result analysis (via `metaopt-results-analysis`)
 - iteration proposal filtering (via `metaopt-proposal-rollover`)
-- conflict resolution for non-trivial merges
+- conflict resolution for non-trivial merges (via `metaopt-experiment-materialization` in conflict-resolution mode)
 
 ## Quick Flow
 
@@ -163,7 +163,8 @@ digraph machine {
     "ENQUEUE_REMOTE_BATCH" -> "WAIT_FOR_REMOTE_BATCH";
     "WAIT_FOR_REMOTE_BATCH" -> "WAIT_FOR_REMOTE_BATCH" [label="running"];
     "WAIT_FOR_REMOTE_BATCH" -> "ANALYZE_RESULTS" [label="completed"];
-    "WAIT_FOR_REMOTE_BATCH" -> "FAILED" [label="terminal remote failure"];
+    "WAIT_FOR_REMOTE_BATCH" -> "FAILED" [label="remote failure (after diagnosis)"];
+    "WAIT_FOR_REMOTE_BATCH" -> "BLOCKED_CONFIG" [label="remote failure (config issue)"];
     "ANALYZE_RESULTS" -> "ROLL_ITERATION";
     "ROLL_ITERATION" -> "QUIESCE_SLOTS";
     "QUIESCE_SLOTS" -> "COMPLETE" [label="stop condition met"];

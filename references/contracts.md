@@ -94,8 +94,8 @@ Required top-level keys:
 - `current_pool_frozen`
 - `ideation_rounds_by_slot` as a map of non-empty `slot_id` strings to non-negative integer round counts
 - `shortfall_reason` — valid values:
-  - `"not_enough_proposals"` — pool has fewer than `min_proposals`
-  - `"floor_not_met"` — none of the proposals meet the quality floor
+  - `"not_enough_proposals"` — pool has fewer than `proposal_policy.current_target`
+  - `"floor_not_met"` — pool has fewer than `proposal_policy.current_floor` proposals (early-advance threshold not met)
   - `"all_proposals_attempted"` — all current proposals have already been run
   - `""` (empty string) — no shortfall
 

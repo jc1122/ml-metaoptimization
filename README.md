@@ -25,6 +25,25 @@ The tests pin the public contract for:
 - state-file fixtures and lifecycle pairing rules
 - cross-document consistency between the skill and reference docs
 
+## Ecosystem
+
+This orchestrator delegates to the following worker skills:
+
+- [`metaopt-experiment-ideation`](https://github.com/jc1122/metaopt-experiment-ideation) — proposal generation
+- [`metaopt-experiment-selection`](https://github.com/jc1122/metaopt-experiment-selection) — proposal ranking and winner selection
+- [`metaopt-experiment-design`](https://github.com/jc1122/metaopt-experiment-design) — experiment batch specification
+- [`metaopt-experiment-materialization`](https://github.com/jc1122/metaopt-experiment-materialization) — code changes and patch artifacts
+- [`metaopt-sanity-diagnosis`](https://github.com/jc1122/metaopt-sanity-diagnosis) — failure diagnosis
+- [`metaopt-results-analysis`](https://github.com/jc1122/metaopt-results-analysis) — results evaluation and learning extraction
+- [`metaopt-proposal-rollover`](https://github.com/jc1122/metaopt-proposal-rollover) — iteration transition filtering
+
+Backend execution:
+- [`hetzner-delegation`](https://github.com/jc1122/hetzner-delegation) — remote compute delegation skill
+- [`ray-hetzner`](https://github.com/jc1122/ray-hetzner) — Ray cluster and queue runtime
+
+Maintenance:
+- [`repo-audit-refactor-optimize`](https://github.com/jc1122/repo-audit-refactor-optimize) — background maintenance lane
+
 ## Runtime Notes
 
 `SKILL.md` describes the intended GitHub Copilot-style orchestration runtime.

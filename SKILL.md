@@ -111,11 +111,11 @@ The orchestrator may:
 - emit iteration reports
 
 The orchestrator must delegate:
-- semantic code changes
-- experiment design
-- ranking or synthesizing proposals
-- debugging failing code or infra behavior
-- result analysis
+- semantic code changes (via `metaopt-experiment-materialization`)
+- experiment design (via `metaopt-experiment-design`)
+- ranking or synthesizing proposals (via `metaopt-experiment-selection`)
+- debugging failing code or infra behavior (via `metaopt-sanity-diagnosis`)
+- result analysis (via `metaopt-results-analysis`)
 - conflict resolution for non-trivial merges
 
 ## Quick Flow
@@ -188,6 +188,25 @@ Auxiliary workers handle:
 - result analysis
 
 See `references/worker-lanes.md` for lane contracts, compatibility rules, and required subskill behavior.
+
+## Worker Skills
+
+The orchestrator delegates semantic work to these leaf skills:
+
+| Lane | Skill | Model Class |
+|------|-------|-------------|
+| ideation | `metaopt-experiment-ideation` | `general_worker` |
+| synthesis/selection | `metaopt-experiment-selection` | `strong_reasoner` |
+| design | `metaopt-experiment-design` | `strong_reasoner` |
+| materialization | `metaopt-experiment-materialization` | `strong_coder` |
+| diagnosis | `metaopt-sanity-diagnosis` | `strong_reasoner` |
+| analysis | `metaopt-results-analysis` | `strong_reasoner` |
+| rollover | `metaopt-proposal-rollover` | `strong_reasoner` |
+| maintenance | `repo-audit-refactor-optimize` | `general_worker` or `strong_coder` |
+
+Each worker skill is a separate repository with its own SKILL.md contract. The orchestrator provides structured input via subagent prompts and consumes structured output.
+
+Worker skill contracts reference `references/worker-lanes.md` and `references/contracts.md` in this repository as the authoritative source.
 
 ## Common Mistakes
 

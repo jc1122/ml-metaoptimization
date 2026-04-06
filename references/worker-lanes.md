@@ -24,6 +24,8 @@ Always use the strongest available model in the same class and record the substi
 
 ## Ideation Lane
 
+**Skill:** `metaopt-experiment-ideation`
+
 Purpose:
 - generate and refine non-overlapping experiment proposals
 
@@ -39,6 +41,8 @@ Outputs:
 - distinct proposal candidates with short rationale
 
 ## Maintenance Lane
+
+**Skill:** `repo-audit-refactor-optimize`
 
 Purpose:
 - audit and improve the local repo while proposals accumulate or proposal pools saturate
@@ -74,6 +78,8 @@ Compatibility rule:
 
 ## Synthesis Lane
 
+**Skill:** `metaopt-experiment-selection`
+
 Purpose:
 - rank eligible proposals and choose one winning proposal
 
@@ -82,6 +88,8 @@ Output:
 - short ranking rationale
 
 ## Design Lane
+
+**Skill:** `metaopt-experiment-design`
 
 Purpose:
 - transform the winning proposal into an experiment batch design suitable for the backend contract
@@ -93,6 +101,8 @@ Output:
 
 ## Materialization Lane
 
+**Skill:** `metaopt-experiment-materialization`
+
 Purpose:
 - turn the designed experiment into concrete code changes, packageable artifacts, and a manifest-ready local changeset
 
@@ -103,6 +113,8 @@ Output:
 
 ## Diagnosis Lane
 
+**Skill:** `metaopt-sanity-diagnosis`
+
 Purpose:
 - explain sanity failures, code failures, or remote failure payloads
 
@@ -111,6 +123,8 @@ Output:
 - concrete fix recommendation or patch plan
 
 ## Analysis Lane
+
+**Skill:** `metaopt-results-analysis`
 
 Purpose:
 - compare completed batch results against the aggregate baseline and extract learnings

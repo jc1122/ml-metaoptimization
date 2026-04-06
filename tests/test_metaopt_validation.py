@@ -576,7 +576,8 @@ class MetaoptValidationTests(unittest.TestCase):
             self,
             dependencies,
             r"`SKILL\.md`.*`references/contracts\.md`.*`references/state-machine\.md`.*"
-            r"`references/worker-lanes\.md`.*`references/backend-contract\.md`.*"
+            r"`references/worker-lanes\.md`.*`references/dispatch-guide\.md`.*"
+            r"`references/backend-contract\.md`.*"
             r"`ml_metaopt_campaign\.example\.yaml`",
         )
 
@@ -973,6 +974,111 @@ class MetaoptValidationTests(unittest.TestCase):
         boolean_aggregate["best_aggregate_result"]["value"] = True
         with self.assertRaisesRegex(AssertionError, r"aggregate value must be numeric"):
             _validate_backend_payload("results", boolean_aggregate)
+
+    # ------------------------------------------------------------------
+    # Cross-document worker skill consistency
+    # ------------------------------------------------------------------
+
+    def test_worker_skill_names_consistent_across_all_reference_docs(self) -> None:
+        """Every worker skill in the Worker Skills table must appear in
+        worker-lanes.md, state-machine.md, dispatch-guide.md, and dependencies.md."""
+        skill_md = _read_text("SKILL.md")
+        worker_lanes = _read_text("references/worker-lanes.md")
+        state_machine = _read_text("references/state-machine.md")
+        dispatch_guide = _read_text("references/dispatch-guide.md")
+        dependencies = _read_text("references/dependencies.md")
+
+        expected_skills = [
+            "metaopt-experiment-ideation",
+            "metaopt-experiment-selection",
+            "metaopt-experiment-design",
+            "metaopt-experiment-materialization",
+            "metaopt-sanity-diagnosis",
+            "metaopt-results-analysis",
+            "metaopt-proposal-rollover",
+            "repo-audit-refactor-optimize",
+        ]
+
+        for skill_name in expected_skills:
+            with self.subTest(skill=skill_name):
+                self.assertIn(
+                    skill_name, skill_md,
+                    f"{skill_name} missing from SKILL.md"
+                )
+                self.assertIn(
+                    skill_name, worker_lanes,
+                    f"{skill_name} missing from worker-lanes.md"
+                )
+                self.assertIn(
+                    skill_name, state_machine,
+                    f"{skill_name} missing from state-machine.md"
+                )
+                self.assertIn(
+                    skill_name, dispatch_guide,
+                    f"{skill_name} missing from dispatch-guide.md"
+                )
+                self.assertIn(
+                    skill_name, dependencies,
+                    f"{skill_name} missing from dependencies.md"
+                )
+
+    def test_dispatch_guide_covers_all_dispatch_states(self) -> None:
+        """The dispatch guide must document every state that dispatches a worker."""
+        dispatch_guide = _read_text("references/dispatch-guide.md")
+
+        dispatch_states = [
+            "MAINTAIN_BACKGROUND_POOL",
+            "SELECT_EXPERIMENT",
+            "DESIGN_EXPERIMENT",
+            "MATERIALIZE_CHANGESET",
+            "LOCAL_SANITY",
+            "ANALYZE_RESULTS",
+            "ROLL_ITERATION",
+        ]
+
+        for state in dispatch_states:
+            with self.subTest(state=state):
+                self.assertIn(
+                    state, dispatch_guide,
+                    f"{state} missing from dispatch-guide.md"
+                )
+
+    def test_dispatch_guide_listed_in_required_references(self) -> None:
+        """SKILL.md Required References must include dispatch-guide.md."""
+        skill_md = _read_text("SKILL.md")
+        self.assertIn("references/dispatch-guide.md", skill_md)
+
+    def test_worker_lanes_has_rollover_lane(self) -> None:
+        """worker-lanes.md must document the rollover lane."""
+        worker_lanes = _read_text("references/worker-lanes.md")
+        self.assertIn("## Rollover Lane", worker_lanes)
+        self.assertIn("metaopt-proposal-rollover", worker_lanes)
+
+    def test_contracts_documents_inline_dispatch(self) -> None:
+        """contracts.md must distinguish slot-based from inline dispatch."""
+        contracts = _read_text("references/contracts.md")
+        self.assertIn("Inline dispatch", contracts)
+        self.assertIn("Slot-based dispatch", contracts)
+
+    def test_skill_availability_section_exists(self) -> None:
+        """SKILL.md must document degradation behavior for missing worker skills."""
+        skill_md = _read_text("SKILL.md")
+        self.assertIn("## Skill Availability", skill_md)
+        for skill_name in [
+            "metaopt-experiment-materialization",
+            "metaopt-experiment-ideation",
+            "metaopt-proposal-rollover",
+            "repo-audit-refactor-optimize",
+        ]:
+            self.assertIn(skill_name, skill_md.split("## Skill Availability")[1].split("## Common Mistakes")[0],
+                          f"{skill_name} not in Skill Availability section")
+
+    def test_delegation_list_includes_all_worker_skills(self) -> None:
+        """SKILL.md delegation list must reference ideation and rollover."""
+        skill_md = _read_text("SKILL.md")
+        delegation_section = skill_md.split("The orchestrator must delegate:")[1].split("## Quick Flow")[0]
+        self.assertIn("metaopt-experiment-ideation", delegation_section)
+        self.assertIn("metaopt-proposal-rollover", delegation_section)
 
 
 if __name__ == "__main__":

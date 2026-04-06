@@ -47,8 +47,8 @@
 ### `MAINTAIN_BACKGROUND_POOL`
 
 - Ensure exactly `dispatch_policy.background_slots` background slots exist
-- Prefer ideation when `current_proposals` is below target and `next_proposals` is below cap
-- Otherwise assign maintenance work
+- Prefer ideation via `metaopt-experiment-ideation` when `current_proposals` is below target and `next_proposals` is below cap
+- Otherwise assign maintenance work via `repo-audit-refactor-optimize`
 - The current proposal cycle starts on the first entry into this state for an iteration
 - Create or reset `proposal_cycle.cycle_id` when a new iteration first enters this state after `ROLL_ITERATION` or fresh initialization
 - Set `proposal_cycle.current_pool_frozen = false` when a new proposal cycle begins and keep it false while `current_proposals` may still grow
@@ -67,7 +67,7 @@
 
 ### `SELECT_EXPERIMENT`
 
-- Dispatch one `strong_reasoner` subagent
+- Dispatch `metaopt-experiment-selection` as one `strong_reasoner` subagent
 - Input: `current_proposals`, baseline context, prior learnings, and completed experiments
 - Output: exactly one winning proposal and a short ranking rationale
 - Freeze `current_proposals` by setting `proposal_cycle.current_pool_frozen = true` once selection starts
@@ -75,14 +75,14 @@
 
 ### `DESIGN_EXPERIMENT`
 
-- Dispatch one `strong_reasoner` subagent
+- Dispatch `metaopt-experiment-design` as one `strong_reasoner` subagent
 - Input: the winning proposal, baseline context, queue/backend constraints, and prior learnings
 - Output: exactly one concrete experiment specification plus execution assumptions and artifact expectations
 - Persist the experiment design before any coder starts `MATERIALIZE_CHANGESET`
 
 ### `MATERIALIZE_CHANGESET`
 
-- Dispatch `strong_coder` subagents in isolated worktrees
+- Dispatch `metaopt-experiment-materialization` as `strong_coder` subagents in isolated worktrees
 - Count these coders against `auxiliary_slots` with `mode = materialization`
 - The orchestrator may perform only clean, mechanical integration after subagents finish
 - Package an immutable code artifact under `.ml-metaopt/artifacts/code/`
@@ -99,7 +99,7 @@
   - fast path executes
   - temporal leakage passes when required
 - Allow a maximum 3 remediation attempts for the selected experiment
-- If sanity fails, dispatch a `strong_coder` subagent with the failure output, apply the returned fix mechanically, and rerun `LOCAL_SANITY`
+- If sanity fails, dispatch `metaopt-sanity-diagnosis` as a `strong_reasoner` subagent with the failure output, apply the returned fix mechanically, and rerun `LOCAL_SANITY`
 - If the maximum 3 remediation attempts is exceeded, transition to `FAILED`
 
 ### `ENQUEUE_REMOTE_BATCH`
@@ -120,14 +120,14 @@
 ### `ANALYZE_RESULTS`
 
 - Call `remote_queue.results_command`
-- Dispatch one `strong_reasoner` subagent to compare the result against the aggregate baseline and extract learnings
+- Dispatch `metaopt-results-analysis` as one `strong_reasoner` subagent to compare the result against the aggregate baseline and extract learnings
 - If the aggregate result clears `objective.improvement_threshold` in the configured direction, update the baseline and reset `no_improve_iterations` to `0`
 - Otherwise leave the baseline unchanged and increment `no_improve_iterations`
 - Update completed experiments and learnings in both cases
 
 ### `ROLL_ITERATION`
 
-- Dispatch one `strong_reasoner` subagent
+- Dispatch `metaopt-proposal-rollover` as one `strong_reasoner` subagent (inline dispatch — no slot consumed)
 - Input: `next_proposals`, fresh `key_learnings`, completed experiment results, and updated baseline
 - Output: filtered carry-over proposals with duplicates, invalidated ideas, and overlaps removed plus short rationale for each removal
 - Move the filtered survivors into `current_proposals`

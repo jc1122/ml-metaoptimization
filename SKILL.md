@@ -92,6 +92,7 @@ Load these files during execution:
 - `references/contracts.md` before reading or writing state, manifests, or results
 - `references/state-machine.md` before executing transitions or resuming from state
 - `references/worker-lanes.md` before dispatching any background or auxiliary worker
+- `references/dispatch-guide.md` before constructing any worker subagent prompt
 - `references/backend-contract.md` before any remote queue action
 
 Use `ml_metaopt_campaign.example.yaml` as the canonical campaign example rather than restating field-by-field examples inline.
@@ -111,11 +112,13 @@ The orchestrator may:
 - emit iteration reports
 
 The orchestrator must delegate:
-- semantic code changes (via `metaopt-experiment-materialization`)
-- experiment design (via `metaopt-experiment-design`)
+- proposal generation (via `metaopt-experiment-ideation`)
 - ranking or synthesizing proposals (via `metaopt-experiment-selection`)
+- experiment design (via `metaopt-experiment-design`)
+- semantic code changes (via `metaopt-experiment-materialization`)
 - debugging failing code or infra behavior (via `metaopt-sanity-diagnosis`)
 - result analysis (via `metaopt-results-analysis`)
+- iteration proposal filtering (via `metaopt-proposal-rollover`)
 - conflict resolution for non-trivial merges
 
 ## Quick Flow
@@ -207,6 +210,34 @@ The orchestrator delegates semantic work to these leaf skills:
 Each worker skill is a separate repository with its own SKILL.md contract. The orchestrator provides structured input via subagent prompts and consumes structured output.
 
 Worker skill contracts reference `references/worker-lanes.md` and `references/contracts.md` in this repository as the authoritative source.
+
+## Skill Availability
+
+Before the first dispatch in each session, verify that required worker skills are available in the agent runtime:
+
+- `metaopt-experiment-ideation`
+- `metaopt-experiment-selection`
+- `metaopt-experiment-design`
+- `metaopt-experiment-materialization`
+- `metaopt-sanity-diagnosis`
+- `metaopt-results-analysis`
+- `metaopt-proposal-rollover`
+- `repo-audit-refactor-optimize`
+
+Degradation behavior when a skill is unavailable:
+
+| Skill | Behavior |
+|-------|----------|
+| `metaopt-experiment-materialization` | **Block.** Cannot proceed past `MATERIALIZE_CHANGESET`. Transition to `FAILED`. |
+| `metaopt-experiment-selection` | **Block.** Cannot proceed past `SELECT_EXPERIMENT`. Transition to `FAILED`. |
+| `metaopt-experiment-design` | **Block.** Cannot proceed past `DESIGN_EXPERIMENT`. Transition to `FAILED`. |
+| `metaopt-results-analysis` | **Block.** Cannot proceed past `ANALYZE_RESULTS`. Transition to `FAILED`. |
+| `metaopt-sanity-diagnosis` | **Degrade.** Skip structured diagnosis. On `LOCAL_SANITY` failure, increment `sanity_attempts` and retry without a diagnosis report. After max attempts, transition to `FAILED`. |
+| `metaopt-experiment-ideation` | **Degrade.** The orchestrator may generate proposals inline using the ideation lane inputs from `references/dispatch-guide.md`. Mark degradation in state. |
+| `metaopt-proposal-rollover` | **Degrade.** The orchestrator carries over all `next_proposals` without filtering. Mark degradation in state. |
+| `repo-audit-refactor-optimize` | **Degrade.** Fall back to findings-only maintenance (already documented in Worker Policy). |
+
+Record any skill unavailability in `key_learnings` so the user or host runtime can install missing skills.
 
 ## Common Mistakes
 

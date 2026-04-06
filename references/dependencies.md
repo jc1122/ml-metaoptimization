@@ -15,6 +15,7 @@
   - `references/contracts.md`
   - `references/state-machine.md`
   - `references/worker-lanes.md`
+  - `references/dispatch-guide.md`
   - `references/backend-contract.md`
   - `ml_metaopt_campaign.example.yaml`
 - PyYAML for the validation suite
@@ -43,8 +44,19 @@ If any required campaign field is missing or invalid, transition to `BLOCKED_CON
 
 ## Worker-Skill Dependencies
 
-- Maintenance workers: `repo-audit-refactor-optimize` is required by default
-- Coding/diagnosis/design/analysis workers: use built-in Copilot subagents and any repo-local context they need
+The orchestrator dispatches these named skills during the campaign. Each must be installed and available in the agent runtime.
+
+Required worker skills:
+- `metaopt-experiment-ideation` — background ideation lane
+- `metaopt-experiment-selection` — auxiliary synthesis lane
+- `metaopt-experiment-design` — auxiliary design lane
+- `metaopt-experiment-materialization` — auxiliary materialization lane
+- `metaopt-sanity-diagnosis` — auxiliary diagnosis lane
+- `metaopt-results-analysis` — auxiliary analysis lane
+- `metaopt-proposal-rollover` — inline rollover during `ROLL_ITERATION`
+- `repo-audit-refactor-optimize` — background maintenance lane (required by default; may fall back to findings-only if incompatible)
+
+When a required worker skill is unavailable, see the Skill Availability section in `SKILL.md` for degradation behavior.
 
 ## Optional Enhancement Dependencies
 

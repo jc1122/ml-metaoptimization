@@ -117,6 +117,16 @@ Never write new ideas into `current_proposals` once `SELECT_EXPERIMENT` begins.
 
 ## Slot Contract
 
+### Dispatch Types
+
+The orchestrator dispatches worker skills in two ways:
+
+**Slot-based dispatch** — used for ideation, maintenance, synthesis, design, materialization, diagnosis, and analysis. The orchestrator creates an entry in `active_slots` with the appropriate `slot_class`, `mode`, and `model_class`. The slot persists until the subagent completes and the orchestrator harvests its output. Slot-based workers are subject to `dispatch_policy.background_slots` and `dispatch_policy.auxiliary_slots` limits.
+
+**Inline dispatch** — used for rollover during `ROLL_ITERATION`. The orchestrator launches the subagent synchronously, consumes the output immediately, and advances to the next state. No `active_slots` entry is created and the dispatch does not count against slot limits.
+
+The `mode` values listed below apply only to slot-based dispatch.
+
 Each active slot must record:
 - `slot_id`
 - `slot_class`

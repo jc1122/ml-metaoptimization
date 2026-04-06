@@ -133,3 +133,28 @@ Output:
 - improvement or regression judgment
 - updated learnings
 - proposal invalidations or carry-over candidates
+
+## Rollover Lane
+
+**Skill:** `metaopt-proposal-rollover`
+
+**Dispatch type:** Inline — the orchestrator dispatches this worker synchronously during `ROLL_ITERATION`. Unlike other lanes, rollover does not consume an `active_slots` entry. The subagent returns before the orchestrator advances to `QUIESCE_SLOTS`.
+
+Purpose:
+- filter, merge, and discard proposals from `next_proposals` to produce a clean `current_proposals` pool for the next iteration
+
+Inputs:
+- `next_proposals` pool
+- results analysis output (judgment, learnings, invalidations, carry-over candidates)
+- cumulative `key_learnings`
+- `completed_experiments` history
+- campaign goal context (`objective.metric`, `objective.direction`, `objective.aggregation`)
+- `proposal_policy`
+- stop conditions progress
+
+Outputs:
+- filtered carry-over proposals (moved into `current_proposals`)
+- discard reasons for removed proposals
+- merge rationale for merged proposals
+- pool health flag (`needs_fresh_ideation` when below `current_floor`)
+- summary statistics (carried_over, discarded, merged, final_pool_size)

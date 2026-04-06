@@ -69,6 +69,7 @@ If `AGENTS.md` does not exist on first run, create it before appending the marke
 - never silently discard prior state on campaign identity drift
 - drain or cancel active slots in `QUIESCE_SLOTS` before rollover or final cleanup
 - re-invoke this skill only after `QUIESCE_SLOTS` has persisted outputs and torn down in-flight work
+- verify required worker skill availability during `HYDRATE_STATE` before any dispatch
 
 ## Dispatch Invariants
 
@@ -213,31 +214,44 @@ Worker skill contracts reference `references/worker-lanes.md` and `references/co
 
 ## Skill Availability
 
-Before the first dispatch in each session, verify that required worker skills are available in the agent runtime:
+The orchestrator verifies required worker skills during `HYDRATE_STATE`, before any dispatch occurs. Record the verification result in `state.runtime_capabilities`:
 
-- `metaopt-experiment-ideation`
-- `metaopt-experiment-selection`
-- `metaopt-experiment-design`
-- `metaopt-experiment-materialization`
-- `metaopt-sanity-diagnosis`
-- `metaopt-results-analysis`
-- `metaopt-proposal-rollover`
-- `repo-audit-refactor-optimize`
+```json
+{
+  "runtime_capabilities": {
+    "verified_at": "<ISO 8601 timestamp>",
+    "available_skills": ["metaopt-experiment-ideation", "..."],
+    "missing_skills": [],
+    "degraded_lanes": []
+  }
+}
+```
 
-Degradation behavior when a skill is unavailable:
+### Required Skills (block on missing)
 
-| Skill | Behavior |
-|-------|----------|
-| `metaopt-experiment-materialization` | **Block.** Cannot proceed past `MATERIALIZE_CHANGESET`. Transition to `FAILED`. |
-| `metaopt-experiment-selection` | **Block.** Cannot proceed past `SELECT_EXPERIMENT`. Transition to `FAILED`. |
-| `metaopt-experiment-design` | **Block.** Cannot proceed past `DESIGN_EXPERIMENT`. Transition to `FAILED`. |
-| `metaopt-results-analysis` | **Block.** Cannot proceed past `ANALYZE_RESULTS`. Transition to `FAILED`. |
-| `metaopt-sanity-diagnosis` | **Degrade.** Skip structured diagnosis. On `LOCAL_SANITY` failure, increment `sanity_attempts` and retry without a diagnosis report. After max attempts, transition to `FAILED`. |
-| `metaopt-experiment-ideation` | **Degrade.** The orchestrator may generate proposals inline using the ideation lane inputs from `references/dispatch-guide.md`. Mark degradation in state. |
-| `metaopt-proposal-rollover` | **Degrade.** The orchestrator carries over all `next_proposals` without filtering. Mark degradation in state. |
-| `repo-audit-refactor-optimize` | **Degrade.** Fall back to findings-only maintenance (already documented in Worker Policy). |
+These skills are required for the state machine to proceed past their dispatch points. If any is missing, transition to `BLOCKED_CONFIG` with `next_action = "install missing skill: <skill_name>"`.
 
-Record any skill unavailability in `key_learnings` so the user or host runtime can install missing skills.
+- `metaopt-experiment-ideation` — required for `MAINTAIN_BACKGROUND_POOL` ideation
+- `metaopt-experiment-selection` — required for `SELECT_EXPERIMENT`
+- `metaopt-experiment-design` — required for `DESIGN_EXPERIMENT`
+- `metaopt-experiment-materialization` — required for `MATERIALIZE_CHANGESET`
+- `metaopt-sanity-diagnosis` — required for `LOCAL_SANITY` failure handling
+- `metaopt-results-analysis` — required for `ANALYZE_RESULTS`
+
+### Degradable Skills (record and continue)
+
+These skills have defined fallback behavior. If missing, record the degradation in `state.runtime_capabilities.degraded_lanes` and continue.
+
+| Skill | Fallback Behavior |
+|-------|-------------------|
+| `metaopt-proposal-rollover` | Carry over all `next_proposals` without filtering. Set `needs_fresh_ideation = false`. Record degradation in `key_learnings`. |
+| `repo-audit-refactor-optimize` | Fall back to findings-only maintenance (already documented in Worker Policy). |
+
+### Verification Timing
+
+- Run the full check once during `HYDRATE_STATE` on session start
+- If a previously-available skill becomes unavailable mid-session, the dispatch will fail — treat as a subagent failure and apply the subagent failure policy
+- Do not re-check on every dispatch; the `HYDRATE_STATE` snapshot is authoritative for the session
 
 ## Common Mistakes
 

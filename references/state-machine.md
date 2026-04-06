@@ -43,6 +43,7 @@
 - Otherwise initialize fresh state from the campaign spec
 - If `AGENTS.md` does not exist, create it
 - Ensure the marked `AGENTS.md` hook is present only while `status = RUNNING`
+- Verify required worker skill availability and record the result in `state.runtime_capabilities`; if any required skill is missing, transition to `BLOCKED_CONFIG` with `next_action = "install missing skill: <skill_name>"`
 
 ### `MAINTAIN_BACKGROUND_POOL`
 

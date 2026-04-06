@@ -464,7 +464,7 @@ class HydrateStateHandoffTests(unittest.TestCase):
         content = AGENT_PROFILE.read_text(encoding="utf-8")
 
         self.assertIn("name: metaopt-hydrate-state", content)
-        self.assertIn("model: Auto", content)
+        self.assertIn("model: gpt-5.4", content)
         self.assertIn("tools:", content)
         self.assertIn("user-invocable: false", content)
         self.assertIn("scripts/hydrate_state_handoff.py", content)

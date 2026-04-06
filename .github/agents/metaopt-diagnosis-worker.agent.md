@@ -1,7 +1,7 @@
 ---
 name: metaopt-diagnosis-worker
 description: Shared leaf diagnosis worker for local sanity failures and remote batch failures. Reads one staged diagnosis task file and writes one structured diagnosis result file.
-model: Auto
+model: gpt-5.4
 tools:
   - read
   - search

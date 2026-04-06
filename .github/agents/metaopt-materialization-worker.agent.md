@@ -1,7 +1,7 @@
 ---
 name: metaopt-materialization-worker
 description: Leaf materialization worker for the Step 7 local execution lane. Reads one staged task file and writes one structured patch/result file.
-model: Auto
+model: gpt-5.4
 tools:
   - read
   - search

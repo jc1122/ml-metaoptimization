@@ -1,7 +1,7 @@
 ---
 name: metaopt-hydrate-state
 description: Hydrate or initialize authoritative orchestrator state from the Step-1 handoff, manage the AGENTS hook, verify worker-skill availability, and produce a compact HYDRATE_STATE handoff.
-model: Auto
+model: gpt-5.4
 tools:
   - read
   - search

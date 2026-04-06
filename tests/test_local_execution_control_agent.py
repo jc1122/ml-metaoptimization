@@ -426,7 +426,7 @@ class LocalExecutionControlAgentTests(unittest.TestCase):
         self.assertTrue(AGENT_PROFILE.exists(), f"missing {AGENT_PROFILE}")
         content = AGENT_PROFILE.read_text(encoding="utf-8")
         self.assertIn("name: metaopt-local-execution-control", content)
-        self.assertIn("model: Auto", content)
+        self.assertIn("model: gpt-5.4", content)
         self.assertIn("plan_local_changeset", content)
         self.assertIn("gate_local_sanity", content)
         self.assertIn("scripts/local_execution_control_handoff.py", content)
@@ -435,7 +435,7 @@ class LocalExecutionControlAgentTests(unittest.TestCase):
         self.assertTrue(WORKER_PROFILE.exists(), f"missing {WORKER_PROFILE}")
         content = WORKER_PROFILE.read_text(encoding="utf-8")
         self.assertIn("name: metaopt-materialization-worker", content)
-        self.assertIn("model: Auto", content)
+        self.assertIn("model: gpt-5.4", content)
         self.assertIn("Do not launch subagents.", content)
         self.assertIn("Do not mutate `.ml-metaopt/state.json`.", content)
 
@@ -443,7 +443,7 @@ class LocalExecutionControlAgentTests(unittest.TestCase):
         self.assertTrue(DIAGNOSIS_WORKER_PROFILE.exists(), f"missing {DIAGNOSIS_WORKER_PROFILE}")
         content = DIAGNOSIS_WORKER_PROFILE.read_text(encoding="utf-8")
         self.assertIn("name: metaopt-diagnosis-worker", content)
-        self.assertIn("model: Auto", content)
+        self.assertIn("model: gpt-5.4", content)
         self.assertIn("Do not launch subagents.", content)
         self.assertIn("Do not mutate `.ml-metaopt/state.json`.", content)
 

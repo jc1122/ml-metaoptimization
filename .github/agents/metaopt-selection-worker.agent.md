@@ -1,7 +1,7 @@
 ---
 name: metaopt-selection-worker
 description: Read one staged selection task, choose exactly one winning proposal from the frozen pool, and write one structured JSON result.
-model: Auto
+model: gpt-5.4
 tools:
   - read
   - search

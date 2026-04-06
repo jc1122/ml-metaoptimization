@@ -1,7 +1,7 @@
 ---
 name: metaopt-select-design
 description: Control Step 5/6 by planning selection, validating the winning proposal, planning design, and finalizing canonical `selected_experiment`.
-model: Auto
+model: gpt-5.4
 tools:
   - read
   - search

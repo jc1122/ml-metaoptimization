@@ -448,7 +448,7 @@ class SelectDesignAgentTests(unittest.TestCase):
         for profile in (CONTROL_AGENT, SELECTION_AGENT, DESIGN_AGENT):
             self.assertTrue(profile.exists(), f"missing {profile}")
             content = profile.read_text(encoding="utf-8")
-            self.assertIn("model: Auto", content)
+            self.assertIn("model: gpt-5.4", content)
             self.assertIn("user-invocable: false", content)
         control_content = CONTROL_AGENT.read_text(encoding="utf-8")
         self.assertIn("name: metaopt-select-design", control_content)

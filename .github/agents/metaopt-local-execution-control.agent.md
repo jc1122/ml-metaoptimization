@@ -1,7 +1,7 @@
 ---
 name: metaopt-local-execution-control
 description: Plan and gate the Steps 7/8 local materialization and sanity loop, keeping semantic retry policy out of the main orchestrator.
-model: Auto
+model: gpt-5.4
 tools:
   - read
   - search

@@ -1,7 +1,7 @@
 ---
 name: metaopt-load-campaign
 description: Validate `ml_metaopt_campaign.yaml`, compute campaign/runtime hashes, and produce an advisory LOAD_CAMPAIGN handoff for the main orchestrator.
-model: Auto
+model: gpt-5.4
 tools:
   - read
   - search

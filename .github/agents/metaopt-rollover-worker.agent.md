@@ -1,7 +1,7 @@
 ---
 name: metaopt-rollover-worker
 description: Leaf rollover worker for iteration close. Reads one staged rollover task file and writes one structured rollover result file.
-model: Auto
+model: gpt-5.4
 tools:
   - read
   - search

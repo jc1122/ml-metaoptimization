@@ -407,7 +407,7 @@ class IterationCloseControlAgentTests(unittest.TestCase):
         self.assertTrue(AGENT_PROFILE.exists(), f"missing {AGENT_PROFILE}")
         content = AGENT_PROFILE.read_text(encoding="utf-8")
         self.assertIn("name: metaopt-iteration-close-control", content)
-        self.assertIn("model: Auto", content)
+        self.assertIn("model: gpt-5.4", content)
         self.assertIn("plan_roll_iteration", content)
         self.assertIn("gate_roll_iteration", content)
         self.assertIn("quiesce_slots", content)
@@ -417,7 +417,7 @@ class IterationCloseControlAgentTests(unittest.TestCase):
         self.assertTrue(WORKER_PROFILE.exists(), f"missing {WORKER_PROFILE}")
         content = WORKER_PROFILE.read_text(encoding="utf-8")
         self.assertIn("name: metaopt-rollover-worker", content)
-        self.assertIn("model: Auto", content)
+        self.assertIn("model: gpt-5.4", content)
         self.assertIn("Do not launch subagents.", content)
         self.assertIn("Do not mutate `.ml-metaopt/state.json`.", content)
 

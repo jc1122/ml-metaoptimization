@@ -1,7 +1,7 @@
 ---
 name: metaopt-iteration-close-control
 description: Plan and gate the Steps 12/13 rollover and quiesce loop while keeping semantic continuation logic out of the main orchestrator.
-model: Auto
+model: gpt-5.4
 tools:
   - read
   - search

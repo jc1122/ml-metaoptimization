@@ -1,7 +1,7 @@
 ---
 name: metaopt-design-worker
 description: Read one staged design task, transform the selected proposal into a concrete experiment design, and write one structured JSON result.
-model: Auto
+model: gpt-5.4
 tools:
   - read
   - search

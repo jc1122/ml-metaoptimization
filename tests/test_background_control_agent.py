@@ -281,7 +281,7 @@ class BackgroundControlAgentTests(unittest.TestCase):
         self.assertTrue(AGENT_PROFILE.exists(), f"missing {AGENT_PROFILE}")
         content = AGENT_PROFILE.read_text(encoding="utf-8")
         self.assertIn("name: metaopt-background-control", content)
-        self.assertIn("model: Auto", content)
+        self.assertIn("model: gpt-5.4", content)
         self.assertIn("plan_background_work", content)
         self.assertIn("gate_background_work", content)
         self.assertIn("scripts/background_control_handoff.py", content)

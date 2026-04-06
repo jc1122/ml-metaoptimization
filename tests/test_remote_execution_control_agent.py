@@ -423,7 +423,7 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
         self.assertTrue(AGENT_PROFILE.exists(), f"missing {AGENT_PROFILE}")
         content = AGENT_PROFILE.read_text(encoding="utf-8")
         self.assertIn("name: metaopt-remote-execution-control", content)
-        self.assertIn("model: Auto", content)
+        self.assertIn("model: gpt-5.4", content)
         self.assertIn("plan_remote_batch", content)
         self.assertIn("gate_remote_batch", content)
         self.assertIn("analyze_remote_results", content)
@@ -433,7 +433,7 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
         self.assertTrue(ANALYSIS_WORKER_PROFILE.exists(), f"missing {ANALYSIS_WORKER_PROFILE}")
         content = ANALYSIS_WORKER_PROFILE.read_text(encoding="utf-8")
         self.assertIn("name: metaopt-analysis-worker", content)
-        self.assertIn("model: Auto", content)
+        self.assertIn("model: gpt-5.4", content)
         self.assertIn("Do not launch subagents.", content)
         self.assertIn("Do not mutate `.ml-metaopt/state.json`.", content)
 

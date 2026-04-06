@@ -14,10 +14,13 @@ Declared in `ml_metaopt_campaign.yaml` under `remote_queue`:
 The skill may call only these commands for remote execution.
 
 These fields are shell command strings, not argv arrays. The backend command contract assumes shell execution semantics, including normal shell path expansion.
-The orchestrator appends one shell-escaped argument to each command:
-- `enqueue_command <manifest_path>`
-- `status_command <batch_id>`
-- `results_command <batch_id>`
+The orchestrator appends one shell-escaped value after the command string declared in the campaign file.
+The command string must include the flag name so the final invocation is valid:
+- `enqueue_command --manifest <manifest_path>` → e.g. `python3 enqueue_batch.py --manifest /path/manifest.json`
+- `status_command --batch-id <batch_id>` → e.g. `python3 get_batch_status.py --batch-id batch-001`
+- `results_command --batch-id <batch_id>` → e.g. `python3 fetch_batch_results.py --batch-id batch-001`
+
+The current `ray-hetzner` implementation uses `--manifest` and `--batch-id` named flags. The campaign example includes these flags in the command strings accordingly.
 
 All three commands must write exactly one stdout JSON object on success and exit non-zero on failure.
 

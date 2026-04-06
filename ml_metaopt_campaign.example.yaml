@@ -66,10 +66,13 @@ remote_queue:
   backend: ray-hetzner
   retry_policy:
     max_attempts: 2
-  # The orchestrator appends one shell-escaped argument: manifest path for enqueue, batch_id for status/results.
-  enqueue_command: python3 /opt/ray-hetzner/metaopt/enqueue_batch.py
-  status_command: python3 /opt/ray-hetzner/metaopt/get_batch_status.py
-  results_command: python3 /opt/ray-hetzner/metaopt/fetch_batch_results.py
+  # The orchestrator appends one shell-escaped value after the command string:
+  #   enqueue_command --manifest <manifest_path>
+  #   status_command --batch-id <batch_id>
+  #   results_command --batch-id <batch_id>
+  enqueue_command: python3 /opt/ray-hetzner/metaopt/enqueue_batch.py --manifest
+  status_command: python3 /opt/ray-hetzner/metaopt/get_batch_status.py --batch-id
+  results_command: python3 /opt/ray-hetzner/metaopt/fetch_batch_results.py --batch-id
 
 execution:
   runner_type: ray_queue_runner

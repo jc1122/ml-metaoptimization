@@ -1,6 +1,6 @@
 # Dispatch Guide
 
-This reference maps each dispatch state in the state machine to the worker skill that executes it, the context the orchestrator must pass, and the output it must consume.
+This reference maps each dispatch state in the state machine to the worker target that executes it, the context the orchestrator must pass, and the output it must consume.
 
 Load this file before dispatching any worker subagent.
 
@@ -61,7 +61,12 @@ Every worker subagent prompt includes a standard envelope plus state-specific fi
 
 ## MAINTAIN_BACKGROUND_POOL — Ideation
 
-**Skill:** `metaopt-experiment-ideation`
+Operational split note:
+- a background-control agent may generate staged task files for slot launches
+- the orchestrator may then launch workers from those task files without semantically interpreting the intended work
+- a background-control gate phase may later consume staged worker outputs and perform the canonical state updates described below
+
+**Worker target:** `metaopt-ideation-worker` (`custom_agent`)
 **Slot class:** `background`
 **Mode:** `ideation`
 **Model class:** `general_worker`
@@ -78,7 +83,7 @@ Every worker subagent prompt includes a standard envelope plus state-specific fi
 
 ### Output → State
 
-- For each candidate returned by the ideation worker, the orchestrator:
+- For each candidate returned by the ideation worker, the background-control gate:
   1. Generates a unique `proposal_id` using `<campaign_id>-p<sequence_number>`
   2. Attaches `source_slot_id` from the dispatching slot
   3. Attaches `creation_iteration` from `state.current_iteration`
@@ -89,7 +94,11 @@ Every worker subagent prompt includes a standard envelope plus state-specific fi
 
 ## MAINTAIN_BACKGROUND_POOL — Maintenance
 
-**Skill:** `repo-audit-refactor-optimize`
+Operational split note:
+- maintenance workers may be launched from planner-generated staged task files
+- their raw outputs may be staged first and semantically integrated later by a background-control gate phase rather than directly by the orchestrator
+
+**Worker target:** `repo-audit-refactor-optimize` (`skill`)
 **Slot class:** `background`
 **Mode:** `maintenance`
 **Model class:** `general_worker` (findings-only) or `strong_coder` (code-modifying)
@@ -119,7 +128,11 @@ If the maintenance worker returns output that does not match the expected patch 
 
 ## SELECT_EXPERIMENT
 
-**Skill:** `metaopt-experiment-selection`
+Operational split note:
+- `SELECT_EXPERIMENT` is controlled by the Step-5/6 control agent, which may first write a staged selection task, then later validate the winning proposal before planning `DESIGN_EXPERIMENT`
+- the orchestrator launches the selection worker in the middle and only stages raw output
+
+**Worker target:** `metaopt-selection-worker` (`custom_agent`)
 **Slot class:** `auxiliary`
 **Mode:** `synthesis`
 **Model class:** `strong_reasoner`
@@ -140,7 +153,11 @@ If the maintenance worker returns output that does not match the expected patch 
 
 ## DESIGN_EXPERIMENT
 
-**Skill:** `metaopt-experiment-design`
+Operational split note:
+- `DESIGN_EXPERIMENT` begins with a partial canonical `selected_experiment` whose `design` is still `null`
+- the Step-5/6 control agent writes the staged design task, the orchestrator launches the design worker, and the same control agent later finalizes `state.selected_experiment.design`
+
+**Worker target:** `metaopt-design-worker` (`custom_agent`)
 **Slot class:** `auxiliary`
 **Mode:** `design`
 **Model class:** `strong_reasoner`
@@ -163,10 +180,15 @@ If the maintenance worker returns output that does not match the expected patch 
 
 ## MATERIALIZE_CHANGESET
 
-**Skill:** `metaopt-experiment-materialization`
+**Worker target:** `metaopt-materialization-worker` (`custom_agent`)
 **Slot class:** `auxiliary`
 **Mode:** `materialization`
 **Model class:** `strong_coder` (enforced: `mode = materialization` requires `model_class = strong_coder`)
+
+Operational note:
+- a local-execution control agent may first generate staged materialization task files
+- the orchestrator may then launch the materialization worker, apply patches mechanically, package artifacts, and stage raw executor outputs
+- a later local-execution gate phase may semantically update `state.local_changeset` and decide the next retry/advance action
 
 ### Input (from orchestrator context)
 
@@ -213,10 +235,14 @@ The materialization worker operates in one of three modes. The orchestrator must
 
 ## LOCAL_SANITY — Diagnosis (on failure)
 
-**Skill:** `metaopt-sanity-diagnosis`
+**Worker target:** `metaopt-diagnosis-worker` (`custom_agent`)
 **Slot class:** `auxiliary`
 **Mode:** `diagnosis`
 **Model class:** `strong_reasoner`
+
+Operational note:
+- the orchestrator may run `sanity.command` and stage only raw stdout/stderr/exit-code artifacts
+- a local-execution control gate phase may later interpret those staged artifacts, request diagnosis, and perform the canonical state updates described below
 
 ### Input (from orchestrator context)
 
@@ -235,16 +261,20 @@ The materialization worker operates in one of three modes. The orchestrator must
 - Persist the diagnosis record to `state.selected_experiment.diagnosis_history` with `attempt`, `root_cause`, `classification`, `action`, `code_guidance`, `config_guidance`, and `diagnosed_at`
 - Increment `state.selected_experiment.sanity_attempts`
 - Route on `fix_recommendation.action`:
-  - `"fix"`: dispatch `metaopt-experiment-materialization` in **remediation mode** — pass the `code_guidance`, the original `state.selected_experiment.design`, the current `state.local_changeset`, and the `diagnosis_history`. The materialization worker produces an updated patch. After integration, rerun `LOCAL_SANITY`.
+  - `"fix"`: dispatch `metaopt-materialization-worker` in **remediation mode** — pass the `code_guidance`, the original `state.selected_experiment.design`, the current `state.local_changeset`, and the `diagnosis_history`. The materialization worker produces an updated patch. After integration, rerun `LOCAL_SANITY`.
   - `"adjust_config"`: transition to `BLOCKED_CONFIG` with `next_action = <config_guidance>`. The orchestrator does not modify campaign configuration autonomously.
   - `"abandon"`: transition to `FAILED` with `root_cause` as the terminal error.
 
 ## WAIT_FOR_REMOTE_BATCH — Remote Failure Diagnosis
 
-**Skill:** `metaopt-sanity-diagnosis`
+**Worker target:** `metaopt-diagnosis-worker` (`custom_agent`)
 **Slot class:** `auxiliary`
 **Mode:** `diagnosis`
 **Model class:** `strong_reasoner`
+
+Operational note:
+- the orchestrator may run `status_command` and `results_command` and stage only raw backend JSON payloads
+- a remote-execution control gate phase may later interpret those payloads, request diagnosis, and perform the canonical state updates described below
 
 Dispatched only when `remote_queue.status_command` returns `status = "failed"`.
 
@@ -272,10 +302,15 @@ Dispatched only when `remote_queue.status_command` returns `status = "failed"`.
 
 ## ANALYZE_RESULTS
 
-**Skill:** `metaopt-results-analysis`
+**Worker target:** `metaopt-analysis-worker` (`custom_agent`)
 **Slot class:** `auxiliary`
 **Mode:** `analysis`
 **Model class:** `strong_reasoner`
+
+Operational note:
+- a remote-execution control planning phase may stage an analysis task file after completed results have been fetched
+- the orchestrator may launch the analysis worker and stage only raw analysis JSON
+- a remote-execution control analysis phase may later update `analysis_summary`, baseline state, learnings, and rollover readiness
 
 ### Input (from orchestrator context)
 
@@ -297,9 +332,14 @@ Dispatched only when `remote_queue.status_command` returns `status = "failed"`.
 
 ## ROLL_ITERATION — Rollover
 
-**Skill:** `metaopt-proposal-rollover`
+**Worker target:** `metaopt-rollover-worker` (`custom_agent`)
 **Dispatch type:** Inline (no slot — runs synchronously during `ROLL_ITERATION`)
 **Model class:** `strong_reasoner`
+
+Operational split note:
+- an iteration-close control planning phase may first generate a staged rollover task file
+- the orchestrator may then launch the rollover worker and stage only its raw JSON output
+- a later iteration-close control gate phase may semantically integrate that output, clear `selected_experiment`, evaluate stop conditions, and prepare `QUIESCE_SLOTS`
 
 ### Input (from orchestrator context)
 
@@ -318,4 +358,7 @@ Dispatched only when `remote_queue.status_command` returns `status = "failed"`.
 - For merged proposals, enrich the merged candidate with a new `proposal_id` (using `<campaign_id>-p<sequence_number>`), set `source_slot_id = "rollover"` and `creation_iteration` to the new iteration, then append to `state.current_proposals`
 - Clear `state.next_proposals`
 - If `needs_fresh_ideation == true`, the orchestrator prioritizes ideation in the next `MAINTAIN_BACKGROUND_POOL` entry
-- Increment `state.current_iteration`
+- Increment `state.current_iteration` only when the campaign will continue into another iteration
+- Clear `state.selected_experiment` after persisting the completed experiment record
+- Evaluate stop conditions against `target_metric`, `max_iterations`, and `max_no_improve_iterations`
+- Emit `state.last_iteration_report` before entering `QUIESCE_SLOTS`

@@ -24,7 +24,7 @@ Always use the strongest available model in the same class and record the substi
 
 ## Ideation Lane
 
-**Skill:** `metaopt-experiment-ideation`
+**Worker target:** `metaopt-ideation-worker` (`custom_agent`)
 
 Purpose:
 - generate and refine non-overlapping experiment proposals
@@ -39,6 +39,7 @@ Inputs:
 
 Outputs:
 - distinct proposal candidates with short rationale
+- one staged JSON result file consumed by the background-control gate
 
 ## Maintenance Lane
 
@@ -66,7 +67,7 @@ Execution rules:
 - code-modifying maintenance must use `strong_coder`
 - return either findings-only output or one patch artifact plus verification notes
 - the orchestrator applies maintenance patch artifacts mechanically in a dedicated integration worktree
-- if patch application conflicts or requires a non-trivial merge, dispatch `metaopt-experiment-materialization` in conflict-resolution mode with the conflicting patches, the base worktree state, and the experiment design context
+- if patch application conflicts or requires a non-trivial merge, dispatch `metaopt-materialization-worker` in conflict-resolution mode with the conflicting patches, the base worktree state, and the experiment design context
 
 Metaoptimization bridge requirements:
 - The orchestrator must include the patch artifact contract (format, metadata fields, and integration path) in the maintenance worker's subagent prompt, because `repo-audit-refactor-optimize` does not natively encode these requirements
@@ -83,7 +84,7 @@ Compatibility rule:
 
 ## Synthesis Lane
 
-**Skill:** `metaopt-experiment-selection`
+**Worker target:** `metaopt-selection-worker` (`custom_agent`)
 
 Purpose:
 - rank eligible proposals and choose one winning proposal
@@ -94,7 +95,7 @@ Output:
 
 ## Design Lane
 
-**Skill:** `metaopt-experiment-design`
+**Worker target:** `metaopt-design-worker` (`custom_agent`)
 
 Purpose:
 - transform the winning proposal into an experiment batch design suitable for the backend contract
@@ -106,7 +107,7 @@ Output:
 
 ## Materialization Lane
 
-**Skill:** `metaopt-experiment-materialization`
+**Worker target:** `metaopt-materialization-worker` (`custom_agent`)
 
 Purpose:
 - turn the designed experiment into concrete code changes, packageable artifacts, and a manifest-ready local changeset
@@ -125,7 +126,7 @@ All modes produce the same output shape (unified diff patch artifact + metadata)
 
 ## Diagnosis Lane
 
-**Skill:** `metaopt-sanity-diagnosis`
+**Worker target:** `metaopt-diagnosis-worker` (`custom_agent`)
 
 Purpose:
 - explain sanity failures, code failures, or remote failure payloads
@@ -136,7 +137,7 @@ Output:
 
 ## Analysis Lane
 
-**Skill:** `metaopt-results-analysis`
+**Worker target:** `metaopt-analysis-worker` (`custom_agent`)
 
 Purpose:
 - compare completed batch results against the aggregate baseline and extract learnings
@@ -148,7 +149,7 @@ Output:
 
 ## Rollover Lane
 
-**Skill:** `metaopt-proposal-rollover`
+**Worker target:** `metaopt-rollover-worker` (`custom_agent`)
 
 **Dispatch type:** Inline — the orchestrator dispatches this worker synchronously during `ROLL_ITERATION`. Unlike other lanes, rollover does not consume an `active_slots` entry. The subagent returns before the orchestrator advances to `QUIESCE_SLOTS`.
 

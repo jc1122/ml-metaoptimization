@@ -1,0 +1,442 @@
+from __future__ import annotations
+
+import json
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPT = ROOT / "scripts" / "remote_execution_control_handoff.py"
+AGENT_PROFILE = ROOT / ".github" / "agents" / "metaopt-remote-execution-control.agent.md"
+ANALYSIS_WORKER_PROFILE = ROOT / ".github" / "agents" / "metaopt-analysis-worker.agent.md"
+
+
+class RemoteExecutionControlAgentTests(unittest.TestCase):
+    def _write_load_handoff(self, tempdir: Path, *, malformed: bool = False) -> Path:
+        handoff = tempdir / ".ml-metaopt" / "handoffs" / "load_campaign.latest.json"
+        handoff.parent.mkdir(parents=True, exist_ok=True)
+        if malformed:
+            handoff.write_text("{not-json", encoding="utf-8")
+            return handoff
+        payload = {
+            "schema_version": 1,
+            "producer": "metaopt-load-campaign",
+            "phase": "LOAD_CAMPAIGN",
+            "outcome": "ok",
+            "campaign_id": "market-forecast-v3",
+            "campaign_identity_hash": "sha256:f50928628873800b25a5dfb41f2fd6c93acfc210424953f53a5005e09379fa4c",
+            "runtime_config_hash": "sha256:6f59ca57fb3da56f815d7fb03f8be7335fa9d14344c49154308e9e65990e9ac6",
+            "objective_snapshot": {
+                "metric": "rmse",
+                "direction": "minimize",
+                "aggregation": {"method": "weighted_mean", "weights": {"ds_main": 0.7, "ds_holdout": 0.3}},
+                "improvement_threshold": 0.0005,
+            },
+            "remote_queue": {
+                "backend": "ray-hetzner",
+                "retry_policy": {"max_attempts": 2},
+                "enqueue_command": "python3 /opt/ray-hetzner/metaopt/enqueue_batch.py --manifest",
+                "status_command": "python3 /opt/ray-hetzner/metaopt/get_batch_status.py --batch-id",
+                "results_command": "python3 /opt/ray-hetzner/metaopt/fetch_batch_results.py --batch-id",
+            },
+            "execution": {
+                "runner_type": "ray_queue_runner",
+                "entrypoint": "python3 /srv/metaopt/project/scripts/ray_runner.py",
+            },
+            "warnings": [],
+            "summary": "ok",
+        }
+        handoff.write_text(json.dumps(payload), encoding="utf-8")
+        return handoff
+
+    def _base_state(self) -> dict:
+        return {
+            "version": 3,
+            "campaign_id": "market-forecast-v3",
+            "campaign_identity_hash": "sha256:f50928628873800b25a5dfb41f2fd6c93acfc210424953f53a5005e09379fa4c",
+            "runtime_config_hash": "sha256:6f59ca57fb3da56f815d7fb03f8be7335fa9d14344c49154308e9e65990e9ac6",
+            "status": "RUNNING",
+            "machine_state": "ENQUEUE_REMOTE_BATCH",
+            "current_iteration": 1,
+            "next_action": "enqueue remote batch",
+            "objective_snapshot": {
+                "metric": "rmse",
+                "direction": "minimize",
+                "aggregation": {"method": "weighted_mean", "weights": {"ds_main": 0.7, "ds_holdout": 0.3}},
+                "improvement_threshold": 0.0005,
+            },
+            "proposal_cycle": {
+                "cycle_id": "iter-1-cycle-1",
+                "current_pool_frozen": True,
+                "ideation_rounds_by_slot": {"bg-1": 2, "bg-2": 2},
+                "shortfall_reason": "",
+            },
+            "active_slots": [],
+            "current_proposals": [],
+            "next_proposals": [],
+            "selected_experiment": {
+                "proposal_id": "market-forecast-v3-p1",
+                "proposal_snapshot": {
+                    "proposal_id": "market-forecast-v3-p1",
+                    "title": "Tighten rolling validation",
+                    "target_area": "validation",
+                },
+                "selection_rationale": "best fit",
+                "sanity_attempts": 1,
+                "design": {
+                    "proposal_id": "market-forecast-v3-p1",
+                    "target_area": "validation",
+                    "primary_intervention": "Reduce leakage risk in evaluation",
+                },
+                "diagnosis_history": [],
+                "analysis_summary": None,
+            },
+            "local_changeset": {
+                "integration_worktree": ".ml-metaopt/worktrees/iter-1-materialization",
+                "patch_artifacts": [
+                    {
+                        "producer_slot_id": "aux-1",
+                        "purpose": "candidate patch bundle",
+                        "patch_path": ".ml-metaopt/artifacts/patches/batch-20260405-0001/aux-1.patch",
+                        "target_worktree": ".ml-metaopt/worktrees/iter-1-materialization",
+                    }
+                ],
+                "apply_results": [
+                    {
+                        "patch_path": ".ml-metaopt/artifacts/patches/batch-20260405-0001/aux-1.patch",
+                        "status": "applied",
+                        "error": None,
+                    }
+                ],
+                "verification_notes": ["pytest passed"],
+                "code_artifact_uri": ".ml-metaopt/artifacts/code/batch-20260405-0001.tar.gz",
+                "data_manifest_uri": ".ml-metaopt/artifacts/data/batch-20260405-0001.json",
+            },
+            "remote_batches": [],
+            "baseline": {
+                "aggregate": 0.1284,
+                "by_dataset": {"ds_main": 0.1269, "ds_holdout": 0.1320},
+            },
+            "completed_experiments": [
+                {"batch_id": "batch-20260401-0001", "aggregate": 0.1292},
+            ],
+            "key_learnings": ["Leakage checks matter more than model capacity early in the campaign"],
+            "no_improve_iterations": 1,
+            "runtime_capabilities": {
+                "verified_at": "2026-04-06T00:00:00Z",
+                "available_skills": ["metaopt-analysis-worker", "metaopt-diagnosis-worker"],
+                "missing_skills": [],
+                "degraded_lanes": [],
+            },
+        }
+
+    def _run(
+        self,
+        tempdir: Path,
+        *,
+        mode: str,
+        state: dict,
+        malformed_handoff: bool = False,
+        executor_events: dict[str, dict] | None = None,
+        worker_results: dict[str, dict] | None = None,
+    ) -> tuple[dict, dict, Path]:
+        load_handoff = self._write_load_handoff(tempdir, malformed=malformed_handoff)
+        state_path = tempdir / ".ml-metaopt" / "state.json"
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+
+        tasks_dir = tempdir / ".ml-metaopt" / "tasks"
+        tasks_dir.mkdir(parents=True, exist_ok=True)
+        worker_results_dir = tempdir / ".ml-metaopt" / "worker-results"
+        worker_results_dir.mkdir(parents=True, exist_ok=True)
+        executor_events_dir = tempdir / ".ml-metaopt" / "executor-events"
+        executor_events_dir.mkdir(parents=True, exist_ok=True)
+        output_path = tempdir / ".ml-metaopt" / "handoffs" / f"{mode}.latest.json"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        for name, payload in (executor_events or {}).items():
+            (executor_events_dir / f"{name}.json").write_text(json.dumps(payload), encoding="utf-8")
+        for name, payload in (worker_results or {}).items():
+            (worker_results_dir / f"{name}.json").write_text(json.dumps(payload), encoding="utf-8")
+
+        completed = subprocess.run(
+            [
+                "python3",
+                str(SCRIPT),
+                "--mode",
+                mode,
+                "--load-handoff",
+                str(load_handoff),
+                "--state-path",
+                str(state_path),
+                "--tasks-dir",
+                str(tasks_dir),
+                "--worker-results-dir",
+                str(worker_results_dir),
+                "--executor-events-dir",
+                str(executor_events_dir),
+                "--output",
+                str(output_path),
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            msg=f"stdout:\n{completed.stdout}\n\nstderr:\n{completed.stderr}",
+        )
+        payload = json.loads(output_path.read_text(encoding="utf-8"))
+        self.assertEqual(payload, json.loads(completed.stdout))
+        updated_state = json.loads(state_path.read_text(encoding="utf-8"))
+        return payload, updated_state, tasks_dir
+
+    def test_plan_remote_batch_emits_manifest_and_batch_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            payload, updated_state, _ = self._run(
+                Path(tempdir_str),
+                mode="plan_remote_batch",
+                state=self._base_state(),
+            )
+
+            self.assertEqual(payload["phase"], "PLAN_REMOTE_BATCH")
+            self.assertEqual(payload["outcome"], "planned")
+            self.assertEqual(payload["batch_id"], "batch-20260406-0002")
+            self.assertEqual(payload["recommended_next_machine_state"], "ENQUEUE_REMOTE_BATCH")
+            self.assertTrue(payload["manifest_path"].endswith("batch-20260406-0002.json"))
+            self.assertEqual(updated_state["machine_state"], "ENQUEUE_REMOTE_BATCH")
+
+    def test_gate_remote_batch_records_enqueue_ack_and_advances_to_wait(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            state = self._base_state()
+            payload, updated_state, _ = self._run(
+                Path(tempdir_str),
+                mode="gate_remote_batch",
+                state=state,
+                executor_events={
+                    "enqueue-batch-20260406-0002": {
+                        "batch_id": "batch-20260406-0002",
+                        "queue_ref": "ray-queue-123",
+                        "status": "queued",
+                    }
+                },
+            )
+
+            self.assertEqual(payload["outcome"], "waiting")
+            self.assertEqual(updated_state["machine_state"], "WAIT_FOR_REMOTE_BATCH")
+            self.assertEqual(updated_state["remote_batches"][0]["batch_id"], "batch-20260406-0002")
+            self.assertEqual(updated_state["remote_batches"][0]["queue_ref"], "ray-queue-123")
+
+    def test_gate_remote_batch_requests_results_after_completion(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            state = self._base_state()
+            state["machine_state"] = "WAIT_FOR_REMOTE_BATCH"
+            state["remote_batches"] = [{"batch_id": "batch-20260406-0002", "queue_ref": "ray-queue-123", "status": "running"}]
+            payload, updated_state, _ = self._run(
+                Path(tempdir_str),
+                mode="gate_remote_batch",
+                state=state,
+                executor_events={
+                    "remote-status-batch-20260406-0002": {
+                        "batch_id": "batch-20260406-0002",
+                        "status": "completed",
+                        "timestamps": {"queued_at": "2026-04-06T10:00:00Z", "started_at": "2026-04-06T10:02:00Z"},
+                    }
+                },
+            )
+
+            self.assertEqual(payload["outcome"], "fetch_results")
+            self.assertEqual(updated_state["machine_state"], "WAIT_FOR_REMOTE_BATCH")
+            self.assertEqual(updated_state["remote_batches"][0]["status"], "completed")
+
+    def test_gate_remote_batch_emits_analysis_task_when_results_are_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            state = self._base_state()
+            state["machine_state"] = "WAIT_FOR_REMOTE_BATCH"
+            state["remote_batches"] = [{"batch_id": "batch-20260406-0002", "queue_ref": "ray-queue-123", "status": "completed"}]
+            payload, _, tasks_dir = self._run(
+                Path(tempdir_str),
+                mode="gate_remote_batch",
+                state=state,
+                executor_events={
+                    "remote-status-batch-20260406-0002": {
+                        "batch_id": "batch-20260406-0002",
+                        "status": "completed",
+                        "timestamps": {"queued_at": "2026-04-06T10:00:00Z", "started_at": "2026-04-06T10:02:00Z"},
+                    },
+                    "remote-results-batch-20260406-0002": {
+                        "batch_id": "batch-20260406-0002",
+                        "status": "completed",
+                        "best_aggregate_result": {"metric": "rmse", "value": 0.1213},
+                        "per_dataset": {"ds_main": 0.1208, "ds_holdout": 0.1225},
+                        "artifact_locations": {
+                            "code": "s3://metaopt/artifacts/code/batch-20260406-0002.tar.gz",
+                            "data_manifest": "s3://metaopt/artifacts/data/batch-20260406-0002.json",
+                            "metrics": "s3://metaopt/results/batch-20260406-0002/metrics.json",
+                        },
+                        "logs_location": "s3://metaopt/results/batch-20260406-0002/logs.txt",
+                    },
+                },
+            )
+
+            self.assertEqual(payload["outcome"], "run_analysis")
+            self.assertEqual(payload["worker_kind"], "custom_agent")
+            self.assertEqual(payload["worker_ref"], "metaopt-analysis-worker")
+            task_file = tasks_dir / "remote-analysis-batch-20260406-0002.md"
+            self.assertTrue(task_file.exists())
+            task_text = task_file.read_text(encoding="utf-8")
+            self.assertIn("metaopt-analysis-worker", task_text)
+            self.assertIn("Objective Context", task_text)
+            self.assertIn("Baseline Context", task_text)
+            self.assertIn("Result Context", task_text)
+            self.assertIn("Expected JSON fields", task_text)
+
+    def test_analyze_remote_results_updates_state_and_advances(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            state = self._base_state()
+            state["machine_state"] = "WAIT_FOR_REMOTE_BATCH"
+            state["remote_batches"] = [{"batch_id": "batch-20260406-0002", "queue_ref": "ray-queue-123", "status": "completed"}]
+            payload, updated_state, _ = self._run(
+                Path(tempdir_str),
+                mode="analyze_remote_results",
+                state=state,
+                executor_events={
+                    "remote-results-batch-20260406-0002": {
+                        "batch_id": "batch-20260406-0002",
+                        "status": "completed",
+                        "best_aggregate_result": {"metric": "rmse", "value": 0.1213},
+                        "per_dataset": {"ds_main": 0.1208, "ds_holdout": 0.1225},
+                        "artifact_locations": {
+                            "code": "s3://metaopt/artifacts/code/batch-20260406-0002.tar.gz",
+                            "data_manifest": "s3://metaopt/artifacts/data/batch-20260406-0002.json",
+                            "metrics": "s3://metaopt/results/batch-20260406-0002/metrics.json",
+                        },
+                        "logs_location": "s3://metaopt/results/batch-20260406-0002/logs.txt",
+                    }
+                },
+                worker_results={
+                    "remote-analysis-batch-20260406-0002": {
+                        "judgment": "improvement",
+                        "new_aggregate": 0.1213,
+                        "delta": -0.0071,
+                        "learnings": ["Rolling validation tightened the aggregate metric."],
+                        "invalidations": [{"proposal_id": "market-forecast-v3-p9", "reason": "validation issue addressed"}],
+                        "carry_over_candidates": [{"title": "Try stricter cutoff", "rationale": "Follow-on validation refinement"}],
+                    }
+                },
+            )
+
+            self.assertEqual(payload["outcome"], "analyzed")
+            self.assertEqual(updated_state["machine_state"], "ROLL_ITERATION")
+            self.assertEqual(updated_state["baseline"]["aggregate"], 0.1213)
+            self.assertEqual(updated_state["no_improve_iterations"], 0)
+            self.assertEqual(updated_state["completed_experiments"][-1]["batch_id"], "batch-20260406-0002")
+            self.assertEqual(updated_state["selected_experiment"]["analysis_summary"]["judgment"], "improvement")
+
+    def test_gate_remote_batch_routes_remote_config_failure_to_blocked(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            state = self._base_state()
+            state["machine_state"] = "WAIT_FOR_REMOTE_BATCH"
+            state["remote_batches"] = [{"batch_id": "batch-20260406-0002", "queue_ref": "ray-queue-123", "status": "running"}]
+            payload, updated_state, _ = self._run(
+                Path(tempdir_str),
+                mode="gate_remote_batch",
+                state=state,
+                executor_events={
+                    "remote-status-batch-20260406-0002": {
+                        "batch_id": "batch-20260406-0002",
+                        "status": "failed",
+                        "timestamps": {"queued_at": "2026-04-06T10:00:00Z"},
+                        "classification": "config_error",
+                        "message": "dataset path invalid",
+                        "returncode": 2,
+                    }
+                },
+                worker_results={
+                    "remote-diagnosis-batch-20260406-0002": {
+                        "root_cause": "dataset path invalid on cluster",
+                        "classification": "config_error",
+                        "fix_recommendation": {
+                            "action": "adjust_config",
+                            "code_guidance": None,
+                            "config_guidance": "repair dataset path in campaign config",
+                        },
+                        "learnings": ["Remote execution is blocked by invalid dataset path configuration."],
+                    }
+                },
+            )
+
+            self.assertEqual(payload["outcome"], "blocked_config")
+            self.assertEqual(updated_state["status"], "BLOCKED_CONFIG")
+            self.assertEqual(updated_state["machine_state"], "BLOCKED_CONFIG")
+
+    def test_gate_remote_batch_emits_diagnosis_task_for_failed_batch(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            state = self._base_state()
+            state["machine_state"] = "WAIT_FOR_REMOTE_BATCH"
+            state["remote_batches"] = [{"batch_id": "batch-20260406-0002", "queue_ref": "ray-queue-123", "status": "running"}]
+            payload, updated_state, tasks_dir = self._run(
+                Path(tempdir_str),
+                mode="gate_remote_batch",
+                state=state,
+                executor_events={
+                    "remote-status-batch-20260406-0002": {
+                        "batch_id": "batch-20260406-0002",
+                        "status": "failed",
+                        "timestamps": {"queued_at": "2026-04-06T10:00:00Z"},
+                        "classification": "infra_error",
+                        "message": "worker exited on cluster",
+                        "returncode": 137,
+                    }
+                },
+            )
+
+            self.assertEqual(payload["outcome"], "run_remote_diagnosis")
+            self.assertEqual(payload["worker_kind"], "custom_agent")
+            self.assertEqual(payload["worker_ref"], "metaopt-diagnosis-worker")
+            self.assertEqual(updated_state["machine_state"], "WAIT_FOR_REMOTE_BATCH")
+            task_text = (tasks_dir / "remote-diagnosis-batch-20260406-0002.md").read_text(encoding="utf-8")
+            self.assertIn("metaopt-diagnosis-worker", task_text)
+            self.assertIn("Failure Classification", task_text)
+            self.assertIn("Result File", task_text)
+
+    def test_malformed_load_handoff_returns_runtime_error_without_state_overwrite(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            state = self._base_state()
+            original = json.dumps(state, sort_keys=True)
+            payload, updated_state, _ = self._run(
+                Path(tempdir_str),
+                mode="plan_remote_batch",
+                state=state,
+                malformed_handoff=True,
+            )
+
+            self.assertEqual(payload["outcome"], "runtime_error")
+            self.assertEqual(payload["recommended_next_action"], "repair or replace load_campaign.latest.json")
+            self.assertEqual(json.dumps(updated_state, sort_keys=True), original)
+
+    def test_agent_profile_exists_and_declares_all_modes(self) -> None:
+        self.assertTrue(AGENT_PROFILE.exists(), f"missing {AGENT_PROFILE}")
+        content = AGENT_PROFILE.read_text(encoding="utf-8")
+        self.assertIn("name: metaopt-remote-execution-control", content)
+        self.assertIn("model: Auto", content)
+        self.assertIn("plan_remote_batch", content)
+        self.assertIn("gate_remote_batch", content)
+        self.assertIn("analyze_remote_results", content)
+        self.assertIn("scripts/remote_execution_control_handoff.py", content)
+
+    def test_analysis_worker_profile_exists_and_is_leaf_only(self) -> None:
+        self.assertTrue(ANALYSIS_WORKER_PROFILE.exists(), f"missing {ANALYSIS_WORKER_PROFILE}")
+        content = ANALYSIS_WORKER_PROFILE.read_text(encoding="utf-8")
+        self.assertIn("name: metaopt-analysis-worker", content)
+        self.assertIn("model: Auto", content)
+        self.assertIn("Do not launch subagents.", content)
+        self.assertIn("Do not mutate `.ml-metaopt/state.json`.", content)
+
+
+if __name__ == "__main__":
+    unittest.main()

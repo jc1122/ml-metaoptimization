@@ -42,21 +42,21 @@ These come from `ml_metaopt_campaign.yaml`:
 
 If any required campaign field is missing or invalid, transition to `BLOCKED_CONFIG`.
 
-## Worker-Skill Dependencies
+## Worker-Target Dependencies
 
-The orchestrator dispatches these named skills during the campaign. Each must be installed and available in the agent runtime.
+The orchestrator dispatches these named worker targets during the campaign. Each must be available in the agent runtime.
 
-Required worker skills:
-- `metaopt-experiment-ideation` — background ideation lane
-- `metaopt-experiment-selection` — auxiliary synthesis lane
-- `metaopt-experiment-design` — auxiliary design lane
-- `metaopt-experiment-materialization` — auxiliary materialization lane
-- `metaopt-sanity-diagnosis` — auxiliary diagnosis lane
-- `metaopt-results-analysis` — auxiliary analysis lane
-- `metaopt-proposal-rollover` — inline rollover during `ROLL_ITERATION`
+Required worker targets:
+- `metaopt-ideation-worker` — background ideation lane custom agent
+- `metaopt-selection-worker` — auxiliary synthesis lane
+- `metaopt-design-worker` — auxiliary design lane
+- `metaopt-materialization-worker` — auxiliary materialization lane custom agent
+- `metaopt-diagnosis-worker` — auxiliary diagnosis lane custom agent
+- `metaopt-analysis-worker` — auxiliary analysis lane custom agent
+- `metaopt-rollover-worker` — inline rollover during `ROLL_ITERATION`
 - `repo-audit-refactor-optimize` — background maintenance lane (required by default; may fall back to findings-only if incompatible)
 
-When a required worker skill is unavailable, see the Skill Availability section in `SKILL.md` for degradation behavior.
+When a required worker target is unavailable, see the Skill Availability section in `SKILL.md` for degradation behavior.
 
 ## Optional Enhancement Dependencies
 

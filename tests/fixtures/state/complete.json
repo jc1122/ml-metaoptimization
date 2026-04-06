@@ -28,10 +28,7 @@
   "active_slots": [],
   "current_proposals": [],
   "next_proposals": [],
-  "selected_experiment": {
-    "proposal_id": "p-29",
-    "sanity_attempts": 0
-  },
+  "selected_experiment": null,
   "local_changeset": {
     "integration_worktree": ".ml-metaopt/worktrees/iter-7-materialization",
     "patch_artifacts": [],

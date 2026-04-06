@@ -136,7 +136,7 @@ Each proposal record in `current_proposals` or `next_proposals` must contain:
 - `creation_iteration`: positive integer — the iteration number when the proposal was created
 - `created_at`: ISO 8601 timestamp
 
-**Worker-provided fields** (returned by `metaopt-experiment-ideation`):
+**Worker-provided fields** (returned by the Step-3 ideation worker):
 - `title`: string, concise name (≤ 12 words)
 - `rationale`: string, why this change is expected to improve the metric
 - `expected_impact`: object with `direction` (`"improve"` | `"neutral"`) and `magnitude` (`"small"` | `"medium"` | `"large"`)
@@ -144,17 +144,17 @@ Each proposal record in `current_proposals` or `next_proposals` must contain:
 
 The orchestrator must enrich every ideation candidate with the orchestrator-owned fields before appending to a pool. Workers never generate `proposal_id` — that is the orchestrator's responsibility.
 
-When `metaopt-proposal-rollover` returns a merged proposal, the merged result contains only worker-provided fields (`title`, `rationale`, `expected_impact`, `target_area`). The orchestrator enriches it with a new `proposal_id`, `source_slot_id = "rollover"`, `creation_iteration` set to the new iteration number, and `created_at` before appending to `current_proposals`.
+When the rollover worker returns a merged proposal, the merged result contains only worker-provided fields (`title`, `rationale`, `expected_impact`, `target_area`). The orchestrator enriches it with a new `proposal_id`, `source_slot_id = "rollover"`, `creation_iteration` set to the new iteration number, and `created_at` before appending to `current_proposals`.
 
-When `metaopt-experiment-selection` receives `current_proposals`, every proposal already has all fields above. Selection returns the winning proposal object unchanged.
+When `metaopt-selection-worker` receives `current_proposals`, every proposal already has all fields above. Selection returns the winning proposal object unchanged.
 
-When `metaopt-proposal-rollover` receives `next_proposals`, every proposal has all fields above. Carry-over proposals preserve all fields unchanged.
+When the rollover worker receives `next_proposals`, every proposal has all fields above. Carry-over proposals preserve all fields unchanged.
 
 ## Slot Contract
 
 ### Dispatch Types
 
-The orchestrator dispatches worker skills in two ways:
+The orchestrator dispatches worker targets in two ways:
 
 **Slot-based dispatch** — used for ideation, maintenance, synthesis, design, materialization, diagnosis, and analysis. The orchestrator creates an entry in `active_slots` with the appropriate `slot_class`, `mode`, and `model_class`. The slot persists until the subagent completes and the orchestrator harvests its output. Slot-based workers are subject to `dispatch_policy.background_slots` and `dispatch_policy.auxiliary_slots` limits.
 
@@ -206,7 +206,7 @@ When present, `selected_experiment` must be an object with:
 - `design`: object or `null` — the full experiment design returned by the design worker. `null` until DESIGN_EXPERIMENT completes. Once set, this is the authoritative input for MATERIALIZE_CHANGESET.
 
 **Set by LOCAL_SANITY (on failure):**
-- `diagnosis_history`: array — ordered list of diagnosis records from `metaopt-sanity-diagnosis`. Empty array until a sanity failure occurs. Each entry is an object with:
+- `diagnosis_history`: array — ordered list of diagnosis records from the shared diagnosis worker. Empty array until a sanity failure occurs. Each entry is an object with:
   - `attempt`: positive integer
   - `root_cause`: string
   - `classification`: string (one of `code_error`, `config_error`, `data_error`, `infra_error`, `design_error`)

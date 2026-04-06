@@ -43,12 +43,14 @@
 - Otherwise initialize fresh state from the campaign spec
 - If `AGENTS.md` does not exist, create it
 - Ensure the marked `AGENTS.md` hook is present only while `status = RUNNING`
-- Verify required worker skill availability and record the result in `state.runtime_capabilities`; if any required skill is missing, transition to `BLOCKED_CONFIG` with `next_action = "install missing skill: <skill_name>"`
+- Verify required worker target availability and record the result in `state.runtime_capabilities`; if any required target is missing, transition to `BLOCKED_CONFIG` with `next_action = "install missing skill: <skill_name>"`
 
 ### `MAINTAIN_BACKGROUND_POOL`
 
+Implementation note: this state may be operationally split into a planner-controlled phase, an orchestrator dispatch phase, and a gatekeeper-controlled phase, as long as the canonical behavior below is preserved.
+
 - Ensure exactly `dispatch_policy.background_slots` background slots exist
-- Prefer ideation via `metaopt-experiment-ideation` when `current_proposals` is below target and `next_proposals` is below cap
+- Prefer ideation via the `metaopt-ideation-worker` custom agent when `current_proposals` is below target and `next_proposals` is below cap
 - Otherwise assign maintenance work via `repo-audit-refactor-optimize`
 - **Patch integration timing:** maintenance workers may produce patch outputs, but those patches are NOT applied automatically during background work. The orchestrator collects completed maintenance outputs and defers patch application (if any) to `QUIESCE_SLOTS`, where mechanical integration happens before rollover.
 - The current proposal cycle starts on the first entry into this state for an iteration
@@ -61,6 +63,8 @@
 
 ### `WAIT_FOR_PROPOSAL_THRESHOLD`
 
+Implementation note: when the background loop is split operationally, the threshold decision remains a control-agent responsibility rather than an orchestrator responsibility.
+
 - Require `proposal_policy.current_target` distinct, non-overlapping proposals in `current_proposals`
 - `proposal_cycle` uses persisted `ideation_rounds_by_slot` bookkeeping for the floor rule so reinvocations resume the same round counts instead of restarting them
 - Floor rule: if the persisted `proposal_cycle.ideation_rounds_by_slot` bookkeeping shows every background slot has completed two ideation rounds in the current cycle and fewer than the target exist, allow progress once `proposal_policy.current_floor` is reached
@@ -69,7 +73,8 @@
 
 ### `SELECT_EXPERIMENT`
 
-- Dispatch `metaopt-experiment-selection` as one `strong_reasoner` subagent
+- Implementation note: `SELECT_EXPERIMENT` may be operationally split into a planning control pass, an orchestrator-launched selection worker, and a later gate pass, as long as canonical state still records the winning proposal before `DESIGN_EXPERIMENT` begins.
+- Dispatch the `metaopt-selection-worker` custom agent as one `strong_reasoner` subagent
 - Input: `current_proposals`, baseline context, prior learnings, and completed experiments
 - Output: exactly one winning proposal and a short ranking rationale
 - Freeze `current_proposals` by setting `proposal_cycle.current_pool_frozen = true` once selection starts
@@ -77,17 +82,20 @@
 
 ### `DESIGN_EXPERIMENT`
 
-- Dispatch `metaopt-experiment-design` as one `strong_reasoner` subagent
+- Implementation note: `DESIGN_EXPERIMENT` may be operationally split into a planning/gating control pass, an orchestrator-launched design worker, and a finalization pass, as long as the resulting canonical state contains a populated `selected_experiment` with a persisted `design` before `MATERIALIZE_CHANGESET` begins.
+- Dispatch the `metaopt-design-worker` custom agent as one `strong_reasoner` subagent
 - Input: the winning proposal, baseline context, queue/backend constraints, and prior learnings
 - Output: exactly one concrete experiment specification plus execution assumptions and artifact expectations
 - Persist the experiment design before any coder starts `MATERIALIZE_CHANGESET`
 
 ### `MATERIALIZE_CHANGESET`
 
-- Dispatch `metaopt-experiment-materialization` as `strong_coder` subagents in isolated worktrees
+- Implementation note: `MATERIALIZE_CHANGESET` and `LOCAL_SANITY` may be operationally split into a `plan_local_changeset` control pass, an orchestrator executor phase, and a `gate_local_sanity` control pass, as long as the canonical machine states and persisted state transitions below remain unchanged.
+
+- Dispatch the `metaopt-materialization-worker` custom agent as `strong_coder` subagents in isolated worktrees
 - Count these coders against `auxiliary_slots` with `mode = materialization`
 - The orchestrator performs clean, mechanical integration (clean merges only) immediately after the materialization subagent finishes
-- If mechanical integration fails due to conflicts (i.e. patches do not merge cleanly), the orchestrator dispatches `metaopt-experiment-materialization` in `conflict_resolution` mode to resolve them. This conflict-resolution dispatch is still part of the `MATERIALIZE_CHANGESET` state; the machine advances to `LOCAL_SANITY` only after successful integration.
+- If mechanical integration fails due to conflicts (i.e. patches do not merge cleanly), the orchestrator dispatches `metaopt-materialization-worker` in `conflict_resolution` mode to resolve them. This conflict-resolution dispatch is still part of the `MATERIALIZE_CHANGESET` state; the machine advances to `LOCAL_SANITY` only after successful integration.
 - Package an immutable code artifact under `.ml-metaopt/artifacts/code/`
 - Package the manifest-linked data artifact inputs under `.ml-metaopt/artifacts/data/`
 - Persist one unified diff patch artifact for each code-modifying worker under `.ml-metaopt/artifacts/patches/`
@@ -97,22 +105,25 @@
 
 - Run `sanity.command`
 - Enforce `sanity.max_duration_seconds`
+- The orchestrator may only stage raw sanity outputs; semantic interpretation and retry routing may be delegated to a local-execution control pass
 - Required checks:
   - config loads
   - fast path executes
   - temporal leakage passes when required
 - Allow a maximum 3 remediation attempts for the selected experiment
 - If sanity fails and `sanity_attempts < 3`:
-  - Dispatch `metaopt-sanity-diagnosis` as a `strong_reasoner` subagent with the failure output, experiment design, patch summary, and prior diagnosis history from `state.selected_experiment.diagnosis_history`
+  - Dispatch the `metaopt-diagnosis-worker` custom agent as a `strong_reasoner` subagent with the failure output, experiment design, patch summary, and prior diagnosis history from `state.selected_experiment.diagnosis_history`
   - Persist the diagnosis record to `state.selected_experiment.diagnosis_history`
   - Increment `state.selected_experiment.sanity_attempts`
   - Route on `fix_recommendation.action`:
-    - `"fix"`: dispatch `metaopt-experiment-materialization` in remediation mode with `code_guidance` from the diagnosis, the original experiment design, and the current patch state. The materialization worker produces an updated unified diff patch. Rerun `LOCAL_SANITY` after integration.
+    - `"fix"`: dispatch `metaopt-materialization-worker` in remediation mode with `code_guidance` from the diagnosis, the original experiment design, and the current patch state. The materialization worker produces an updated unified diff patch. Rerun `LOCAL_SANITY` after integration.
     - `"adjust_config"`: transition to `BLOCKED_CONFIG` with `next_action` set to the `config_guidance` from the diagnosis. The orchestrator cannot autonomously modify campaign configuration.
     - `"abandon"`: transition to `FAILED` with the diagnosis `root_cause` as the terminal error
 - If `sanity_attempts >= 3`, transition to `FAILED` regardless of diagnosis output
 
 ### `ENQUEUE_REMOTE_BATCH`
+
+- Implementation note: `ENQUEUE_REMOTE_BATCH`, `WAIT_FOR_REMOTE_BATCH`, and `ANALYZE_RESULTS` may be operationally split into a `plan_remote_batch` control pass, an orchestrator executor phase, a `gate_remote_batch` control pass, and an `analyze_remote_results` control pass, as long as the canonical machine states and persisted transitions below remain unchanged.
 
 - Call `remote_queue.enqueue_command`
 - Pass exactly one immutable batch manifest
@@ -123,11 +134,12 @@
 
 - Continue background-slot work while the batch runs
 - Poll only `remote_queue.status_command`
+- The orchestrator may only stage raw backend status and results payloads; semantic interpretation and remote routing may be delegated to a remote-execution control pass
 - Never inspect raw cluster jobs directly from this skill
 - If `stop_conditions.max_wallclock_hours` is exceeded, set `next_action = "finish current batch and stop"`, stop launching new work, and continue polling the current batch to completion
 - If all slots are unexpectedly idle during this state, transition through `MAINTAIN_BACKGROUND_POOL` to restore the declared slot set before doing any lower-priority work
 - If `status_command` returns `status = "failed"`:
-  - Dispatch `metaopt-sanity-diagnosis` as a `strong_reasoner` subagent with the remote failure context (`classification`, `message`, `returncode` from the backend response)
+  - Dispatch the `metaopt-diagnosis-worker` custom agent as a `strong_reasoner` subagent with the remote failure context (`classification`, `message`, `returncode` from the backend response)
   - Persist the diagnosis record to `state.selected_experiment.diagnosis_history`
   - Route on `fix_recommendation.action`:
     - `"fix"`: the failure was caused by experiment code — transition to `FAILED` (remote failures cannot be remediated locally without re-enqueueing)
@@ -139,21 +151,25 @@
 ### `ANALYZE_RESULTS`
 
 - Call `remote_queue.results_command`
-- Dispatch `metaopt-results-analysis` as one `strong_reasoner` subagent to compare the result against the aggregate baseline and extract learnings
+- The orchestrator may stage raw completed-results payloads, but semantic result judgment and baseline updates may be delegated to a remote-execution control pass
+- Dispatch the `metaopt-analysis-worker` custom agent as one `strong_reasoner` subagent to compare the result against the aggregate baseline and extract learnings
 - If the aggregate result clears `objective.improvement_threshold` in the configured direction, update the baseline and reset `no_improve_iterations` to `0`
 - Otherwise leave the baseline unchanged and increment `no_improve_iterations`
 - Update completed experiments and learnings in both cases
 
 ### `ROLL_ITERATION`
 
-- Dispatch `metaopt-proposal-rollover` as one `strong_reasoner` subagent (inline dispatch — no slot consumed)
+- Implementation note: `ROLL_ITERATION` and `QUIESCE_SLOTS` may be operationally split into a `plan_roll_iteration` control pass, an orchestrator executor phase, a `gate_roll_iteration` control pass, and a `quiesce_slots` control pass, as long as the canonical machine states and persisted transitions below remain unchanged.
+
+- Dispatch the `metaopt-rollover-worker` custom agent as one `strong_reasoner` subagent (inline dispatch — no slot consumed)
 - Input: `next_proposals`, fresh `key_learnings`, completed experiment results, and updated baseline
 - Output: filtered carry-over proposals with duplicates, invalidated ideas, and overlaps removed plus short rationale for each removal
 - Move the filtered survivors into `current_proposals`
 - Clear `next_proposals`
-- Increment iteration counters
+- Increment iteration counters only when the campaign will continue into another iteration; if a stop condition is already met, keep `current_iteration` equal to the just-completed iteration number
 - Clear `selected_experiment` (set to `null`) after persisting the completed experiment record to `completed_experiments`
 - Check stop conditions using the aggregate metric
+- Stop when any configured stop condition is met: `target_metric`, `max_iterations`, or `max_no_improve_iterations`
 - Emit the iteration report using the contract in `references/contracts.md`
 - Transition to `QUIESCE_SLOTS` regardless of whether the campaign continues or stops
 
@@ -162,6 +178,7 @@
 - Stop launching new work
 - Persist any finished slot output before changing slot ownership
 - Wait up to a 60-second drain window for in-flight slots to complete
+- The orchestrator may only stage raw drain/cancel outcomes; semantic continue-vs-complete routing may be delegated to an iteration-close control pass
 - cancel leftovers after the 60-second drain window
 - record cancellation reasons in state and append any mechanical patch-application outcome to `apply_results` in `local_changeset`
 - If the campaign continues, set `machine_state = MAINTAIN_BACKGROUND_POOL`, keep `status = RUNNING`, and re-invoke `ml-metaoptimization`

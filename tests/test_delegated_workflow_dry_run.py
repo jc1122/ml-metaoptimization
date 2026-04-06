@@ -1,0 +1,779 @@
+from __future__ import annotations
+
+import json
+import subprocess
+import tempfile
+import unittest
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+LOAD_SCRIPT = ROOT / "scripts" / "load_campaign_handoff.py"
+HYDRATE_SCRIPT = ROOT / "scripts" / "hydrate_state_handoff.py"
+BACKGROUND_SCRIPT = ROOT / "scripts" / "background_control_handoff.py"
+SELECT_SCRIPT = ROOT / "scripts" / "select_and_design_handoff.py"
+LOCAL_SCRIPT = ROOT / "scripts" / "local_execution_control_handoff.py"
+REMOTE_SCRIPT = ROOT / "scripts" / "remote_execution_control_handoff.py"
+ITERATION_SCRIPT = ROOT / "scripts" / "iteration_close_control_handoff.py"
+
+
+class DelegatedWorkflowDryRunTests(unittest.TestCase):
+    def _write_campaign(self, tempdir: Path) -> Path:
+        campaign_path = tempdir / "ml_metaopt_campaign.yaml"
+        payload = {
+            "version": 3,
+            "campaign_id": "market-forecast-v3",
+            "goal": "Improve out-of-sample forecast quality without temporal leakage.",
+            "objective": {
+                "metric": "rmse",
+                "direction": "minimize",
+                "aggregation": {"method": "weighted_mean", "weights": {"ds_main": 0.7, "ds_holdout": 0.3}},
+                "improvement_threshold": 0.0005,
+            },
+            "datasets": [
+                {
+                    "id": "ds_main",
+                    "local_path": "data/main.parquet",
+                    "role": "train_eval",
+                    "fingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                },
+                {
+                    "id": "ds_holdout",
+                    "local_path": "data/holdout.parquet",
+                    "role": "eval_only",
+                    "fingerprint": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+                },
+            ],
+            "baseline": {
+                "aggregate": 0.1284,
+                "by_dataset": {"ds_main": 0.1269, "ds_holdout": 0.1320},
+            },
+            "stop_conditions": {
+                "max_iterations": 20,
+                "max_no_improve_iterations": 4,
+                "target_metric": 0.1200,
+                "max_wallclock_hours": 72,
+            },
+            "proposal_policy": {
+                "current_target": 3,
+                "current_floor": 2,
+                "next_cap": 5,
+                "distinctness_rule": "non_overlapping",
+            },
+            "dispatch_policy": {"background_slots": 2, "auxiliary_slots": 2},
+            "sanity": {
+                "command": "python3 scripts/local_sanity.py --fast",
+                "max_duration_seconds": 60,
+                "require_zero_temporal_leakage": True,
+                "require_config_load": True,
+            },
+            "artifacts": {
+                "code_roots": ["."],
+                "data_roots": ["data"],
+                "exclude": [".git", ".venv", "logs", ".ml-metaopt"],
+            },
+            "remote_queue": {
+                "backend": "ray-hetzner",
+                "retry_policy": {"max_attempts": 2},
+                "enqueue_command": "python3 /opt/ray-hetzner/metaopt/enqueue_batch.py --manifest",
+                "status_command": "python3 /opt/ray-hetzner/metaopt/get_batch_status.py --batch-id",
+                "results_command": "python3 /opt/ray-hetzner/metaopt/fetch_batch_results.py --batch-id",
+            },
+            "execution": {
+                "runner_type": "ray_queue_runner",
+                "entrypoint": "python3 /srv/metaopt/project/scripts/ray_runner.py",
+                "trial_budget": {"kind": "fixed_trials", "value": 128},
+                "search_strategy": {"kind": "optuna_tpe", "seed": 1337},
+            },
+        }
+        campaign_path.write_text(json.dumps(payload), encoding="utf-8")
+        return campaign_path
+
+    def _write_skills_manifest(self, tempdir: Path) -> Path:
+        manifest_path = tempdir / "agents" / "worker-skills.json"
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "skills": [
+                {
+                    "name": "metaopt-ideation-worker",
+                    "lane": "ideation",
+                    "worker_kind": "custom_agent",
+                    "worker_ref": "metaopt-ideation-worker",
+                    "classification": "required",
+                    "probe_paths": [str(ROOT / ".github" / "agents" / "metaopt-ideation-worker.agent.md")],
+                },
+                {
+                    "name": "metaopt-selection-worker",
+                    "lane": "selection",
+                    "worker_kind": "custom_agent",
+                    "worker_ref": "metaopt-selection-worker",
+                    "classification": "required",
+                    "probe_paths": [str(ROOT / ".github" / "agents" / "metaopt-selection-worker.agent.md")],
+                },
+                {
+                    "name": "metaopt-design-worker",
+                    "lane": "design",
+                    "worker_kind": "custom_agent",
+                    "worker_ref": "metaopt-design-worker",
+                    "classification": "required",
+                    "probe_paths": [str(ROOT / ".github" / "agents" / "metaopt-design-worker.agent.md")],
+                },
+                {
+                    "name": "metaopt-materialization-worker",
+                    "lane": "materialization",
+                    "worker_kind": "custom_agent",
+                    "worker_ref": "metaopt-materialization-worker",
+                    "classification": "required",
+                    "probe_paths": [str(ROOT / ".github" / "agents" / "metaopt-materialization-worker.agent.md")],
+                },
+                {
+                    "name": "metaopt-diagnosis-worker",
+                    "lane": "diagnosis",
+                    "worker_kind": "custom_agent",
+                    "worker_ref": "metaopt-diagnosis-worker",
+                    "classification": "required",
+                    "probe_paths": [str(ROOT / ".github" / "agents" / "metaopt-diagnosis-worker.agent.md")],
+                },
+                {
+                    "name": "metaopt-analysis-worker",
+                    "lane": "analysis",
+                    "worker_kind": "custom_agent",
+                    "worker_ref": "metaopt-analysis-worker",
+                    "classification": "required",
+                    "probe_paths": [str(ROOT / ".github" / "agents" / "metaopt-analysis-worker.agent.md")],
+                },
+                {
+                    "name": "metaopt-rollover-worker",
+                    "lane": "rollover",
+                    "worker_kind": "custom_agent",
+                    "worker_ref": "metaopt-rollover-worker",
+                    "classification": "degradable",
+                    "degraded_lane": "rollover",
+                    "probe_paths": [str(ROOT / ".github" / "agents" / "metaopt-rollover-worker.agent.md")],
+                },
+                {
+                    "name": "repo-audit-refactor-optimize",
+                    "lane": "maintenance",
+                    "worker_kind": "skill",
+                    "worker_ref": "repo-audit-refactor-optimize",
+                    "classification": "degradable",
+                    "degraded_lane": "maintenance",
+                    "probe_paths": ["/home/jakub/.agents/skills/repo-audit-refactor-optimize/SKILL.md"],
+                },
+            ]
+        }
+        manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+        return manifest_path
+
+    def _run(self, cmd: list[str], output_path: Path) -> dict:
+        completed = subprocess.run(
+            cmd,
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            msg=f"stdout:\n{completed.stdout}\n\nstderr:\n{completed.stderr}",
+        )
+        payload = json.loads(output_path.read_text(encoding="utf-8"))
+        self.assertEqual(payload, json.loads(completed.stdout))
+        return payload
+
+    def test_full_delegated_workflow_reaches_complete_via_staged_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            tempdir = Path(tempdir_str)
+            campaign_path = self._write_campaign(tempdir)
+            skills_manifest = self._write_skills_manifest(tempdir)
+            state_path = tempdir / ".ml-metaopt" / "state.json"
+            handoffs_dir = tempdir / ".ml-metaopt" / "handoffs"
+            tasks_dir = tempdir / ".ml-metaopt" / "tasks"
+            worker_results_dir = tempdir / ".ml-metaopt" / "worker-results"
+            slot_events_dir = tempdir / ".ml-metaopt" / "slot-events"
+            executor_events_dir = tempdir / ".ml-metaopt" / "executor-events"
+            agents_path = tempdir / "AGENTS.md"
+            handoffs_dir.mkdir(parents=True, exist_ok=True)
+            tasks_dir.mkdir(parents=True, exist_ok=True)
+            worker_results_dir.mkdir(parents=True, exist_ok=True)
+            slot_events_dir.mkdir(parents=True, exist_ok=True)
+            executor_events_dir.mkdir(parents=True, exist_ok=True)
+
+            load_output = handoffs_dir / "load_campaign.latest.json"
+            load_payload = self._run(
+                [
+                    "python3",
+                    str(LOAD_SCRIPT),
+                    "--campaign-path",
+                    str(campaign_path),
+                    "--state-path",
+                    str(state_path),
+                    "--output",
+                    str(load_output),
+                ],
+                load_output,
+            )
+            self.assertEqual(load_payload["outcome"], "ok")
+
+            hydrate_output = handoffs_dir / "hydrate_state.latest.json"
+            hydrate_payload = self._run(
+                [
+                    "python3",
+                    str(HYDRATE_SCRIPT),
+                    "--load-handoff",
+                    str(load_output),
+                    "--state-path",
+                    str(state_path),
+                    "--agents-path",
+                    str(agents_path),
+                    "--skills-manifest",
+                    str(skills_manifest),
+                    "--output",
+                    str(hydrate_output),
+                ],
+                hydrate_output,
+            )
+            self.assertEqual(hydrate_payload["outcome"], "initialized")
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(state["machine_state"], "MAINTAIN_BACKGROUND_POOL")
+
+            bg_plan_output = handoffs_dir / "plan_background_work.latest.json"
+            bg_plan = self._run(
+                [
+                    "python3",
+                    str(BACKGROUND_SCRIPT),
+                    "--mode",
+                    "plan_background_work",
+                    "--load-handoff",
+                    str(load_output),
+                    "--state-path",
+                    str(state_path),
+                    "--tasks-dir",
+                    str(tasks_dir),
+                    "--worker-results-dir",
+                    str(worker_results_dir),
+                    "--slot-events-dir",
+                    str(slot_events_dir),
+                    "--output",
+                    str(bg_plan_output),
+                ],
+                bg_plan_output,
+            )
+            self.assertEqual(bg_plan["phase"], "PLAN_BACKGROUND_WORK")
+            self.assertEqual(len(bg_plan["launch_requests"]), 2)
+
+            ideation_candidates = [
+                {
+                    "title": "Tighten rolling split",
+                    "rationale": "Lower leakage risk",
+                    "expected_impact": {"direction": "improve", "magnitude": "medium"},
+                    "target_area": "validation",
+                },
+                {
+                    "title": "Add lag features",
+                    "rationale": "Improve temporal signal extraction",
+                    "expected_impact": {"direction": "improve", "magnitude": "small"},
+                    "target_area": "features",
+                },
+            ]
+            for request in bg_plan["launch_requests"]:
+                slot_id = request["slot_id"]
+                (slot_events_dir / f"{slot_id}.json").write_text(
+                    json.dumps({"slot_id": slot_id, "status": "completed", "result_file": f"{slot_id}.json"}),
+                    encoding="utf-8",
+                )
+                (worker_results_dir / f"{slot_id}.json").write_text(
+                    json.dumps(
+                        {
+                            "slot_id": slot_id,
+                            "mode": "ideation",
+                            "status": "completed",
+                            "summary": "two candidates",
+                            "proposal_candidates": ideation_candidates,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            bg_gate_output = handoffs_dir / "gate_background_work.latest.json"
+            bg_gate = self._run(
+                [
+                    "python3",
+                    str(BACKGROUND_SCRIPT),
+                    "--mode",
+                    "gate_background_work",
+                    "--load-handoff",
+                    str(load_output),
+                    "--state-path",
+                    str(state_path),
+                    "--tasks-dir",
+                    str(tasks_dir),
+                    "--worker-results-dir",
+                    str(worker_results_dir),
+                    "--slot-events-dir",
+                    str(slot_events_dir),
+                    "--output",
+                    str(bg_gate_output),
+                ],
+                bg_gate_output,
+            )
+            self.assertEqual(bg_gate["recommended_next_machine_state"], "SELECT_EXPERIMENT")
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(state["machine_state"], "MAINTAIN_BACKGROUND_POOL")
+            self.assertEqual(state["next_action"], "select experiment")
+            self.assertGreaterEqual(len(state["current_proposals"]), 3)
+
+            select_plan_output = handoffs_dir / "select_and_design.latest.json"
+            select_plan = self._run(
+                [
+                    "python3",
+                    str(SELECT_SCRIPT),
+                    "--mode",
+                    "plan_select_experiment",
+                    "--load-handoff",
+                    str(load_output),
+                    "--state-path",
+                    str(state_path),
+                    "--tasks-dir",
+                    str(tasks_dir),
+                    "--worker-results-dir",
+                    str(worker_results_dir),
+                    "--output",
+                    str(select_plan_output),
+                ],
+                select_plan_output,
+            )
+            self.assertEqual(select_plan["worker_ref"], "metaopt-selection-worker")
+            selected_proposal = json.loads(state_path.read_text(encoding="utf-8"))["current_proposals"][0]
+            (worker_results_dir / "select-experiment-iter-1.json").write_text(
+                json.dumps(
+                    {
+                        "winning_proposal": selected_proposal,
+                        "ranking_rationale": "Validation-focused work is the best first improvement.",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            design_plan = self._run(
+                [
+                    "python3",
+                    str(SELECT_SCRIPT),
+                    "--mode",
+                    "gate_select_and_plan_design",
+                    "--load-handoff",
+                    str(load_output),
+                    "--state-path",
+                    str(state_path),
+                    "--tasks-dir",
+                    str(tasks_dir),
+                    "--worker-results-dir",
+                    str(worker_results_dir),
+                    "--output",
+                    str(select_plan_output),
+                ],
+                select_plan_output,
+            )
+            self.assertEqual(design_plan["worker_ref"], "metaopt-design-worker")
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(state["machine_state"], "DESIGN_EXPERIMENT")
+            self.assertIsNone(state["selected_experiment"]["design"])
+
+            (worker_results_dir / "design-experiment-iter-1.json").write_text(
+                json.dumps(
+                    {
+                        "proposal_id": selected_proposal["proposal_id"],
+                        "experiment_name": "tighten-rolling-validation-v1",
+                        "description": "Tighten validation windows and leakage checks before feature changes.",
+                        "code_changes": [{"path": "src/train.py", "intent": "strengthen validation split rules"}],
+                        "search_space": {"validation_gap_days": [1, 3, 5]},
+                        "dataset_plan": [{"dataset_id": "ds_main", "role": "train_eval"}],
+                        "artifact_expectations": ["updated validation metrics", "leakage audit logs"],
+                        "success_criteria": {"metric": "rmse", "target": 0.1279},
+                        "execution_assumptions": {"runner": "ray_queue_runner"},
+                        "risks": ["slower iteration cadence"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            select_finalize = self._run(
+                [
+                    "python3",
+                    str(SELECT_SCRIPT),
+                    "--mode",
+                    "finalize_select_design",
+                    "--load-handoff",
+                    str(load_output),
+                    "--state-path",
+                    str(state_path),
+                    "--tasks-dir",
+                    str(tasks_dir),
+                    "--worker-results-dir",
+                    str(worker_results_dir),
+                    "--output",
+                    str(select_plan_output),
+                ],
+                select_plan_output,
+            )
+            self.assertEqual(select_finalize["recommended_next_machine_state"], "MATERIALIZE_CHANGESET")
+
+            local_output = handoffs_dir / "local_execution.latest.json"
+            local_plan = self._run(
+                [
+                    "python3",
+                    str(LOCAL_SCRIPT),
+                    "--mode",
+                    "plan_local_changeset",
+                    "--load-handoff",
+                    str(load_output),
+                    "--state-path",
+                    str(state_path),
+                    "--tasks-dir",
+                    str(tasks_dir),
+                    "--worker-results-dir",
+                    str(worker_results_dir),
+                    "--executor-events-dir",
+                    str(executor_events_dir),
+                    "--output",
+                    str(local_output),
+                ],
+                local_output,
+            )
+            self.assertEqual(local_plan["worker_ref"], "metaopt-materialization-worker")
+            (worker_results_dir / "materialization-1.json").write_text(
+                json.dumps(
+                    {
+                        "status": "completed",
+                        "patch_artifacts": [
+                            {
+                                "producer_slot_id": "aux-1",
+                                "purpose": "candidate patch bundle",
+                                "patch_path": ".ml-metaopt/artifacts/patches/batch-20260407-0001/aux-1.patch",
+                                "target_worktree": ".ml-metaopt/worktrees/iter-1-materialization",
+                            }
+                        ],
+                        "verification_notes": ["pytest -q passed"],
+                        "summary": "materialized validation change",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (executor_events_dir / "local_changeset-1.json").write_text(
+                json.dumps(
+                    {
+                        "integration_worktree": ".ml-metaopt/worktrees/iter-1-materialization",
+                        "apply_results": [
+                            {
+                                "patch_path": ".ml-metaopt/artifacts/patches/batch-20260407-0001/aux-1.patch",
+                                "status": "applied",
+                                "error": None,
+                            }
+                        ],
+                        "code_artifact_uri": ".ml-metaopt/artifacts/code/batch-20260407-0001.tar.gz",
+                        "data_manifest_uri": ".ml-metaopt/artifacts/data/batch-20260407-0001.json",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (executor_events_dir / "sanity-1.json").write_text(
+                json.dumps({"status": "passed", "exit_code": 0, "stdout": "ok", "stderr": "", "duration_seconds": 12}),
+                encoding="utf-8",
+            )
+            local_gate = self._run(
+                [
+                    "python3",
+                    str(LOCAL_SCRIPT),
+                    "--mode",
+                    "gate_local_sanity",
+                    "--load-handoff",
+                    str(load_output),
+                    "--state-path",
+                    str(state_path),
+                    "--tasks-dir",
+                    str(tasks_dir),
+                    "--worker-results-dir",
+                    str(worker_results_dir),
+                    "--executor-events-dir",
+                    str(executor_events_dir),
+                    "--output",
+                    str(local_output),
+                ],
+                local_output,
+            )
+            self.assertEqual(local_gate["recommended_next_machine_state"], "ENQUEUE_REMOTE_BATCH")
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(state["machine_state"], "ENQUEUE_REMOTE_BATCH")
+            self.assertIsInstance(state["local_changeset"], dict)
+
+            today = datetime.now(timezone.utc).strftime("%Y%m%d")
+            batch_id = f"batch-{today}-0001"
+            remote_output = handoffs_dir / "remote_execution.latest.json"
+            remote_plan = self._run(
+                [
+                    "python3",
+                    str(REMOTE_SCRIPT),
+                    "--mode",
+                    "plan_remote_batch",
+                    "--load-handoff",
+                    str(load_output),
+                    "--state-path",
+                    str(state_path),
+                    "--tasks-dir",
+                    str(tasks_dir),
+                    "--worker-results-dir",
+                    str(worker_results_dir),
+                    "--executor-events-dir",
+                    str(executor_events_dir),
+                    "--output",
+                    str(remote_output),
+                ],
+                remote_output,
+            )
+            self.assertEqual(remote_plan["batch_id"], batch_id)
+            (executor_events_dir / f"enqueue-{batch_id}.json").write_text(
+                json.dumps({"batch_id": batch_id, "queue_ref": "ray-queue-123", "status": "queued"}),
+                encoding="utf-8",
+            )
+            remote_gate = self._run(
+                [
+                    "python3",
+                    str(REMOTE_SCRIPT),
+                    "--mode",
+                    "gate_remote_batch",
+                    "--load-handoff",
+                    str(load_output),
+                    "--state-path",
+                    str(state_path),
+                    "--tasks-dir",
+                    str(tasks_dir),
+                    "--worker-results-dir",
+                    str(worker_results_dir),
+                    "--executor-events-dir",
+                    str(executor_events_dir),
+                    "--output",
+                    str(remote_output),
+                ],
+                remote_output,
+            )
+            self.assertEqual(remote_gate["recommended_next_machine_state"], "WAIT_FOR_REMOTE_BATCH")
+            (executor_events_dir / f"remote-status-{batch_id}.json").write_text(
+                json.dumps(
+                    {
+                        "batch_id": batch_id,
+                        "status": "completed",
+                        "timestamps": {"queued_at": "2026-04-07T10:00:00Z", "started_at": "2026-04-07T10:02:00Z"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (executor_events_dir / f"remote-results-{batch_id}.json").write_text(
+                json.dumps(
+                    {
+                        "batch_id": batch_id,
+                        "status": "completed",
+                        "best_aggregate_result": {"metric": "rmse", "value": 0.1198},
+                        "per_dataset": {"ds_main": 0.1191, "ds_holdout": 0.1214},
+                        "artifact_locations": {"code": ".ml-metaopt/artifacts/code/out.tar.gz", "data_manifest": ".ml-metaopt/artifacts/data/out.json"},
+                        "logs_location": ".ml-metaopt/artifacts/logs/batch.log",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            remote_analysis_request = self._run(
+                [
+                    "python3",
+                    str(REMOTE_SCRIPT),
+                    "--mode",
+                    "gate_remote_batch",
+                    "--load-handoff",
+                    str(load_output),
+                    "--state-path",
+                    str(state_path),
+                    "--tasks-dir",
+                    str(tasks_dir),
+                    "--worker-results-dir",
+                    str(worker_results_dir),
+                    "--executor-events-dir",
+                    str(executor_events_dir),
+                    "--output",
+                    str(remote_output),
+                ],
+                remote_output,
+            )
+            self.assertEqual(remote_analysis_request["worker_ref"], "metaopt-analysis-worker")
+            (worker_results_dir / f"remote-analysis-{batch_id}.json").write_text(
+                json.dumps(
+                    {
+                        "judgment": "improvement",
+                        "new_aggregate": 0.1198,
+                        "delta": -0.0086,
+                        "learnings": ["Validation-first changes beat feature expansion in early iterations."],
+                        "invalidations": [{"proposal_id": selected_proposal["proposal_id"], "reason": "already executed"}],
+                        "carry_over_candidates": [{"title": "Try stricter cutoff", "rationale": "follow-on validation refinement"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            analyze_ready = self._run(
+                [
+                    "python3",
+                    str(REMOTE_SCRIPT),
+                    "--mode",
+                    "gate_remote_batch",
+                    "--load-handoff",
+                    str(load_output),
+                    "--state-path",
+                    str(state_path),
+                    "--tasks-dir",
+                    str(tasks_dir),
+                    "--worker-results-dir",
+                    str(worker_results_dir),
+                    "--executor-events-dir",
+                    str(executor_events_dir),
+                    "--output",
+                    str(remote_output),
+                ],
+                remote_output,
+            )
+            self.assertEqual(analyze_ready["recommended_next_machine_state"], "ANALYZE_RESULTS")
+            analyzed = self._run(
+                [
+                    "python3",
+                    str(REMOTE_SCRIPT),
+                    "--mode",
+                    "analyze_remote_results",
+                    "--load-handoff",
+                    str(load_output),
+                    "--state-path",
+                    str(state_path),
+                    "--tasks-dir",
+                    str(tasks_dir),
+                    "--worker-results-dir",
+                    str(worker_results_dir),
+                    "--executor-events-dir",
+                    str(executor_events_dir),
+                    "--output",
+                    str(remote_output),
+                ],
+                remote_output,
+            )
+            self.assertEqual(analyzed["recommended_next_machine_state"], "ROLL_ITERATION")
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(state["baseline"]["aggregate"], 0.1198)
+            self.assertEqual(state["machine_state"], "ROLL_ITERATION")
+
+            iteration_output = handoffs_dir / "iteration_close.latest.json"
+            roll_plan = self._run(
+                [
+                    "python3",
+                    str(ITERATION_SCRIPT),
+                    "--mode",
+                    "plan_roll_iteration",
+                    "--load-handoff",
+                    str(load_output),
+                    "--state-path",
+                    str(state_path),
+                    "--tasks-dir",
+                    str(tasks_dir),
+                    "--worker-results-dir",
+                    str(worker_results_dir),
+                    "--executor-events-dir",
+                    str(executor_events_dir),
+                    "--output",
+                    str(iteration_output),
+                ],
+                iteration_output,
+            )
+            self.assertEqual(roll_plan["worker_ref"], "metaopt-rollover-worker")
+            (worker_results_dir / "rollover-iter-1.json").write_text(
+                json.dumps(
+                    {
+                        "filtered_proposals": [],
+                        "merged_proposals": [
+                            {
+                                "title": "Try stricter cutoff",
+                                "rationale": "follow-on validation refinement",
+                                "expected_impact": {"direction": "improve", "magnitude": "small"},
+                                "target_area": "validation",
+                            }
+                        ],
+                        "needs_fresh_ideation": False,
+                        "summary": "target metric already met; no carry-over needed for continuation",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            roll_gate = self._run(
+                [
+                    "python3",
+                    str(ITERATION_SCRIPT),
+                    "--mode",
+                    "gate_roll_iteration",
+                    "--load-handoff",
+                    str(load_output),
+                    "--state-path",
+                    str(state_path),
+                    "--tasks-dir",
+                    str(tasks_dir),
+                    "--worker-results-dir",
+                    str(worker_results_dir),
+                    "--executor-events-dir",
+                    str(executor_events_dir),
+                    "--output",
+                    str(iteration_output),
+                ],
+                iteration_output,
+            )
+            self.assertFalse(roll_gate["continue_campaign"])
+            self.assertEqual(roll_gate["stop_reason"], "target_metric")
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(state["machine_state"], "QUIESCE_SLOTS")
+            self.assertIsNone(state["selected_experiment"])
+
+            (executor_events_dir / "quiesce-slots-iter-1.json").write_text(
+                json.dumps(
+                    {
+                        "finished_slots": [],
+                        "canceled_slots": [],
+                        "drain_duration_seconds": 4,
+                        "maintenance_apply_results": [],
+                        "continue_campaign": False,
+                        "stop_reason": "target_metric",
+                        "summary": "all slots drained and target metric satisfied",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            quiesced = self._run(
+                [
+                    "python3",
+                    str(ITERATION_SCRIPT),
+                    "--mode",
+                    "quiesce_slots",
+                    "--load-handoff",
+                    str(load_output),
+                    "--state-path",
+                    str(state_path),
+                    "--tasks-dir",
+                    str(tasks_dir),
+                    "--worker-results-dir",
+                    str(worker_results_dir),
+                    "--executor-events-dir",
+                    str(executor_events_dir),
+                    "--output",
+                    str(iteration_output),
+                ],
+                iteration_output,
+            )
+            self.assertEqual(quiesced["recommended_next_machine_state"], "COMPLETE")
+            final_state = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(final_state["status"], "COMPLETE")
+            self.assertEqual(final_state["machine_state"], "COMPLETE")
+            self.assertEqual(final_state["completed_experiments"][-1]["batch_id"], batch_id)
+
+
+if __name__ == "__main__":
+    unittest.main()

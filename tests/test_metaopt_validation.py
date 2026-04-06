@@ -49,6 +49,7 @@ PRE_SELECTION_MACHINE_STATES = {
     "WAIT_FOR_PROPOSAL_THRESHOLD",
     "SELECT_EXPERIMENT",
 }
+POST_SELECTION_CLEARED_MACHINE_STATES = {"ROLL_ITERATION", "QUIESCE_SLOTS", "COMPLETE"}
 PRE_MATERIALIZATION_MACHINE_STATES = PRE_SELECTION_MACHINE_STATES | {
     "DESIGN_EXPERIMENT",
     "MATERIALIZE_CHANGESET",
@@ -245,7 +246,7 @@ def _validate_state_payload(payload: dict) -> None:
 
     selected_experiment = payload["selected_experiment"]
     if selected_experiment is None:
-        assert payload["machine_state"] in PRE_SELECTION_MACHINE_STATES | {"BLOCKED_CONFIG"}, (
+        assert payload["machine_state"] in PRE_SELECTION_MACHINE_STATES | POST_SELECTION_CLEARED_MACHINE_STATES | {"BLOCKED_CONFIG"}, (
             "selected_experiment must be populated once SELECT_EXPERIMENT completes"
         )
     else:
@@ -814,6 +815,20 @@ class MetaoptValidationTests(unittest.TestCase):
         ):
             _validate_state_payload(missing_selected_experiment)
 
+        rollover_cleared_selected_experiment = copy.deepcopy(fixture)
+        rollover_cleared_selected_experiment["machine_state"] = "ROLL_ITERATION"
+        rollover_cleared_selected_experiment["selected_experiment"] = None
+        _validate_state_payload(rollover_cleared_selected_experiment)
+
+        quiesce_cleared_selected_experiment = copy.deepcopy(fixture)
+        quiesce_cleared_selected_experiment["machine_state"] = "QUIESCE_SLOTS"
+        quiesce_cleared_selected_experiment["selected_experiment"] = None
+        _validate_state_payload(quiesce_cleared_selected_experiment)
+
+        complete_cleared_selected_experiment = _read_json("tests/fixtures/state/complete.json")
+        complete_cleared_selected_experiment["selected_experiment"] = None
+        _validate_state_payload(complete_cleared_selected_experiment)
+
         missing_local_changeset = copy.deepcopy(fixture)
         missing_local_changeset["local_changeset"] = None
         with self.assertRaisesRegex(
@@ -976,11 +991,11 @@ class MetaoptValidationTests(unittest.TestCase):
             _validate_backend_payload("results", boolean_aggregate)
 
     # ------------------------------------------------------------------
-    # Cross-document worker skill consistency
+    # Cross-document worker target consistency
     # ------------------------------------------------------------------
 
     def test_worker_skill_names_consistent_across_all_reference_docs(self) -> None:
-        """Every worker skill in the Worker Skills table must appear in
+        """Every worker target in the Worker Skills table must appear in
         worker-lanes.md, state-machine.md, dispatch-guide.md, and dependencies.md."""
         skill_md = _read_text("SKILL.md")
         worker_lanes = _read_text("references/worker-lanes.md")
@@ -989,13 +1004,13 @@ class MetaoptValidationTests(unittest.TestCase):
         dependencies = _read_text("references/dependencies.md")
 
         expected_skills = [
-            "metaopt-experiment-ideation",
-            "metaopt-experiment-selection",
-            "metaopt-experiment-design",
-            "metaopt-experiment-materialization",
-            "metaopt-sanity-diagnosis",
-            "metaopt-results-analysis",
-            "metaopt-proposal-rollover",
+            "metaopt-ideation-worker",
+            "metaopt-selection-worker",
+            "metaopt-design-worker",
+            "metaopt-materialization-worker",
+            "metaopt-diagnosis-worker",
+            "metaopt-analysis-worker",
+            "metaopt-rollover-worker",
             "repo-audit-refactor-optimize",
         ]
 
@@ -1052,7 +1067,7 @@ class MetaoptValidationTests(unittest.TestCase):
         """worker-lanes.md must document the rollover lane."""
         worker_lanes = _read_text("references/worker-lanes.md")
         self.assertIn("## Rollover Lane", worker_lanes)
-        self.assertIn("metaopt-proposal-rollover", worker_lanes)
+        self.assertIn("metaopt-rollover-worker", worker_lanes)
 
     def test_contracts_documents_inline_dispatch(self) -> None:
         """contracts.md must distinguish slot-based from inline dispatch."""
@@ -1065,20 +1080,20 @@ class MetaoptValidationTests(unittest.TestCase):
         skill_md = _read_text("SKILL.md")
         self.assertIn("## Skill Availability", skill_md)
         for skill_name in [
-            "metaopt-experiment-materialization",
-            "metaopt-experiment-ideation",
-            "metaopt-proposal-rollover",
+            "metaopt-materialization-worker",
+            "metaopt-ideation-worker",
+            "metaopt-rollover-worker",
             "repo-audit-refactor-optimize",
         ]:
             self.assertIn(skill_name, skill_md.split("## Skill Availability")[1].split("## Common Mistakes")[0],
                           f"{skill_name} not in Skill Availability section")
 
     def test_delegation_list_includes_all_worker_skills(self) -> None:
-        """SKILL.md delegation list must reference ideation and rollover."""
+        """SKILL.md delegation list must reference the ideation worker and rollover."""
         skill_md = _read_text("SKILL.md")
         delegation_section = skill_md.split("The orchestrator must delegate:")[1].split("## Quick Flow")[0]
-        self.assertIn("metaopt-experiment-ideation", delegation_section)
-        self.assertIn("metaopt-proposal-rollover", delegation_section)
+        self.assertIn("metaopt-ideation-worker", delegation_section)
+        self.assertIn("metaopt-rollover-worker", delegation_section)
 
     def test_proposal_record_shape_documented(self) -> None:
         """contracts.md must define proposal record shape with orchestrator-owned and worker-provided fields."""
@@ -1113,14 +1128,14 @@ class MetaoptValidationTests(unittest.TestCase):
     def test_remediation_flow_documented(self) -> None:
         """state-machine.md must document the three-way diagnosis routing."""
         sm = _read_text("references/state-machine.md")
-        _require_pattern(self, sm, r'"fix".*metaopt-experiment-materialization.*remediation')
+        _require_pattern(self, sm, r'"fix".*metaopt-materialization-worker.*remediation')
         _require_pattern(self, sm, r'"adjust_config".*BLOCKED_CONFIG')
         _require_pattern(self, sm, r'"abandon".*FAILED')
 
     def test_remote_failure_diagnosis_path(self) -> None:
         """Remote failures must route through diagnosis before terminal transition."""
         sm = _read_text("references/state-machine.md")
-        _require_pattern(self, sm, r"WAIT_FOR_REMOTE_BATCH.*status.*failed.*metaopt-sanity-diagnosis")
+        _require_pattern(self, sm, r"WAIT_FOR_REMOTE_BATCH.*status.*failed.*metaopt-diagnosis-worker")
         guide = _read_text("references/dispatch-guide.md")
         _require_pattern(self, guide, r"WAIT_FOR_REMOTE_BATCH.*Remote Failure Diagnosis")
 
@@ -1151,11 +1166,11 @@ class MetaoptValidationTests(unittest.TestCase):
         _require_pattern(self, contracts, r"degraded_lanes.*array")
 
     def test_conflict_resolution_routes_through_materialization(self) -> None:
-        """Conflict resolution must route through metaopt-experiment-materialization, not unnamed strong_coder."""
+        """Conflict resolution must route through metaopt-materialization-worker, not unnamed strong_coder."""
         lanes = _read_text("references/worker-lanes.md")
-        _require_pattern(self, lanes, r"conflict.*metaopt-experiment-materialization")
+        _require_pattern(self, lanes, r"conflict.*metaopt-materialization-worker")
         skill_md = _read_text("SKILL.md")
-        _require_pattern(self, skill_md, r"conflict resolution.*metaopt-experiment-materialization")
+        _require_pattern(self, skill_md, r"conflict resolution.*metaopt-materialization-worker")
 
     def test_dispatch_guide_enrichment_step(self) -> None:
         """dispatch-guide.md ideation output must document proposal enrichment by orchestrator."""

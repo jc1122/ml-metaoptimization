@@ -113,14 +113,14 @@ The orchestrator may:
 - emit iteration reports
 
 The orchestrator must delegate:
-- proposal generation (via `metaopt-experiment-ideation`)
-- ranking or synthesizing proposals (via `metaopt-experiment-selection`)
-- experiment design (via `metaopt-experiment-design`)
-- semantic code changes (via `metaopt-experiment-materialization`)
-- debugging failing code or infra behavior (via `metaopt-sanity-diagnosis`)
-- result analysis (via `metaopt-results-analysis`)
-- iteration proposal filtering (via `metaopt-proposal-rollover`)
-- conflict resolution for non-trivial merges (via `metaopt-experiment-materialization` in conflict-resolution mode)
+- proposal generation (via `metaopt-ideation-worker`)
+- ranking or synthesizing proposals (via `metaopt-selection-worker`)
+- experiment design (via `metaopt-design-worker`)
+- semantic code changes (via `metaopt-materialization-worker`)
+- debugging failing code or infra behavior (via `metaopt-diagnosis-worker`)
+- result analysis (via `metaopt-analysis-worker`)
+- iteration proposal filtering (via `metaopt-rollover-worker`)
+- conflict resolution for non-trivial merges (via `metaopt-materialization-worker` in conflict-resolution mode)
 
 ## Quick Flow
 
@@ -194,64 +194,68 @@ Auxiliary workers handle:
 
 See `references/worker-lanes.md` for lane contracts, compatibility rules, and required subskill behavior.
 
-## Worker Skills
+## Worker Targets
 
-The orchestrator delegates semantic work to these leaf skills:
+The orchestrator delegates semantic work to these leaf worker targets:
 
 | Lane | Skill | Model Class |
 |------|-------|-------------|
-| ideation | `metaopt-experiment-ideation` | `general_worker` |
-| synthesis/selection | `metaopt-experiment-selection` | `strong_reasoner` |
-| design | `metaopt-experiment-design` | `strong_reasoner` |
-| materialization | `metaopt-experiment-materialization` | `strong_coder` |
-| diagnosis | `metaopt-sanity-diagnosis` | `strong_reasoner` |
-| analysis | `metaopt-results-analysis` | `strong_reasoner` |
-| rollover | `metaopt-proposal-rollover` | `strong_reasoner` |
+| ideation | `metaopt-ideation-worker` | `general_worker` |
+| synthesis/selection | `metaopt-selection-worker` | `strong_reasoner` |
+| design | `metaopt-design-worker` | `strong_reasoner` |
+| materialization | `metaopt-materialization-worker` | `strong_coder` |
+| diagnosis | `metaopt-diagnosis-worker` | `strong_reasoner` |
+| analysis | `metaopt-analysis-worker` | `strong_reasoner` |
+| rollover | `metaopt-rollover-worker` | `strong_reasoner` |
 | maintenance | `repo-audit-refactor-optimize` | `general_worker` or `strong_coder` |
 
-Each worker skill is a separate repository with its own SKILL.md contract. The orchestrator provides structured input via subagent prompts and consumes structured output.
+Each worker target has its own execution contract. The orchestrator provides structured input via subagent prompts and consumes structured output.
 
-Worker skill contracts reference `references/worker-lanes.md` and `references/contracts.md` in this repository as the authoritative source.
+Worker-target contracts reference `references/worker-lanes.md` and `references/contracts.md` in this repository as the authoritative source.
 
 ## Skill Availability
 
-The orchestrator verifies required worker skills during `HYDRATE_STATE`, before any dispatch occurs. Record the verification result in `state.runtime_capabilities`:
+This section documents worker-target availability while preserving the legacy heading used by existing validation and downstream readers.
+
+The orchestrator verifies required worker targets during `HYDRATE_STATE`, before any dispatch occurs. Record the verification result in `state.runtime_capabilities`:
 
 ```json
 {
   "runtime_capabilities": {
     "verified_at": "<ISO 8601 timestamp>",
-    "available_skills": ["metaopt-experiment-ideation", "..."],
+    "available_skills": ["metaopt-ideation-worker", "..."],
     "missing_skills": [],
     "degraded_lanes": []
   }
 }
 ```
 
-### Required Skills (block on missing)
+Compatibility note: the persisted state keys remain `available_skills` and `missing_skills`, even though they now track worker targets rather than only standalone skills.
 
-These skills are required for the state machine to proceed past their dispatch points. If any is missing, transition to `BLOCKED_CONFIG` with `next_action = "install missing skill: <skill_name>"`.
+### Required Worker Targets (block on missing)
 
-- `metaopt-experiment-ideation` — required for `MAINTAIN_BACKGROUND_POOL` ideation
-- `metaopt-experiment-selection` — required for `SELECT_EXPERIMENT`
-- `metaopt-experiment-design` — required for `DESIGN_EXPERIMENT`
-- `metaopt-experiment-materialization` — required for `MATERIALIZE_CHANGESET`
-- `metaopt-sanity-diagnosis` — required for `LOCAL_SANITY` failure handling
-- `metaopt-results-analysis` — required for `ANALYZE_RESULTS`
+These worker targets are required for the state machine to proceed past their dispatch points. If any is missing, transition to `BLOCKED_CONFIG` with `next_action = "install missing skill: <skill_name>"`.
 
-### Degradable Skills (record and continue)
+- `metaopt-ideation-worker` — required for `MAINTAIN_BACKGROUND_POOL` ideation
+- `metaopt-selection-worker` — required for `SELECT_EXPERIMENT`
+- `metaopt-design-worker` — required for `DESIGN_EXPERIMENT`
+- `metaopt-materialization-worker` — required for `MATERIALIZE_CHANGESET`
+- `metaopt-diagnosis-worker` — required for `LOCAL_SANITY` and remote failure diagnosis handling
+- `metaopt-analysis-worker` — required for `ANALYZE_RESULTS`
 
-These skills have defined fallback behavior. If missing, record the degradation in `state.runtime_capabilities.degraded_lanes` and continue.
+### Degradable Worker Targets (record and continue)
+
+These worker targets have defined fallback behavior. If missing, record the degradation in `state.runtime_capabilities.degraded_lanes` and continue.
 
 | Skill | Fallback Behavior |
 |-------|-------------------|
-| `metaopt-proposal-rollover` | Carry over all `next_proposals` without filtering. Set `needs_fresh_ideation = false`. Record degradation in `key_learnings`. |
+| `metaopt-rollover-worker` | Carry over all `next_proposals` without filtering. Set `needs_fresh_ideation = false`. Record degradation in `key_learnings`. |
 | `repo-audit-refactor-optimize` | Fall back to findings-only maintenance (already documented in Worker Policy). |
 
 ### Verification Timing
 
 - Run the full check once during `HYDRATE_STATE` on session start
-- If a previously-available skill becomes unavailable mid-session, the dispatch will fail — treat as a subagent failure and apply the subagent failure policy
+- If a previously-available worker target becomes unavailable mid-session, the dispatch will fail — treat as a subagent failure and apply the subagent failure policy
 - Do not re-check on every dispatch; the `HYDRATE_STATE` snapshot is authoritative for the session
 
 ## Common Mistakes

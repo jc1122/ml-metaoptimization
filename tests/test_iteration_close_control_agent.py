@@ -1,0 +1,426 @@
+from __future__ import annotations
+
+import json
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPT = ROOT / "scripts" / "iteration_close_control_handoff.py"
+AGENT_PROFILE = ROOT / ".github" / "agents" / "metaopt-iteration-close-control.agent.md"
+WORKER_PROFILE = ROOT / ".github" / "agents" / "metaopt-rollover-worker.agent.md"
+
+
+class IterationCloseControlAgentTests(unittest.TestCase):
+    def _write_load_handoff(self, tempdir: Path) -> Path:
+        handoff = tempdir / ".ml-metaopt" / "handoffs" / "load_campaign.latest.json"
+        handoff.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "schema_version": 1,
+            "producer": "metaopt-load-campaign",
+            "phase": "LOAD_CAMPAIGN",
+            "outcome": "ok",
+            "campaign_id": "market-forecast-v3",
+            "campaign_identity_hash": "sha256:f50928628873800b25a5dfb41f2fd6c93acfc210424953f53a5005e09379fa4c",
+            "runtime_config_hash": "sha256:6f59ca57fb3da56f815d7fb03f8be7335fa9d14344c49154308e9e65990e9ac6",
+            "proposal_policy": {
+                "current_target": 8,
+                "current_floor": 4,
+                "next_cap": 200,
+                "distinctness_rule": "non_overlapping",
+            },
+            "stop_conditions": {
+                "max_iterations": 20,
+                "max_no_improve_iterations": 4,
+                "target_metric": 0.1200,
+                "max_wallclock_hours": 72,
+            },
+            "warnings": [],
+            "summary": "ok",
+        }
+        handoff.write_text(json.dumps(payload), encoding="utf-8")
+        return handoff
+
+    def _base_state(self) -> dict:
+        return {
+            "version": 3,
+            "campaign_id": "market-forecast-v3",
+            "campaign_identity_hash": "sha256:f50928628873800b25a5dfb41f2fd6c93acfc210424953f53a5005e09379fa4c",
+            "runtime_config_hash": "sha256:6f59ca57fb3da56f815d7fb03f8be7335fa9d14344c49154308e9e65990e9ac6",
+            "status": "RUNNING",
+            "machine_state": "ROLL_ITERATION",
+            "current_iteration": 3,
+            "next_action": "roll iteration",
+            "objective_snapshot": {
+                "metric": "rmse",
+                "direction": "minimize",
+                "aggregation": {"method": "weighted_mean", "weights": {"ds_main": 0.7, "ds_holdout": 0.3}},
+                "improvement_threshold": 0.0005,
+            },
+            "proposal_cycle": {
+                "cycle_id": "iter-3-cycle-1",
+                "current_pool_frozen": True,
+                "ideation_rounds_by_slot": {"bg-1": 2, "bg-2": 2},
+                "shortfall_reason": "",
+            },
+            "active_slots": [
+                {
+                    "slot_id": "bg-1",
+                    "slot_class": "background",
+                    "mode": "maintenance",
+                    "model_class": "general_worker",
+                    "requested_model": "Auto",
+                    "resolved_model": "Auto",
+                    "status": "running",
+                    "attempt": 1,
+                    "task_summary": "Read-only maintenance audit while quiescing",
+                },
+                {
+                    "slot_id": "bg-2",
+                    "slot_class": "background",
+                    "mode": "maintenance",
+                    "model_class": "general_worker",
+                    "requested_model": "Auto",
+                    "resolved_model": "Auto",
+                    "status": "running",
+                    "attempt": 1,
+                    "task_summary": "Second maintenance lane",
+                },
+            ],
+            "current_proposals": [],
+            "next_proposals": [
+                {
+                    "proposal_id": "market-forecast-v3-p17",
+                    "source_slot_id": "bg-1",
+                    "creation_iteration": 3,
+                    "created_at": "2026-04-06T09:00:00Z",
+                    "title": "Try stricter validation cutoff",
+                    "rationale": "Reduce temporal leakage margin",
+                    "expected_impact": {"direction": "improve", "magnitude": "small"},
+                    "target_area": "validation",
+                }
+            ],
+            "selected_experiment": {
+                "proposal_id": "market-forecast-v3-p16",
+                "proposal_snapshot": {"proposal_id": "market-forecast-v3-p16", "title": "Tighten rolling validation"},
+                "selection_rationale": "best fit",
+                "sanity_attempts": 1,
+                "design": {"proposal_id": "market-forecast-v3-p16"},
+                "diagnosis_history": [],
+                "analysis_summary": {
+                    "judgment": "improvement",
+                    "new_aggregate": 0.1213,
+                    "delta": -0.0071,
+                    "learnings": ["Rolling validation tightened the aggregate metric."],
+                    "invalidations": [{"proposal_id": "market-forecast-v3-p9", "reason": "validation issue addressed"}],
+                    "carry_over_candidates": [{"title": "Try stricter cutoff", "rationale": "Follow-on validation refinement"}],
+                },
+            },
+            "local_changeset": {
+                "integration_worktree": ".ml-metaopt/worktrees/iter-3-materialization",
+                "patch_artifacts": [
+                    {
+                        "producer_slot_id": "bg-1",
+                        "purpose": "maintenance patch bundle",
+                        "patch_path": ".ml-metaopt/artifacts/patches/batch-20260406-0002/bg-1.patch",
+                        "target_worktree": ".ml-metaopt/worktrees/iter-3-materialization",
+                    }
+                ],
+                "apply_results": [
+                    {
+                        "patch_path": ".ml-metaopt/artifacts/patches/batch-20260406-0002/bg-1.patch",
+                        "status": "applied",
+                        "error": None,
+                    }
+                ],
+                "verification_notes": ["pytest passed"],
+                "code_artifact_uri": ".ml-metaopt/artifacts/code/batch-20260406-0002.tar.gz",
+                "data_manifest_uri": ".ml-metaopt/artifacts/data/batch-20260406-0002.json",
+            },
+            "remote_batches": [
+                {"batch_id": "batch-20260406-0002", "queue_ref": "ray-queue-123", "status": "completed"}
+            ],
+            "baseline": {
+                "aggregate": 0.1213,
+                "by_dataset": {"ds_main": 0.1208, "ds_holdout": 0.1225},
+            },
+            "completed_experiments": [
+                {"batch_id": "batch-20260401-0004", "aggregate": 0.1279},
+                {
+                    "batch_id": "batch-20260406-0002",
+                    "proposal_id": "market-forecast-v3-p16",
+                    "aggregate": 0.1213,
+                    "judgment": "improvement",
+                },
+            ],
+            "key_learnings": [
+                "Leakage checks must run in local sanity before enqueue",
+                "Rolling validation tightened the aggregate metric.",
+            ],
+            "no_improve_iterations": 0,
+            "runtime_capabilities": {
+                "verified_at": "2026-04-06T00:00:00Z",
+                "available_skills": ["metaopt-rollover-worker"],
+                "missing_skills": [],
+                "degraded_lanes": [],
+            },
+        }
+
+    def _run(
+        self,
+        tempdir: Path,
+        *,
+        mode: str,
+        state: dict,
+        worker_results: dict[str, dict] | None = None,
+        executor_events: dict[str, dict] | None = None,
+    ) -> tuple[dict, dict, Path]:
+        load_handoff = self._write_load_handoff(tempdir)
+        state_path = tempdir / ".ml-metaopt" / "state.json"
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+
+        tasks_dir = tempdir / ".ml-metaopt" / "tasks"
+        tasks_dir.mkdir(parents=True, exist_ok=True)
+        worker_results_dir = tempdir / ".ml-metaopt" / "worker-results"
+        worker_results_dir.mkdir(parents=True, exist_ok=True)
+        executor_events_dir = tempdir / ".ml-metaopt" / "executor-events"
+        executor_events_dir.mkdir(parents=True, exist_ok=True)
+        output_path = tempdir / ".ml-metaopt" / "handoffs" / f"{mode}.latest.json"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        for name, payload in (worker_results or {}).items():
+            (worker_results_dir / f"{name}.json").write_text(json.dumps(payload), encoding="utf-8")
+        for name, payload in (executor_events or {}).items():
+            (executor_events_dir / f"{name}.json").write_text(json.dumps(payload), encoding="utf-8")
+
+        completed = subprocess.run(
+            [
+                "python3",
+                str(SCRIPT),
+                "--mode",
+                mode,
+                "--load-handoff",
+                str(load_handoff),
+                "--state-path",
+                str(state_path),
+                "--tasks-dir",
+                str(tasks_dir),
+                "--worker-results-dir",
+                str(worker_results_dir),
+                "--executor-events-dir",
+                str(executor_events_dir),
+                "--output",
+                str(output_path),
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            msg=f"stdout:\n{completed.stdout}\n\nstderr:\n{completed.stderr}",
+        )
+        payload = json.loads(output_path.read_text(encoding="utf-8"))
+        self.assertEqual(payload, json.loads(completed.stdout))
+        updated_state = json.loads(state_path.read_text(encoding="utf-8"))
+        return payload, updated_state, tasks_dir
+
+    def test_plan_roll_iteration_emits_rollover_task(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            payload, updated_state, tasks_dir = self._run(
+                Path(tempdir_str),
+                mode="plan_roll_iteration",
+                state=self._base_state(),
+            )
+
+            self.assertEqual(payload["phase"], "PLAN_ROLL_ITERATION")
+            self.assertEqual(payload["outcome"], "planned")
+            self.assertEqual(payload["worker_kind"], "custom_agent")
+            self.assertEqual(payload["worker_ref"], "metaopt-rollover-worker")
+            self.assertEqual(payload["recommended_next_machine_state"], "ROLL_ITERATION")
+            task_file = tasks_dir / "rollover-iter-3.md"
+            self.assertTrue(task_file.exists())
+            task_text = task_file.read_text(encoding="utf-8")
+            self.assertIn("metaopt-rollover-worker", task_text)
+            self.assertIn("Objective Context", task_text)
+            self.assertIn("Proposal Context", task_text)
+            self.assertIn("Analysis Context", task_text)
+            self.assertIn("Stop Progress Context", task_text)
+            self.assertIn("Expected JSON fields", task_text)
+            self.assertEqual(updated_state["machine_state"], "ROLL_ITERATION")
+
+    def test_gate_roll_iteration_continuing_clears_selected_experiment_and_advances_to_quiesce(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            payload, updated_state, _ = self._run(
+                Path(tempdir_str),
+                mode="gate_roll_iteration",
+                state=self._base_state(),
+                worker_results={
+                    "rollover-iter-3": {
+                        "filtered_proposals": [
+                            {
+                                "proposal_id": "market-forecast-v3-p17",
+                                "source_slot_id": "bg-1",
+                                "creation_iteration": 3,
+                                "created_at": "2026-04-06T09:00:00Z",
+                                "title": "Try stricter validation cutoff",
+                                "rationale": "Reduce temporal leakage margin",
+                                "expected_impact": {"direction": "improve", "magnitude": "small"},
+                                "target_area": "validation",
+                            }
+                        ],
+                        "merged_proposals": [],
+                        "needs_fresh_ideation": False,
+                        "summary": {"carried_over": 1, "discarded": 0, "merged": 0, "final_pool_size": 1},
+                    }
+                },
+            )
+
+            self.assertEqual(payload["outcome"], "rollover_complete")
+            self.assertTrue(payload["continue_campaign"])
+            self.assertEqual(updated_state["machine_state"], "QUIESCE_SLOTS")
+            self.assertIsNone(updated_state["selected_experiment"])
+            self.assertEqual(updated_state["current_iteration"], 4)
+            self.assertEqual(len(updated_state["current_proposals"]), 1)
+            self.assertEqual(updated_state["next_proposals"], [])
+            self.assertIn("Iteration 3 Report", updated_state["last_iteration_report"])
+
+    def test_gate_roll_iteration_enriches_merged_proposals(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            payload, updated_state, _ = self._run(
+                Path(tempdir_str),
+                mode="gate_roll_iteration",
+                state=self._base_state(),
+                worker_results={
+                    "rollover-iter-3": {
+                        "filtered_proposals": [],
+                        "merged_proposals": [
+                            {
+                                "title": "Merge two validation ideas",
+                                "rationale": "Combine the strongest cutoff and split hygiene ideas",
+                                "expected_impact": {"direction": "improve", "magnitude": "medium"},
+                                "target_area": "validation",
+                            }
+                        ],
+                        "needs_fresh_ideation": False,
+                        "summary": {"carried_over": 0, "discarded": 1, "merged": 1, "final_pool_size": 1},
+                    }
+                },
+            )
+
+            merged = updated_state["current_proposals"][0]
+            self.assertEqual(payload["outcome"], "rollover_complete")
+            self.assertEqual(merged["source_slot_id"], "rollover")
+            self.assertEqual(merged["creation_iteration"], 4)
+            self.assertTrue(merged["proposal_id"].startswith("market-forecast-v3-p"))
+
+    def test_gate_roll_iteration_stops_on_target_metric_without_incrementing_iteration(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            state = self._base_state()
+            state["baseline"]["aggregate"] = 0.1199
+            payload, updated_state, _ = self._run(
+                Path(tempdir_str),
+                mode="gate_roll_iteration",
+                state=state,
+                worker_results={
+                    "rollover-iter-3": {
+                        "filtered_proposals": [],
+                        "merged_proposals": [],
+                        "needs_fresh_ideation": False,
+                        "summary": {"carried_over": 0, "discarded": 1, "merged": 0, "final_pool_size": 0},
+                    }
+                },
+            )
+
+            self.assertFalse(payload["continue_campaign"])
+            self.assertEqual(payload["stop_reason"], "target_metric")
+            self.assertEqual(updated_state["current_iteration"], 3)
+            self.assertEqual(updated_state["machine_state"], "QUIESCE_SLOTS")
+
+    def test_quiesce_slots_routes_continue_and_appends_apply_results(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            state = self._base_state()
+            state["machine_state"] = "QUIESCE_SLOTS"
+            state["current_iteration"] = 4
+            state["selected_experiment"] = None
+            payload, updated_state, _ = self._run(
+                Path(tempdir_str),
+                mode="quiesce_slots",
+                state=state,
+                executor_events={
+                    "quiesce-slots-iter-4": {
+                        "continue_campaign": True,
+                        "stop_reason": "",
+                        "finished_slots": ["bg-1"],
+                        "canceled_slots": [{"slot_id": "bg-2", "reason": "drain timeout"}],
+                        "drain_duration_seconds": 60,
+                        "maintenance_apply_results": [
+                            {
+                                "patch_path": ".ml-metaopt/artifacts/patches/maintenance/bg-1.patch",
+                                "status": "applied",
+                                "error": None,
+                            }
+                        ],
+                        "summary": "drained one slot and canceled one slot",
+                    }
+                },
+            )
+
+            self.assertEqual(payload["outcome"], "continue")
+            self.assertEqual(updated_state["machine_state"], "MAINTAIN_BACKGROUND_POOL")
+            self.assertEqual(updated_state["status"], "RUNNING")
+            self.assertEqual(updated_state["active_slots"], [])
+            self.assertEqual(updated_state["local_changeset"]["apply_results"][-1]["patch_path"], ".ml-metaopt/artifacts/patches/maintenance/bg-1.patch")
+
+    def test_quiesce_slots_routes_stop_to_complete(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            state = self._base_state()
+            state["machine_state"] = "QUIESCE_SLOTS"
+            state["selected_experiment"] = None
+            payload, updated_state, _ = self._run(
+                Path(tempdir_str),
+                mode="quiesce_slots",
+                state=state,
+                executor_events={
+                    "quiesce-slots-iter-3": {
+                        "continue_campaign": False,
+                        "stop_reason": "target_metric",
+                        "finished_slots": [],
+                        "canceled_slots": [],
+                        "drain_duration_seconds": 5,
+                        "maintenance_apply_results": [],
+                        "summary": "all work drained cleanly",
+                    }
+                },
+            )
+
+            self.assertEqual(payload["outcome"], "complete")
+            self.assertEqual(updated_state["status"], "COMPLETE")
+            self.assertEqual(updated_state["machine_state"], "COMPLETE")
+
+    def test_agent_profile_exists_and_declares_all_modes(self) -> None:
+        self.assertTrue(AGENT_PROFILE.exists(), f"missing {AGENT_PROFILE}")
+        content = AGENT_PROFILE.read_text(encoding="utf-8")
+        self.assertIn("name: metaopt-iteration-close-control", content)
+        self.assertIn("model: Auto", content)
+        self.assertIn("plan_roll_iteration", content)
+        self.assertIn("gate_roll_iteration", content)
+        self.assertIn("quiesce_slots", content)
+        self.assertIn("scripts/iteration_close_control_handoff.py", content)
+
+    def test_rollover_worker_profile_exists_and_is_leaf_only(self) -> None:
+        self.assertTrue(WORKER_PROFILE.exists(), f"missing {WORKER_PROFILE}")
+        content = WORKER_PROFILE.read_text(encoding="utf-8")
+        self.assertIn("name: metaopt-rollover-worker", content)
+        self.assertIn("model: Auto", content)
+        self.assertIn("Do not launch subagents.", content)
+        self.assertIn("Do not mutate `.ml-metaopt/state.json`.", content)
+
+
+if __name__ == "__main__":
+    unittest.main()

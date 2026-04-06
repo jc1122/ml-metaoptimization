@@ -12,6 +12,53 @@ Used for ideation, maintenance, synthesis, design, materialization, diagnosis, a
 ### Inline Dispatch
 Used for rollover. The orchestrator launches the subagent synchronously during a state transition. No slot entry is created in `active_slots`. The subagent returns before the orchestrator advances to the next state.
 
+## Prompt Envelope
+
+Every worker subagent prompt includes a standard envelope plus state-specific fields. The orchestrator builds the envelope by normalizing campaign and state data into a flat, unambiguous shape.
+
+### Standard Envelope (included in every dispatch)
+
+| Field | Type | Source | Description |
+|-------|------|--------|-------------|
+| `campaign_id` | string | `campaign.campaign_id` | Campaign identifier |
+| `current_iteration` | integer | `state.current_iteration` | Current iteration number |
+| `slot_id` | string | slot metadata | The slot ID dispatching this worker (omitted for inline dispatch) |
+| `attempt` | integer | slot metadata | Attempt number for this dispatch (1-indexed; omitted for inline dispatch) |
+
+### Normalized Objective Fields
+
+| Field | Type | Source | Description |
+|-------|------|--------|-------------|
+| `goal` | string | `campaign.goal` | Campaign improvement goal |
+| `metric` | string | `campaign.objective.metric` | Target metric name |
+| `direction` | string | `campaign.objective.direction` | `"minimize"` or `"maximize"` |
+| `aggregation_method` | string | `campaign.objective.aggregation.method` | e.g. `"weighted_mean"`, `"mean"` |
+| `aggregation_weights` | object or null | `campaign.objective.aggregation.weights` | Per-dataset weights when method is `weighted_mean`; `null` otherwise |
+| `improvement_threshold` | number | `campaign.objective.improvement_threshold` | Minimum delta to qualify as improvement |
+
+### Normalized Baseline Fields
+
+| Field | Type | Source | Description |
+|-------|------|--------|-------------|
+| `aggregate_baseline` | number | `state.baseline.aggregate` | Current aggregate baseline |
+| `per_dataset_baselines` | object | `state.baseline.by_dataset` | Per-dataset baselines |
+
+### Normalized Execution Fields (included when relevant)
+
+| Field | Type | Source | Description |
+|-------|------|--------|-------------|
+| `runner_type` | string | `campaign.execution.runner_type` | e.g. `"ray_queue_runner"` |
+| `entrypoint` | string | `campaign.execution.entrypoint` | Shell command |
+| `trial_budget` | object | `campaign.execution.trial_budget` | `{ kind: string, value: number }` — passed as-is |
+| `search_strategy` | object | `campaign.execution.search_strategy` | `{ kind: string, ...params }` — passed as-is |
+
+### Normalized History Fields (included when relevant)
+
+| Field | Type | Source | Description |
+|-------|------|--------|-------------|
+| `key_learnings` | array | `state.key_learnings` | Learnings from prior iterations |
+| `completed_experiments` | array | `state.completed_experiments` | Prior experiment records |
+
 ## MAINTAIN_BACKGROUND_POOL — Ideation
 
 **Skill:** `metaopt-experiment-ideation`
@@ -21,23 +68,22 @@ Used for rollover. The orchestrator launches the subagent synchronously during a
 
 ### Input (from orchestrator context)
 
+> Includes standard envelope fields plus normalized objective, baseline, and history fields (see Prompt Envelope above).
+
 | Field | Source |
 |-------|--------|
-| `goal` | `campaign.goal` |
-| `metric` | `campaign.objective.metric` |
-| `objective_direction` | `campaign.objective.direction` |
-| `aggregation` | `campaign.objective.aggregation` (serialize method + weights) |
-| `aggregate_baseline` | `state.baseline.aggregate` |
-| `per_dataset_baselines` | `state.baseline.by_dataset` |
-| `key_learnings` | `state.key_learnings` |
-| `completed_experiments` | `state.completed_experiments` |
 | `current_proposal_pool` | `state.current_proposals` |
 | `next_proposal_pool_context` | `state.next_proposals` |
 | `proposal_policy` | `campaign.proposal_policy` |
 
 ### Output → State
 
-- Append returned proposals to `state.current_proposals` (if `proposal_cycle.current_pool_frozen == false`) or `state.next_proposals` (if frozen)
+- For each candidate returned by the ideation worker, the orchestrator:
+  1. Generates a unique `proposal_id` using `<campaign_id>-p<sequence_number>`
+  2. Attaches `source_slot_id` from the dispatching slot
+  3. Attaches `creation_iteration` from `state.current_iteration`
+  4. Attaches `created_at` timestamp
+  5. Appends the enriched proposal record to `state.current_proposals` (if `proposal_cycle.current_pool_frozen == false`) or `state.next_proposals` (if frozen)
 - If worker returns `{ "saturated": true }`, switch slot to maintenance mode
 - Increment `state.proposal_cycle.ideation_rounds_by_slot[slot_id]`
 
@@ -70,17 +116,11 @@ Used for rollover. The orchestrator launches the subagent synchronously during a
 
 ### Input (from orchestrator context)
 
+> Includes standard envelope fields plus normalized objective, baseline, and history fields (see Prompt Envelope above).
+
 | Field | Source |
 |-------|--------|
-| `goal` | `campaign.goal` |
-| `metric` | `campaign.objective.metric` |
-| `direction` | `campaign.objective.direction` |
-| `aggregation` | `campaign.objective.aggregation` |
-| `aggregate_baseline` | `state.baseline.aggregate` |
-| `per_dataset_baselines` | `state.baseline.by_dataset` |
 | `current_proposals` | `state.current_proposals` (frozen) |
-| `key_learnings` | `state.key_learnings` |
-| `completed_experiments` | `state.completed_experiments` |
 | `proposal_policy` | `campaign.proposal_policy` |
 
 ### Output → State
@@ -97,19 +137,13 @@ Used for rollover. The orchestrator launches the subagent synchronously during a
 
 ### Input (from orchestrator context)
 
+> Includes standard envelope fields plus normalized objective, baseline, and history fields (see Prompt Envelope above).
+
 | Field | Source |
 |-------|--------|
 | `winning_proposal` | The full proposal object from `state.current_proposals` matching `state.selected_experiment.proposal_id` |
-| `goal` | `campaign.goal` |
-| `metric` | `campaign.objective.metric` |
-| `direction` | `campaign.objective.direction` |
-| `aggregation` | `campaign.objective.aggregation` |
 | `datasets` | `campaign.datasets` |
 | `execution` | `campaign.execution` |
-| `aggregate_baseline` | `state.baseline.aggregate` |
-| `per_dataset_baselines` | `state.baseline.by_dataset` |
-| `key_learnings` | `state.key_learnings` |
-| `completed_experiments` | `state.completed_experiments` |
 | `backend_contract` | Summary of `references/backend-contract.md` enqueue/status/results requirements |
 
 ### Output → State
@@ -176,19 +210,12 @@ Used for rollover. The orchestrator launches the subagent synchronously during a
 
 ### Input (from orchestrator context)
 
+> Includes standard envelope fields plus normalized objective, baseline, and history fields (see Prompt Envelope above).
+
 | Field | Source |
 |-------|--------|
 | Batch results payload | stdout JSON from `remote_queue.results_command <batch_id>` |
-| `metric` | `campaign.objective.metric` |
-| `direction` | `campaign.objective.direction` |
-| `aggregation` | `campaign.objective.aggregation` |
-| `weights` | `campaign.objective.aggregation.weights` (when weighted_mean) |
-| `improvement_threshold` | `campaign.objective.improvement_threshold` |
-| `aggregate` | `state.baseline.aggregate` |
-| `by_dataset` | `state.baseline.by_dataset` |
 | Experiment context | Selected experiment design + winning proposal |
-| `key_learnings` | `state.key_learnings` |
-| `completed_experiments` | `state.completed_experiments` |
 
 ### Output → State
 
@@ -206,13 +233,12 @@ Used for rollover. The orchestrator launches the subagent synchronously during a
 
 ### Input (from orchestrator context)
 
+> Includes standard envelope fields plus normalized objective, baseline, and history fields (see Prompt Envelope above).
+
 | Field | Source |
 |-------|--------|
 | `next_proposals` | `state.next_proposals` |
 | Results analysis output | Output from `ANALYZE_RESULTS` (judgment, learnings, invalidations, carry-over candidates) |
-| `key_learnings` | `state.key_learnings` (already updated by ANALYZE_RESULTS) |
-| `completed_experiments` | `state.completed_experiments` (already updated by ANALYZE_RESULTS) |
-| Campaign goal | `campaign.goal`, `campaign.objective.metric`, `campaign.objective.direction`, `campaign.objective.aggregation` |
 | `proposal_policy` | `campaign.proposal_policy` |
 | Stop conditions progress | `state.current_iteration`, `state.no_improve_iterations`, `campaign.stop_conditions` |
 

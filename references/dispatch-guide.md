@@ -2,6 +2,8 @@
 
 This reference maps each dispatch state in the state machine to the worker target that executes it, the context the orchestrator must pass, and the output it must consume.
 
+The orchestrator is a transport and runtime shell. It launches workers from pre-staged task files written by control agents, stages raw worker outputs, and re-invokes the governing control agent to gate results. It does not construct prompt envelopes inline or make semantic dispatch decisions. See `references/control-protocol.md` for the control-handoff protocol.
+
 Load this file before dispatching any worker subagent.
 
 ## Dispatch Types
@@ -14,7 +16,7 @@ Used for rollover. The orchestrator launches the subagent synchronously during a
 
 ## Prompt Envelope
 
-Every worker subagent prompt includes a standard envelope plus state-specific fields. The orchestrator builds the envelope by normalizing campaign and state data into a flat, unambiguous shape.
+Every worker subagent prompt includes a standard envelope plus state-specific fields. Control agents write the envelope into staged task files; the orchestrator passes these task files to workers without modifying semantic content.
 
 ### Standard Envelope (included in every dispatch)
 
@@ -61,10 +63,10 @@ Every worker subagent prompt includes a standard envelope plus state-specific fi
 
 ## MAINTAIN_BACKGROUND_POOL — Ideation
 
-Operational split note:
-- a background-control agent may generate staged task files for slot launches
-- the orchestrator may then launch workers from those task files without semantically interpreting the intended work
-- a background-control gate phase may later consume staged worker outputs and perform the canonical state updates described below
+This phase is governed by `metaopt-background-control`:
+- The control agent generates staged task files for each slot launch (`plan_background_work`)
+- The orchestrator launches workers from those task files without interpreting the intended work
+- The control agent consumes staged worker outputs and performs the canonical state updates described below (`gate_background_work`)
 
 **Worker target:** `metaopt-ideation-worker` (`custom_agent`)
 **Slot class:** `background`
@@ -94,9 +96,10 @@ Operational split note:
 
 ## MAINTAIN_BACKGROUND_POOL — Maintenance
 
-Operational split note:
-- maintenance workers may be launched from planner-generated staged task files
-- their raw outputs may be staged first and semantically integrated later by a background-control gate phase rather than directly by the orchestrator
+This phase is governed by `metaopt-background-control`:
+- The control agent generates staged task files for maintenance launches
+- The orchestrator launches workers from those task files and stages raw outputs
+- The control agent semantically integrates staged worker outputs during the gate phase
 
 **Worker target:** `repo-audit-refactor-optimize` (`skill`)
 **Slot class:** `background`
@@ -128,9 +131,10 @@ If the maintenance worker returns output that does not match the expected patch 
 
 ## SELECT_EXPERIMENT
 
-Operational split note:
-- `SELECT_EXPERIMENT` is controlled by the Step-5/6 control agent, which may first write a staged selection task, then later validate the winning proposal before planning `DESIGN_EXPERIMENT`
-- the orchestrator launches the selection worker in the middle and only stages raw output
+This state is governed by `metaopt-select-design`:
+- The control agent writes a staged selection task (`plan_select_experiment`)
+- The orchestrator launches `metaopt-selection-worker` and stages raw output
+- The control agent validates the winning proposal and plans `DESIGN_EXPERIMENT` (`gate_select_and_plan_design`)
 
 **Worker target:** `metaopt-selection-worker` (`custom_agent`)
 **Slot class:** `auxiliary`
@@ -153,9 +157,9 @@ Operational split note:
 
 ## DESIGN_EXPERIMENT
 
-Operational split note:
+This state is governed by `metaopt-select-design`:
 - `DESIGN_EXPERIMENT` begins with a partial canonical `selected_experiment` whose `design` is still `null`
-- the Step-5/6 control agent writes the staged design task, the orchestrator launches the design worker, and the same control agent later finalizes `state.selected_experiment.design`
+- The control agent writes a staged design task, the orchestrator launches `metaopt-design-worker`, and the control agent finalizes `state.selected_experiment.design` (`finalize_select_design`)
 
 **Worker target:** `metaopt-design-worker` (`custom_agent`)
 **Slot class:** `auxiliary`
@@ -185,10 +189,10 @@ Operational split note:
 **Mode:** `materialization`
 **Model class:** `strong_coder` (enforced: `mode = materialization` requires `model_class = strong_coder`)
 
-Operational note:
-- a local-execution control agent may first generate staged materialization task files
-- the orchestrator may then launch the materialization worker, apply patches mechanically, package artifacts, and stage raw executor outputs
-- a later local-execution gate phase may semantically update `state.local_changeset` and decide the next retry/advance action
+This state is governed by `metaopt-local-execution-control`:
+- The control agent writes staged materialization task files (`plan_local_changeset`)
+- The orchestrator launches the materialization worker, applies patches mechanically, packages artifacts, and stages raw executor outputs
+- The control agent semantically updates `state.local_changeset` and decides the next retry/advance action (`gate_local_sanity`)
 
 ### Input (from orchestrator context)
 
@@ -240,9 +244,9 @@ The materialization worker operates in one of three modes. The orchestrator must
 **Mode:** `diagnosis`
 **Model class:** `strong_reasoner`
 
-Operational note:
-- the orchestrator may run `sanity.command` and stage only raw stdout/stderr/exit-code artifacts
-- a local-execution control gate phase may later interpret those staged artifacts, request diagnosis, and perform the canonical state updates described below
+This state is governed by `metaopt-local-execution-control`:
+- The orchestrator runs `sanity.command` and stages raw stdout/stderr/exit-code artifacts
+- The control agent interprets those staged artifacts, requests diagnosis via a staged task file, and performs the canonical state updates described below (`gate_local_sanity`)
 
 ### Input (from orchestrator context)
 
@@ -272,9 +276,9 @@ Operational note:
 **Mode:** `diagnosis`
 **Model class:** `strong_reasoner`
 
-Operational note:
-- the orchestrator may run `status_command` and `results_command` and stage only raw backend JSON payloads
-- a remote-execution control gate phase may later interpret those payloads, request diagnosis, and perform the canonical state updates described below
+This state is governed by `metaopt-remote-execution-control`:
+- The orchestrator runs `status_command` and `results_command` and stages raw backend JSON payloads
+- The control agent interprets those payloads, requests diagnosis via a staged task file, and performs the canonical state updates described below (`gate_remote_batch`)
 
 Dispatched only when `remote_queue.status_command` returns `status = "failed"`.
 
@@ -307,10 +311,10 @@ Dispatched only when `remote_queue.status_command` returns `status = "failed"`.
 **Mode:** `analysis`
 **Model class:** `strong_reasoner`
 
-Operational note:
-- a remote-execution control planning phase may stage an analysis task file after completed results have been fetched
-- the orchestrator may launch the analysis worker and stage only raw analysis JSON
-- a remote-execution control analysis phase may later update `analysis_summary`, baseline state, learnings, and rollover readiness
+This state is governed by `metaopt-remote-execution-control`:
+- The control agent stages an analysis task file after completed results have been fetched (`analyze_remote_results`)
+- The orchestrator launches `metaopt-analysis-worker` and stages raw analysis JSON
+- The control agent updates `analysis_summary`, baseline state, learnings, and rollover readiness
 
 ### Input (from orchestrator context)
 
@@ -336,10 +340,10 @@ Operational note:
 **Dispatch type:** Inline (no slot — runs synchronously during `ROLL_ITERATION`)
 **Model class:** `strong_reasoner`
 
-Operational split note:
-- an iteration-close control planning phase may first generate a staged rollover task file
-- the orchestrator may then launch the rollover worker and stage only its raw JSON output
-- a later iteration-close control gate phase may semantically integrate that output, clear `selected_experiment`, evaluate stop conditions, and prepare `QUIESCE_SLOTS`
+This state is governed by `metaopt-iteration-close-control`:
+- The control agent writes a staged rollover task file (`plan_roll_iteration`)
+- The orchestrator launches `metaopt-rollover-worker` and stages raw JSON output
+- The control agent semantically integrates that output, clears `selected_experiment`, evaluates stop conditions, and prepares `QUIESCE_SLOTS` (`gate_roll_iteration`)
 
 ### Input (from orchestrator context)
 

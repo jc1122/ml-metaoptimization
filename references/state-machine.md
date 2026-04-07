@@ -19,6 +19,20 @@
 - `BLOCKED_CONFIG`
 - `FAILED`
 
+## Control-Agent Dispatch Map
+
+Every delegated phase is governed by a mandatory control agent. The orchestrator must invoke the designated control agent before and after each executor phase; it must not make semantic decisions itself. See `references/control-protocol.md` for the handoff envelope schema and `references/dispatch-guide.md` for per-state dispatch details.
+
+| State(s) | Control Agent | Plan Phase | Gate Phase(s) |
+|----------|--------------|------------|---------------|
+| `LOAD_CAMPAIGN` | `metaopt-load-campaign` | single-phase (validate) | — |
+| `HYDRATE_STATE` | `metaopt-hydrate-state` | single-phase (hydrate) | — |
+| `MAINTAIN_BACKGROUND_POOL`, `WAIT_FOR_PROPOSAL_THRESHOLD` | `metaopt-background-control` | `plan_background_work` | `gate_background_work` |
+| `SELECT_EXPERIMENT`, `DESIGN_EXPERIMENT` | `metaopt-select-design` | `plan_select_experiment` | `gate_select_and_plan_design`, `finalize_select_design` |
+| `MATERIALIZE_CHANGESET`, `LOCAL_SANITY` | `metaopt-local-execution-control` | `plan_local_changeset` | `gate_local_sanity` |
+| `ENQUEUE_REMOTE_BATCH`, `WAIT_FOR_REMOTE_BATCH`, `ANALYZE_RESULTS` | `metaopt-remote-execution-control` | `plan_remote_batch` | `gate_remote_batch`, `analyze_remote_results` |
+| `ROLL_ITERATION`, `QUIESCE_SLOTS` | `metaopt-iteration-close-control` | `plan_roll_iteration` | `gate_roll_iteration`, `quiesce_slots` |
+
 ## Event Priority
 
 1. Persist completed slot output
@@ -47,7 +61,7 @@
 
 ### `MAINTAIN_BACKGROUND_POOL`
 
-Implementation note: this state may be operationally split into a planner-controlled phase, an orchestrator dispatch phase, and a gatekeeper-controlled phase, as long as the canonical behavior below is preserved.
+This state is governed by `metaopt-background-control`. The control agent plans slot launches (via staged task files), the orchestrator dispatches workers mechanically, and the control agent gates completed outputs. See `references/control-protocol.md` for the handoff protocol.
 
 - Ensure exactly `dispatch_policy.background_slots` background slots exist
 - Prefer ideation via the `metaopt-ideation-worker` custom agent when `current_proposals` is below target and `next_proposals` is below cap
@@ -63,7 +77,7 @@ Implementation note: this state may be operationally split into a planner-contro
 
 ### `WAIT_FOR_PROPOSAL_THRESHOLD`
 
-Implementation note: when the background loop is split operationally, the threshold decision remains a control-agent responsibility rather than an orchestrator responsibility.
+The threshold decision is a `metaopt-background-control` responsibility; the orchestrator must not evaluate proposal readiness independently.
 
 - Require `proposal_policy.current_target` distinct, non-overlapping proposals in `current_proposals`
 - `proposal_cycle` uses persisted `ideation_rounds_by_slot` bookkeeping for the floor rule so reinvocations resume the same round counts instead of restarting them
@@ -73,7 +87,8 @@ Implementation note: when the background loop is split operationally, the thresh
 
 ### `SELECT_EXPERIMENT`
 
-- Implementation note: `SELECT_EXPERIMENT` may be operationally split into a planning control pass, an orchestrator-launched selection worker, and a later gate pass, as long as canonical state still records the winning proposal before `DESIGN_EXPERIMENT` begins.
+This state is governed by `metaopt-select-design`. The control agent writes a staged selection task, the orchestrator launches `metaopt-selection-worker`, and the control agent validates the winning proposal before advancing. See `references/control-protocol.md`.
+
 - Dispatch the `metaopt-selection-worker` custom agent as one `strong_reasoner` subagent
 - Input: `current_proposals`, baseline context, prior learnings, and completed experiments
 - Output: exactly one winning proposal and a short ranking rationale
@@ -82,7 +97,8 @@ Implementation note: when the background loop is split operationally, the thresh
 
 ### `DESIGN_EXPERIMENT`
 
-- Implementation note: `DESIGN_EXPERIMENT` may be operationally split into a planning/gating control pass, an orchestrator-launched design worker, and a finalization pass, as long as the resulting canonical state contains a populated `selected_experiment` with a persisted `design` before `MATERIALIZE_CHANGESET` begins.
+This state is governed by `metaopt-select-design`. The control agent writes a staged design task, the orchestrator launches `metaopt-design-worker`, and the control agent finalizes `state.selected_experiment.design` before `MATERIALIZE_CHANGESET`. See `references/control-protocol.md`.
+
 - Dispatch the `metaopt-design-worker` custom agent as one `strong_reasoner` subagent
 - Input: the winning proposal, baseline context, queue/backend constraints, and prior learnings
 - Output: exactly one concrete experiment specification plus execution assumptions and artifact expectations
@@ -90,7 +106,7 @@ Implementation note: when the background loop is split operationally, the thresh
 
 ### `MATERIALIZE_CHANGESET`
 
-- Implementation note: `MATERIALIZE_CHANGESET` and `LOCAL_SANITY` may be operationally split into a `plan_local_changeset` control pass, an orchestrator executor phase, and a `gate_local_sanity` control pass, as long as the canonical machine states and persisted state transitions below remain unchanged.
+This state is governed by `metaopt-local-execution-control`. The control agent writes staged materialization tasks, the orchestrator launches workers and applies patches mechanically, and the control agent gates the results. See `references/control-protocol.md`.
 
 - Dispatch the `metaopt-materialization-worker` custom agent as `strong_coder` subagents in isolated worktrees
 - Count these coders against `auxiliary_slots` with `mode = materialization`
@@ -103,9 +119,11 @@ Implementation note: when the background loop is split operationally, the thresh
 
 ### `LOCAL_SANITY`
 
+This state is governed by `metaopt-local-execution-control`. The orchestrator runs `sanity.command` and stages raw outputs; the control agent interprets results and routes retries. See `references/control-protocol.md`.
+
 - Run `sanity.command`
 - Enforce `sanity.max_duration_seconds`
-- The orchestrator may only stage raw sanity outputs; semantic interpretation and retry routing may be delegated to a local-execution control pass
+- The orchestrator stages raw sanity outputs; semantic interpretation and retry routing are the responsibility of `metaopt-local-execution-control`
 - Required checks:
   - config loads
   - fast path executes
@@ -123,7 +141,7 @@ Implementation note: when the background loop is split operationally, the thresh
 
 ### `ENQUEUE_REMOTE_BATCH`
 
-- Implementation note: `ENQUEUE_REMOTE_BATCH`, `WAIT_FOR_REMOTE_BATCH`, and `ANALYZE_RESULTS` may be operationally split into a `plan_remote_batch` control pass, an orchestrator executor phase, a `gate_remote_batch` control pass, and an `analyze_remote_results` control pass, as long as the canonical machine states and persisted transitions below remain unchanged.
+This state is governed by `metaopt-remote-execution-control`. The control agent validates enqueue readiness and plans the batch; the orchestrator writes the manifest and calls `enqueue_command` mechanically. See `references/control-protocol.md`.
 
 - Call `remote_queue.enqueue_command`
 - Pass exactly one immutable batch manifest
@@ -134,7 +152,7 @@ Implementation note: when the background loop is split operationally, the thresh
 
 - Continue background-slot work while the batch runs
 - Poll only `remote_queue.status_command`
-- The orchestrator may only stage raw backend status and results payloads; semantic interpretation and remote routing may be delegated to a remote-execution control pass
+- The orchestrator stages raw backend status and results payloads; semantic interpretation and remote routing are the responsibility of `metaopt-remote-execution-control`
 - Never inspect raw cluster jobs directly from this skill
 - If `stop_conditions.max_wallclock_hours` is exceeded, set `next_action = "finish current batch and stop"`, stop launching new work, and continue polling the current batch to completion
 - If all slots are unexpectedly idle during this state, transition through `MAINTAIN_BACKGROUND_POOL` to restore the declared slot set before doing any lower-priority work
@@ -151,7 +169,7 @@ Implementation note: when the background loop is split operationally, the thresh
 ### `ANALYZE_RESULTS`
 
 - Call `remote_queue.results_command`
-- The orchestrator may stage raw completed-results payloads, but semantic result judgment and baseline updates may be delegated to a remote-execution control pass
+- The orchestrator stages raw completed-results payloads; semantic result judgment and baseline updates are the responsibility of `metaopt-remote-execution-control`
 - Dispatch the `metaopt-analysis-worker` custom agent as one `strong_reasoner` subagent to compare the result against the aggregate baseline and extract learnings
 - If the aggregate result clears `objective.improvement_threshold` in the configured direction, update the baseline and reset `no_improve_iterations` to `0`
 - Otherwise leave the baseline unchanged and increment `no_improve_iterations`
@@ -159,7 +177,7 @@ Implementation note: when the background loop is split operationally, the thresh
 
 ### `ROLL_ITERATION`
 
-- Implementation note: `ROLL_ITERATION` and `QUIESCE_SLOTS` may be operationally split into a `plan_roll_iteration` control pass, an orchestrator executor phase, a `gate_roll_iteration` control pass, and a `quiesce_slots` control pass, as long as the canonical machine states and persisted transitions below remain unchanged.
+This state is governed by `metaopt-iteration-close-control`. The control agent writes a staged rollover task, the orchestrator launches `metaopt-rollover-worker`, and the control agent integrates rollover output and evaluates stop conditions. See `references/control-protocol.md`.
 
 - Dispatch the `metaopt-rollover-worker` custom agent as one `strong_reasoner` subagent (inline dispatch — no slot consumed)
 - Input: `next_proposals`, fresh `key_learnings`, completed experiment results, and updated baseline
@@ -178,7 +196,7 @@ Implementation note: when the background loop is split operationally, the thresh
 - Stop launching new work
 - Persist any finished slot output before changing slot ownership
 - Wait up to a 60-second drain window for in-flight slots to complete
-- The orchestrator may only stage raw drain/cancel outcomes; semantic continue-vs-complete routing may be delegated to an iteration-close control pass
+- The orchestrator stages raw drain/cancel outcomes; semantic continue-vs-complete routing is the responsibility of `metaopt-iteration-close-control`
 - cancel leftovers after the 60-second drain window
 - record cancellation reasons in state and append any mechanical patch-application outcome to `apply_results` in `local_changeset`
 - If the campaign continues, set `machine_state = MAINTAIN_BACKGROUND_POOL`, keep `status = RUNNING`, and re-invoke `ml-metaoptimization`

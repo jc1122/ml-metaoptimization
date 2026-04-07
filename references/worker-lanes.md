@@ -1,5 +1,9 @@
 # Worker Lanes
 
+This document describes the **leaf worker lanes** — the individual worker targets that perform concrete work (ideation, selection, design, materialization, diagnosis, analysis, rollover, and maintenance). Each lane specifies the worker's inputs, outputs, and dispatch contract.
+
+For the higher-level orchestration layer — control agents, the plan/gate protocol, staged task files, and handoff envelopes — see `references/control-protocol.md`. For per-state dispatch details including which control agent governs each phase, see `references/dispatch-guide.md`.
+
 ## Slot Classes
 
 Background slots:

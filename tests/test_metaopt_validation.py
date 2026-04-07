@@ -389,6 +389,20 @@ class MetaoptValidationTests(unittest.TestCase):
             r"## Results Contract.*stdout JSON object.*`best_aggregate_result`.*`per_dataset`.*`artifact_locations`.*`logs_location`",
         )
 
+    def test_hash_canonicalization_rules_are_explicit(self) -> None:
+        contracts = _read_text("references/contracts.md")
+        for required_detail in [
+            "sorted keys",
+            '(",", ":")',
+            "ensure_ascii",
+            "UTF-8",
+        ]:
+            self.assertIn(
+                required_detail,
+                contracts,
+                f"contracts.md hash canonicalization must specify: {required_detail}",
+            )
+
     def test_hash_contract_and_safe_resume_behavior_are_documented(self) -> None:
         contracts = _read_text("references/contracts.md")
         machine = _read_text("references/state-machine.md")

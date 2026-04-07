@@ -332,6 +332,39 @@ class LoadCampaignHandoffTests(unittest.TestCase):
             self.assertEqual(pr["status"], "fresh_failed")
             self.assertEqual(len(pr["failures"]), 1)
 
+    def test_valid_campaign_unknown_preflight_status_blocks_as_stale(self) -> None:
+        """Preflight artifact with an unrecognized status string should block as stale/invalid."""
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            tempdir = Path(tempdir_str)
+            campaign = (ROOT / "ml_metaopt_campaign.example.yaml").read_text(encoding="utf-8")
+            self._make_preflight_artifact(tempdir, status="INVALID_STATUS")
+
+            payload = self._run_tool(tempdir, campaign_text=campaign)
+
+            self.assertEqual(payload["outcome"], "blocked_config")
+            self.assertEqual(payload["recommended_next_machine_state"], "BLOCKED_CONFIG")
+            pr = payload["preflight_readiness"]
+            self.assertTrue(pr["exists"])
+            self.assertEqual(pr["status"], "stale")
+
+    def test_invalid_campaign_preflight_exists_reflects_file_presence(self) -> None:
+        """When campaign validation fails and preflight is not evaluated,
+        preflight_readiness.exists must reflect whether the file actually exists."""
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            tempdir = Path(tempdir_str)
+            invalid_campaign = "version: 2\ncampaign_id: bad\n"
+            self._make_preflight_artifact(tempdir)
+
+            payload = self._run_tool(tempdir, campaign_text=invalid_campaign)
+
+            self.assertEqual(payload["outcome"], "blocked_config")
+            pr = payload["preflight_readiness"]
+            self.assertEqual(pr["status"], "not_evaluated")
+            self.assertTrue(
+                pr["exists"],
+                "preflight_readiness.exists must be True when the artifact file is on disk",
+            )
+
     def test_invalid_campaign_blocks_before_preflight_check(self) -> None:
         """Invalid campaign YAML must still block for campaign reasons first, ignoring preflight."""
         with tempfile.TemporaryDirectory() as tempdir_str:

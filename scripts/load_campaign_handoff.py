@@ -327,9 +327,10 @@ def build_handoff(campaign_path: Path, state_path: Path, output_path: Path) -> d
             runtime_config_hash=runtime_config_hash,
         )
     else:
+        artifact_path = state_dir / "preflight-readiness.json"
         preflight = {
-            "path": str(state_dir / "preflight-readiness.json"),
-            "exists": False,
+            "path": str(artifact_path),
+            "exists": artifact_path.exists(),
             "readable": False,
             "binding_fresh": False,
             "status": "not_evaluated",

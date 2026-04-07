@@ -44,8 +44,9 @@ The v3 contract separates campaign identity from runtime configuration:
 
 Hash canonicalization rules:
 - ignore comments and YAML key order
-- serialize the selected fields as canonical JSON with sorted keys
-- hash the canonical JSON bytes with SHA-256 and store as `sha256:<64 lowercase hex chars>`
+- serialize the selected fields as canonical JSON with sorted keys, compact separators `(",", ":")`, and `ensure_ascii=true`
+- encode the resulting JSON string as UTF-8 bytes
+- hash the UTF-8 bytes with SHA-256 and store as `sha256:<64 lowercase hex chars>`
 
 Edits outside the identity payload must not discard progress. Identity mismatches must block resume instead of silently reinitializing state.
 

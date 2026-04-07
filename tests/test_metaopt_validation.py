@@ -1181,6 +1181,74 @@ class MetaoptValidationTests(unittest.TestCase):
         self.assertIn("creation_iteration", ideation_section)
         self.assertIn("created_at", ideation_section)
 
+    # --- Control Protocol tests ---
+
+    def test_control_protocol_reference_exists(self) -> None:
+        """references/control-protocol.md must exist and be non-trivial."""
+        protocol = _read_text("references/control-protocol.md")
+        self.assertGreater(len(protocol), 200, "control-protocol.md is too short to be meaningful")
+
+    def test_control_protocol_defines_handoff_envelope(self) -> None:
+        """control-protocol.md must define the universal control-handoff envelope with all required fields."""
+        protocol = _read_text("references/control-protocol.md")
+        required_fields = [
+            "handoff_type",
+            "control_agent",
+            "recommended_next_machine_state",
+            "launch_requests",
+            "state_patch",
+            "executor_directives",
+            "summary",
+            "warnings",
+        ]
+        for field in required_fields:
+            self.assertIn(field, protocol, f"control-protocol.md must define envelope field '{field}'")
+
+    def test_control_protocol_lists_all_control_agents(self) -> None:
+        """control-protocol.md must reference all seven control agents."""
+        protocol = _read_text("references/control-protocol.md")
+        control_agents = [
+            "metaopt-load-campaign",
+            "metaopt-hydrate-state",
+            "metaopt-background-control",
+            "metaopt-select-design",
+            "metaopt-local-execution-control",
+            "metaopt-remote-execution-control",
+            "metaopt-iteration-close-control",
+        ]
+        for agent in control_agents:
+            self.assertIn(agent, protocol, f"control-protocol.md must reference control agent '{agent}'")
+
+    def test_control_protocol_defines_state_patch_ownership(self) -> None:
+        """control-protocol.md must define state-patch ownership rules mapping control agents to state keys."""
+        protocol = _read_text("references/control-protocol.md")
+        _require_pattern(self, protocol, r"[Oo]wnership")
+        # Each control agent should have at least one owned state key documented
+        _require_pattern(self, protocol, r"metaopt-load-campaign.*campaign_identity_hash|campaign_identity_hash.*metaopt-load-campaign")
+        _require_pattern(self, protocol, r"metaopt-hydrate-state.*runtime_capabilities|runtime_capabilities.*metaopt-hydrate-state")
+
+    def test_skill_md_references_control_protocol(self) -> None:
+        """SKILL.md Required References must include references/control-protocol.md."""
+        skill_md = _read_text("SKILL.md")
+        self.assertIn("references/control-protocol.md", skill_md)
+
+    def test_skill_md_describes_orchestrator_as_transport(self) -> None:
+        """SKILL.md must describe the orchestrator as a transport/runtime shell with control agents as the semantic layer."""
+        skill_md = _read_text("SKILL.md")
+        _require_pattern(self, skill_md, r"transport|runtime shell")
+        _require_pattern(self, skill_md, r"[Cc]ontrol agent")
+
+    def test_control_protocol_cross_referenced_from_contracts(self) -> None:
+        """contracts.md must cross-reference control-protocol.md."""
+        contracts = _read_text("references/contracts.md")
+        self.assertIn("control-protocol.md", contracts)
+
+    def test_control_protocol_documents_plan_gate_pattern(self) -> None:
+        """control-protocol.md must document the plan/gate control pattern used by control agents."""
+        protocol = _read_text("references/control-protocol.md")
+        _require_pattern(self, protocol, r"[Pp]lan")
+        _require_pattern(self, protocol, r"[Gg]ate")
+
 
 if __name__ == "__main__":
     unittest.main()

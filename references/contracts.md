@@ -1,5 +1,7 @@
 # Contracts
 
+This document defines the data contracts for campaign specs, state files, manifests, and results. For the control-agent handoff protocol and state-patch ownership rules, see `references/control-protocol.md`.
+
 ## Campaign Spec
 
 `ml_metaopt_campaign.yaml` is the declarative source of truth.

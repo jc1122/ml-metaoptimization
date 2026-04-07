@@ -11,7 +11,7 @@ Run a continuous ML metaoptimization campaign as a deterministic state machine c
 This skill is not a self-scheduling daemon.
 It persists state, exits, and resumes when a host runtime or user invocation re-enters it.
 
-This skill is the control plane only. The orchestrator owns validation, persistence, slot scheduling, artifact packaging, queue interaction, and iteration transitions. It never performs semantic coding, experiment design, debugging, or result analysis itself.
+This skill is the control plane only. The orchestrator is a transport and runtime shell: it owns file I/O, process lifecycle, subagent dispatch, and state persistence, but delegates all semantic decisions to control agents. Control agents (documented in `references/control-protocol.md`) are the canonical semantic layer — they plan what work should happen, gate transition criteria, and emit structured handoffs that the orchestrator executes mechanically. The orchestrator never performs semantic coding, experiment design, debugging, or result analysis itself.
 
 The campaign is fully file-driven. The orchestrator never asks the user for campaign-defining inputs. If required configuration is missing or invalid, the machine enters `BLOCKED_CONFIG` and stops. If persisted campaign identity no longer matches the campaign file, stop conservatively rather than silently resetting state.
 
@@ -91,6 +91,7 @@ Load these files during execution:
 
 - `references/dependencies.md` before validating campaign inputs
 - `references/contracts.md` before reading or writing state, manifests, or results
+- `references/control-protocol.md` before interpreting or emitting control-agent handoffs
 - `references/state-machine.md` before executing transitions or resuming from state
 - `references/worker-lanes.md` before dispatching any background or auxiliary worker
 - `references/dispatch-guide.md` before constructing any worker subagent prompt

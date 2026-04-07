@@ -55,6 +55,13 @@ Every delegated phase is governed by a mandatory control agent. The orchestrator
 - Reject sentinel placeholders such as angle-bracket paths, `YOUR_*`, and dataset fingerprints containing `replace-me`
 - Compute `campaign_identity_hash` and `runtime_config_hash` using the canonical rules from `references/contracts.md`
 - If validation fails, write `status = BLOCKED_CONFIG`, set `next_action = "repair ml_metaopt_campaign.yaml"`, and stop
+- **Preflight gate** (evaluated only when campaign validation passes):
+  - Read `.ml-metaopt/preflight-readiness.json` (artifact emitted by `metaopt-preflight`)
+  - If the artifact is missing, unreadable, or has an unrecognized `schema_version` → block with `next_action = "run metaopt-preflight"`
+  - If the artifact is present but binding freshness fails (hash mismatch on `campaign_identity_hash` or `runtime_config_hash`) → block with `next_action = "re-run metaopt-preflight (campaign configuration has changed)"`
+  - If binding freshness passes and `status` is `FAILED` → block using the artifact's `next_action` and `failures` to present actionable remediation (the environment is not ready, not that configuration has changed)
+  - If binding freshness passes and `status` is `READY` → proceed to `HYDRATE_STATE`
+- The handoff includes a `preflight_readiness` advisory payload describing the observed artifact status for inspectability
 
 ### `HYDRATE_STATE`
 

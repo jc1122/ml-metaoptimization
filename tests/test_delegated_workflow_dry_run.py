@@ -168,6 +168,56 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
         manifest_path.write_text(json.dumps(payload), encoding="utf-8")
         return manifest_path
 
+    def _write_preflight_artifact(self, tempdir: Path, campaign_path: Path) -> Path:
+        """Write a fresh READY preflight artifact matching the campaign at *campaign_path*."""
+        import hashlib as _hashlib
+
+        campaign = json.loads(campaign_path.read_text(encoding="utf-8"))
+
+        def _cj(payload):
+            return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+
+        def _sha(payload):
+            return f"sha256:{_hashlib.sha256(_cj(payload)).hexdigest()}"
+
+        ds_view = sorted(
+            [{"id": d["id"], "role": d["role"], "fingerprint": d["fingerprint"]} for d in campaign["datasets"]],
+            key=lambda x: json.dumps(x, sort_keys=True),
+        )
+        id_hash = _sha({
+            "version": campaign["version"],
+            "campaign_id": campaign["campaign_id"],
+            "objective": {
+                "metric": campaign["objective"]["metric"],
+                "direction": campaign["objective"]["direction"],
+                "aggregation": campaign["objective"]["aggregation"],
+            },
+            "datasets": ds_view,
+        })
+        rt_hash = _sha({
+            "sanity": campaign["sanity"],
+            "artifacts": campaign["artifacts"],
+            "remote_queue": campaign["remote_queue"],
+            "execution": campaign["execution"],
+        })
+        artifact = {
+            "schema_version": 1,
+            "status": "READY",
+            "campaign_id": campaign["campaign_id"],
+            "campaign_identity_hash": id_hash,
+            "runtime_config_hash": rt_hash,
+            "emitted_at": "2025-01-01T00:00:00Z",
+            "preflight_duration_seconds": 1.0,
+            "checks_summary": {"total": 3, "passed": 3, "failed": 0, "bootstrapped": 0},
+            "failures": [],
+            "next_action": "proceed",
+            "diagnostics": None,
+        }
+        path = tempdir / ".ml-metaopt" / "preflight-readiness.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(artifact), encoding="utf-8")
+        return path
+
     # Universal envelope keys required by references/control-protocol.md
     _ENVELOPE_KEYS = {
         "handoff_type",
@@ -335,6 +385,7 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
             worker_results_dir.mkdir(parents=True, exist_ok=True)
             slot_events_dir.mkdir(parents=True, exist_ok=True)
             executor_events_dir.mkdir(parents=True, exist_ok=True)
+            self._write_preflight_artifact(tempdir, campaign_path)
 
             load_output = handoffs_dir / "load_campaign.latest.json"
             load_payload = self._run(

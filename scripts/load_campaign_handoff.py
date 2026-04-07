@@ -180,6 +180,85 @@ def _runtime_hash(campaign: dict[str, Any]) -> str:
     return _sha256(payload)
 
 
+RECOGNIZED_PREFLIGHT_SCHEMA_VERSIONS = {1}
+
+
+def _evaluate_preflight(
+    state_dir: Path,
+    *,
+    campaign_identity_hash: str | None,
+    runtime_config_hash: str | None,
+) -> dict[str, Any]:
+    """Read and evaluate the preflight readiness artifact.
+
+    Returns an advisory ``preflight_readiness`` dict describing the observed
+    artifact status so the blocked/ready decision is inspectable.
+    """
+    artifact_path = state_dir / "preflight-readiness.json"
+    peek: dict[str, Any] = {
+        "path": str(artifact_path),
+        "exists": False,
+        "readable": False,
+        "binding_fresh": False,
+        "status": "missing",
+        "failures": [],
+        "artifact_next_action": None,
+    }
+
+    if not artifact_path.exists():
+        return peek
+
+    peek["exists"] = True
+
+    try:
+        artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+    except Exception:
+        peek["status"] = "unreadable"
+        return peek
+
+    if not isinstance(artifact, dict):
+        peek["status"] = "unreadable"
+        return peek
+
+    schema_version = artifact.get("schema_version")
+    if schema_version not in RECOGNIZED_PREFLIGHT_SCHEMA_VERSIONS:
+        peek["readable"] = True
+        peek["status"] = "stale"
+        return peek
+
+    peek["readable"] = True
+
+    # Binding freshness: both hashes must match.
+    art_identity = artifact.get("campaign_identity_hash")
+    art_runtime = artifact.get("runtime_config_hash")
+    identity_match = campaign_identity_hash is not None and art_identity == campaign_identity_hash
+    runtime_match = runtime_config_hash is not None and art_runtime == runtime_config_hash
+    binding_fresh = identity_match and runtime_match
+    peek["binding_fresh"] = binding_fresh
+
+    if not binding_fresh:
+        peek["status"] = "stale"
+        return peek
+
+    # Binding is fresh — now check readiness outcome.
+    art_status = artifact.get("status")
+    art_failures = artifact.get("failures", [])
+    art_next_action = artifact.get("next_action")
+    peek["artifact_next_action"] = art_next_action
+    peek["failures"] = art_failures
+
+    if art_status == "READY":
+        peek["status"] = "fresh_ready"
+    elif art_status == "FAILED":
+        peek["status"] = "fresh_failed"
+    else:
+        # Unknown status treated as stale.
+        peek["status"] = "stale"
+        peek["binding_fresh"] = False
+
+    return peek
+
+
 def _peek_state(state_path: Path, *, campaign_identity_hash: str | None) -> tuple[dict[str, Any], list[str]]:
     state_peek: dict[str, Any] = {
         "path": str(state_path),
@@ -237,18 +316,54 @@ def build_handoff(campaign_path: Path, state_path: Path, output_path: Path) -> d
     state_peek, state_warnings = _peek_state(state_path, campaign_identity_hash=campaign_identity_hash)
     warnings.extend(state_warnings)
 
-    outcome = "ok" if campaign_valid else "blocked_config"
-    next_state = "HYDRATE_STATE" if campaign_valid else "BLOCKED_CONFIG"
-    next_action = (
-        "hydrate or initialize orchestrator state"
-        if campaign_valid
-        else "repair ml_metaopt_campaign.yaml"
-    )
-    summary = (
-        "campaign validated; hand off to HYDRATE_STATE"
-        if campaign_valid
-        else "campaign invalid; block configuration until repaired"
-    )
+    # Derive the .ml-metaopt/ directory from the state path's parent.
+    state_dir = state_path.parent
+
+    # Evaluate preflight readiness only when campaign itself is valid.
+    if campaign_valid:
+        preflight = _evaluate_preflight(
+            state_dir,
+            campaign_identity_hash=campaign_identity_hash,
+            runtime_config_hash=runtime_config_hash,
+        )
+    else:
+        preflight = {
+            "path": str(state_dir / "preflight-readiness.json"),
+            "exists": False,
+            "readable": False,
+            "binding_fresh": False,
+            "status": "not_evaluated",
+            "failures": [],
+            "artifact_next_action": None,
+        }
+
+    # Decide outcome: campaign validation blocks first, then preflight gates.
+    if not campaign_valid:
+        outcome = "blocked_config"
+        next_state = "BLOCKED_CONFIG"
+        next_action = "repair ml_metaopt_campaign.yaml"
+        summary = "campaign invalid; block configuration until repaired"
+    elif preflight["status"] == "fresh_ready":
+        outcome = "ok"
+        next_state = "HYDRATE_STATE"
+        next_action = "hydrate or initialize orchestrator state"
+        summary = "campaign validated; hand off to HYDRATE_STATE"
+    elif preflight["status"] == "fresh_failed":
+        outcome = "blocked_config"
+        next_state = "BLOCKED_CONFIG"
+        next_action = preflight["artifact_next_action"] or "resolve preflight failures and re-run metaopt-preflight"
+        summary = "campaign valid but preflight failed; resolve failures before proceeding"
+    elif preflight["status"] == "missing":
+        outcome = "blocked_config"
+        next_state = "BLOCKED_CONFIG"
+        next_action = "run metaopt-preflight to verify environment readiness"
+        summary = "campaign valid but preflight readiness artifact missing"
+    else:
+        # stale or unreadable
+        outcome = "blocked_config"
+        next_state = "BLOCKED_CONFIG"
+        next_action = "re-run metaopt-preflight (campaign configuration has changed or artifact is invalid)"
+        summary = "campaign valid but preflight readiness artifact is stale; re-run metaopt-preflight"
 
     handoff = {
         "schema_version": 1,
@@ -275,6 +390,7 @@ def build_handoff(campaign_path: Path, state_path: Path, output_path: Path) -> d
         "validation_issues": validation_issues,
         "warnings": warnings,
         "state_peek": state_peek,
+        "preflight_readiness": preflight,
         "recommended_next_machine_state": next_state,
         "recommended_next_action": next_action,
         "summary": summary,

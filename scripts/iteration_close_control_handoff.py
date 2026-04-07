@@ -322,9 +322,9 @@ def _quiesce_slots(state_path: Path, executor_events_dir: Path, output_path: Pat
         outcome = "complete"
         next_state = "COMPLETE"
         cleanup_directives = [
-            {"action": "remove_agents_hook"},
-            {"action": "delete_state_file"},
-            {"action": "emit_final_report"},
+            {"action": "remove_agents_hook", "reason": "campaign complete; orchestration hook no longer needed"},
+            {"action": "delete_state_file", "reason": "campaign complete; state file no longer needed"},
+            {"action": "emit_final_report", "reason": "campaign complete; produce final summary"},
         ]
 
     _write_json(state_path, state)

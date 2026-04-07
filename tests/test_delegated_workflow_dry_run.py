@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 ROOT = Path(__file__).resolve().parents[1]
 LOAD_SCRIPT = ROOT / "scripts" / "load_campaign_handoff.py"
@@ -208,6 +210,14 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
             f"{label}: state_patch must be dict|null",
         )
         self.assertIsInstance(payload["executor_directives"], list, f"{label}: executor_directives must be a list")
+        for i, d in enumerate(payload["executor_directives"]):
+            self.assertIsInstance(d, dict, f"{label}: executor_directives[{i}] must be a dict")
+            self.assertIn("action", d, f"{label}: executor_directives[{i}] missing 'action'")
+            self.assertIsInstance(d["action"], str, f"{label}: executor_directives[{i}] action must be str")
+            self.assertTrue(d["action"], f"{label}: executor_directives[{i}] action must be non-empty")
+            self.assertIn("reason", d, f"{label}: executor_directives[{i}] missing 'reason'")
+            self.assertIsInstance(d["reason"], str, f"{label}: executor_directives[{i}] reason must be str")
+            self.assertTrue(d["reason"], f"{label}: executor_directives[{i}] reason must be non-empty")
         self.assertIsInstance(payload["summary"], str, f"{label}: summary must be a string")
         self.assertIsInstance(payload["warnings"], list, f"{label}: warnings must be a list")
 
@@ -227,6 +237,86 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
         payload = json.loads(output_path.read_text(encoding="utf-8"))
         self.assertEqual(payload, json.loads(completed.stdout))
         return payload
+
+    # ── directive normalizer unit tests ──────────────────────────────
+
+    def test_normalize_directives_returns_empty_list_for_none(self) -> None:
+        from _handoff_utils import normalize_directives
+        self.assertEqual(normalize_directives(None), [])
+
+    def test_normalize_directives_passes_valid_list(self) -> None:
+        from _handoff_utils import normalize_directives
+        valid = [{"action": "do_x", "reason": "because_y"}]
+        self.assertEqual(normalize_directives(valid), valid)
+
+    def test_normalize_directives_preserves_extra_keys(self) -> None:
+        from _handoff_utils import normalize_directives
+        d = [{"action": "a", "reason": "r", "extra": 42}]
+        result = normalize_directives(d)
+        self.assertEqual(result[0]["extra"], 42)
+
+    def test_normalize_directives_rejects_non_list(self) -> None:
+        from _handoff_utils import normalize_directives
+        with self.assertRaises(TypeError):
+            normalize_directives("bad")
+
+    def test_normalize_directives_rejects_non_dict_element(self) -> None:
+        from _handoff_utils import normalize_directives
+        with self.assertRaises(TypeError):
+            normalize_directives(["not a dict"])
+
+    def test_normalize_directives_rejects_missing_action(self) -> None:
+        from _handoff_utils import normalize_directives
+        with self.assertRaises(ValueError):
+            normalize_directives([{"reason": "r"}])
+
+    def test_normalize_directives_rejects_empty_action(self) -> None:
+        from _handoff_utils import normalize_directives
+        with self.assertRaises(ValueError):
+            normalize_directives([{"action": "", "reason": "r"}])
+
+    def test_normalize_directives_rejects_missing_reason(self) -> None:
+        from _handoff_utils import normalize_directives
+        with self.assertRaises(ValueError):
+            normalize_directives([{"action": "a"}])
+
+    def test_normalize_directives_rejects_empty_reason(self) -> None:
+        from _handoff_utils import normalize_directives
+        with self.assertRaises(ValueError):
+            normalize_directives([{"action": "a", "reason": ""}])
+
+    def test_emit_handoff_normalizes_directives(self) -> None:
+        from _handoff_utils import emit_handoff
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "h.json"
+            payload = emit_handoff(
+                out,
+                {"executor_directives": [{"action": "a", "reason": "r"}]},
+                handoff_type="TEST",
+                control_agent="test-agent",
+            )
+            self.assertEqual(payload["executor_directives"], [{"action": "a", "reason": "r"}])
+
+    def test_emit_handoff_defaults_to_empty_directives(self) -> None:
+        from _handoff_utils import emit_handoff
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "h.json"
+            payload = emit_handoff(out, {}, handoff_type="TEST", control_agent="test-agent")
+            self.assertEqual(payload["executor_directives"], [])
+
+    def test_emit_handoff_rejects_bad_directives(self) -> None:
+        from _handoff_utils import emit_handoff
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "h.json"
+            with self.assertRaises((TypeError, ValueError)):
+                emit_handoff(
+                    out,
+                    {"executor_directives": [{"action": "a"}]},
+                    handoff_type="TEST",
+                    control_agent="test-agent",
+                )
+
+    # ── full delegated workflow integration test ─────────────────────
 
     def test_full_delegated_workflow_reaches_complete_via_staged_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir_str:

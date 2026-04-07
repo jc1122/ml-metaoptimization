@@ -207,10 +207,7 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
             payload["state_patch"] is None or isinstance(payload["state_patch"], dict),
             f"{label}: state_patch must be dict|null",
         )
-        self.assertTrue(
-            payload["executor_directives"] is None or isinstance(payload["executor_directives"], list),
-            f"{label}: executor_directives must be list|null",
-        )
+        self.assertIsInstance(payload["executor_directives"], list, f"{label}: executor_directives must be a list")
         self.assertIsInstance(payload["summary"], str, f"{label}: summary must be a string")
         self.assertIsInstance(payload["warnings"], list, f"{label}: warnings must be a list")
 

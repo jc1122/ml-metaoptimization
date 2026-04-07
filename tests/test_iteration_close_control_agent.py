@@ -485,6 +485,104 @@ class IterationCloseControlAgentTests(unittest.TestCase):
             self.assertEqual(payload["outcome"], "continue")
             self.assertEqual(payload["executor_directives"], [])
 
+    # ── executor_directives authoritativeness tests ─────────────────────
+
+    def test_plan_roll_iteration_has_no_executor_directives(self) -> None:
+        """PLAN_ROLL_ITERATION only launches a worker; no executor-side work."""
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            payload, _, _ = self._run(
+                Path(tempdir_str),
+                mode="plan_roll_iteration",
+                state=self._base_state(),
+            )
+            self.assertEqual(payload["executor_directives"], [])
+
+    def test_gate_roll_iteration_continuing_emits_executor_directives(self) -> None:
+        """GATE_ROLL_ITERATION must tell the executor to emit_iteration_report, drain_slots, cancel_slots."""
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            payload, _, _ = self._run(
+                Path(tempdir_str),
+                mode="gate_roll_iteration",
+                state=self._base_state(),
+                worker_results={
+                    "rollover-iter-3": {
+                        "filtered_proposals": [],
+                        "merged_proposals": [],
+                        "needs_fresh_ideation": False,
+                        "summary": {"carried_over": 0, "discarded": 0, "merged": 0, "final_pool_size": 0},
+                    }
+                },
+            )
+
+            self.assertTrue(payload["continue_campaign"])
+            directives = payload["executor_directives"]
+            actions = [d["action"] for d in directives]
+            self.assertIn("emit_iteration_report", actions)
+            self.assertIn("drain_slots", actions)
+            self.assertIn("cancel_slots", actions)
+            for d in directives:
+                self.assertIn("reason", d)
+                self.assertTrue(d["reason"])
+
+    def test_gate_roll_iteration_stopping_emits_executor_directives(self) -> None:
+        """When stop_reason is set, gate still emits the quiesce directives."""
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            state = self._base_state()
+            state["baseline"]["aggregate"] = 0.1199
+            payload, _, _ = self._run(
+                Path(tempdir_str),
+                mode="gate_roll_iteration",
+                state=state,
+                worker_results={
+                    "rollover-iter-3": {
+                        "filtered_proposals": [],
+                        "merged_proposals": [],
+                        "needs_fresh_ideation": False,
+                        "summary": {"carried_over": 0, "discarded": 0, "merged": 0, "final_pool_size": 0},
+                    }
+                },
+            )
+
+            self.assertFalse(payload["continue_campaign"])
+            directives = payload["executor_directives"]
+            actions = [d["action"] for d in directives]
+            self.assertIn("emit_iteration_report", actions)
+            self.assertIn("drain_slots", actions)
+            self.assertIn("cancel_slots", actions)
+
+    def test_gate_roll_iteration_emit_iteration_report_directive_carries_iteration(self) -> None:
+        """emit_iteration_report directive must reference the completed iteration."""
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            payload, _, _ = self._run(
+                Path(tempdir_str),
+                mode="gate_roll_iteration",
+                state=self._base_state(),
+                worker_results={
+                    "rollover-iter-3": {
+                        "filtered_proposals": [],
+                        "merged_proposals": [],
+                        "needs_fresh_ideation": False,
+                        "summary": {"carried_over": 0, "discarded": 0, "merged": 0, "final_pool_size": 0},
+                    }
+                },
+            )
+
+            report_dir = next(d for d in payload["executor_directives"] if d["action"] == "emit_iteration_report")
+            self.assertEqual(report_dir["iteration"], 3)
+
+    def test_runtime_error_has_no_executor_directives(self) -> None:
+        """Runtime errors are informational; they must not carry executor work."""
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            state = self._base_state()
+            state["selected_experiment"] = None
+            payload, _, _ = self._run(
+                Path(tempdir_str),
+                mode="plan_roll_iteration",
+                state=state,
+            )
+            self.assertEqual(payload["outcome"], "runtime_error")
+            self.assertEqual(payload["executor_directives"], [])
+
     def _assert_envelope_keys(self, payload: dict, *, handoff_type: str = "ITERATION_CLOSE_CONTROL", control_agent: str = "metaopt-iteration-close-control") -> None:
         self.assertEqual(payload["handoff_type"], handoff_type)
         self.assertEqual(payload["control_agent"], control_agent)

@@ -880,6 +880,10 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
             self.assertFalse(roll_gate["continue_campaign"])
             self.assertEqual(roll_gate["stop_reason"], "target_metric")
             self._assert_envelope(roll_gate, "metaopt-iteration-close-control", "gate_roll_iteration")
+            gate_actions = [d["action"] for d in roll_gate["executor_directives"]]
+            self.assertIn("emit_iteration_report", gate_actions)
+            self.assertIn("drain_slots", gate_actions)
+            self.assertIn("cancel_slots", gate_actions)
             state = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual(state["machine_state"], "QUIESCE_SLOTS")
             self.assertIsNone(state["selected_experiment"])
@@ -921,6 +925,10 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
             )
             self.assertEqual(quiesced["recommended_next_machine_state"], "COMPLETE")
             self._assert_envelope(quiesced, "metaopt-iteration-close-control", "quiesce_slots")
+            quiesce_actions = [d["action"] for d in quiesced["executor_directives"]]
+            self.assertIn("remove_agents_hook", quiesce_actions)
+            self.assertIn("delete_state_file", quiesce_actions)
+            self.assertIn("emit_final_report", quiesce_actions)
             final_state = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual(final_state["status"], "COMPLETE")
             self.assertEqual(final_state["machine_state"], "COMPLETE")

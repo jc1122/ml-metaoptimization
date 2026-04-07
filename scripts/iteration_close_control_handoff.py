@@ -218,6 +218,7 @@ def _plan_roll_iteration(load_handoff: dict[str, Any], state_path: Path, tasks_d
         "recommended_next_machine_state": "ROLL_ITERATION",
         "recommended_next_action": "launch rollover worker",
         "iteration_report": None,
+        "executor_directives": [],
         "warnings": [],
         "summary": "iteration rollover worker is ready to run",
     }
@@ -290,6 +291,21 @@ def _gate_roll_iteration(load_handoff: dict[str, Any], state_path: Path, worker_
         "recommended_next_machine_state": "QUIESCE_SLOTS",
         "recommended_next_action": "drain or cancel active slots",
         "iteration_report": state["last_iteration_report"],
+        "executor_directives": [
+            {
+                "action": "emit_iteration_report",
+                "reason": "iteration rollover complete; publish iteration report",
+                "iteration": iteration,
+            },
+            {
+                "action": "drain_slots",
+                "reason": "drain active background slots before next iteration or shutdown",
+            },
+            {
+                "action": "cancel_slots",
+                "reason": "cancel slots that cannot be drained within timeout",
+            },
+        ],
         "warnings": [],
         "summary": "rollover semantics applied and quiesce preparation is complete",
     }

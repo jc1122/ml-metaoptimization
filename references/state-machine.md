@@ -77,7 +77,8 @@ This state is governed by `metaopt-background-control`. The control agent plans 
 
 ### `WAIT_FOR_PROPOSAL_THRESHOLD`
 
-The threshold decision is a `metaopt-background-control` responsibility; the orchestrator must not evaluate proposal readiness independently.
+This state is governed by `metaopt-background-control`. The control agent evaluates proposal readiness against the threshold; the orchestrator must not assess proposal counts independently. See `references/control-protocol.md`.
+
 
 - Require `proposal_policy.current_target` distinct, non-overlapping proposals in `current_proposals`
 - `proposal_cycle` uses persisted `ideation_rounds_by_slot` bookkeeping for the floor rule so reinvocations resume the same round counts instead of restarting them
@@ -150,6 +151,8 @@ This state is governed by `metaopt-remote-execution-control`. The control agent 
 
 ### `WAIT_FOR_REMOTE_BATCH`
 
+This state is governed by `metaopt-remote-execution-control`. The orchestrator polls `status_command` and stages raw backend payloads; the control agent interprets batch status and routes failure diagnosis. See `references/control-protocol.md`.
+
 - Continue background-slot work while the batch runs
 - Poll only `remote_queue.status_command`
 - The orchestrator stages raw backend status and results payloads; semantic interpretation and remote routing are the responsibility of `metaopt-remote-execution-control`
@@ -167,6 +170,8 @@ This state is governed by `metaopt-remote-execution-control`. The control agent 
   - Remote retries are the backend's responsibility via `remote_queue.retry_policy`; the orchestrator never re-enqueues a failed batch
 
 ### `ANALYZE_RESULTS`
+
+This state is governed by `metaopt-remote-execution-control`. The orchestrator fetches completed-results payloads; the control agent stages analysis tasks and updates baseline state. See `references/control-protocol.md`.
 
 - Call `remote_queue.results_command`
 - The orchestrator stages raw completed-results payloads; semantic result judgment and baseline updates are the responsibility of `metaopt-remote-execution-control`
@@ -192,6 +197,8 @@ This state is governed by `metaopt-iteration-close-control`. The control agent w
 - Transition to `QUIESCE_SLOTS` regardless of whether the campaign continues or stops
 
 ### `QUIESCE_SLOTS`
+
+This state is governed by `metaopt-iteration-close-control`. The orchestrator drains active slots and stages raw outcomes; the control agent decides whether the campaign continues or completes. See `references/control-protocol.md`.
 
 - Stop launching new work
 - Persist any finished slot output before changing slot ownership

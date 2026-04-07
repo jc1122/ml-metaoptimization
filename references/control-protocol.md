@@ -57,35 +57,35 @@ The following control agents form the semantic layer of the metaoptimization sta
 ### `metaopt-background-control`
 
 - **Scope:** `MAINTAIN_BACKGROUND_POOL`, `WAIT_FOR_PROPOSAL_THRESHOLD` states
-- **Phases:** plan (`PLAN_BACKGROUND_WORK`) → gate (`GATE_BACKGROUND_WORK`)
+- **Phases:** plan (`plan_background_work`) → gate (`gate_background_work`)
 - **Responsibility:** Manage background slot allocation, ideation/maintenance mode switching, proposal threshold evaluation
 - **Handoff script:** `scripts/background_control_handoff.py`
 
 ### `metaopt-select-design`
 
 - **Scope:** `SELECT_EXPERIMENT`, `DESIGN_EXPERIMENT` states
-- **Phases:** plan select (`PLAN_SELECT_EXPERIMENT`) → gate select + plan design (`GATE_SELECT_AND_PLAN_DESIGN`) → gate design (`GATE_DESIGN_EXPERIMENT`)
+- **Phases:** plan select (`plan_select_experiment`) → gate select + plan design (`gate_select_and_plan_design`) → gate design (`finalize_select_design`)
 - **Responsibility:** Freeze proposal pool, orchestrate selection and design workers, persist winning proposal and experiment design
 - **Handoff script:** `scripts/select_and_design_handoff.py`
 
 ### `metaopt-local-execution-control`
 
 - **Scope:** `MATERIALIZE_CHANGESET`, `LOCAL_SANITY` states
-- **Phases:** plan (`PLAN_LOCAL_CHANGESET`) → gate (`GATE_LOCAL_SANITY`)
+- **Phases:** plan (`plan_local_changeset`) → gate (`gate_local_sanity`)
 - **Responsibility:** Plan materialization work, route diagnosis actions, enforce sanity attempt cap
 - **Handoff script:** `scripts/local_execution_control_handoff.py`
 
 ### `metaopt-remote-execution-control`
 
 - **Scope:** `ENQUEUE_REMOTE_BATCH`, `WAIT_FOR_REMOTE_BATCH`, `ANALYZE_RESULTS` states
-- **Phases:** plan enqueue (`PLAN_REMOTE_BATCH`) → gate batch status (`GATE_REMOTE_BATCH`) → gate analysis (`GATE_ANALYZE_RESULTS`)
+- **Phases:** plan enqueue (`plan_remote_batch`) → gate batch status (`gate_remote_batch`) → gate analysis (`analyze_remote_results`)
 - **Responsibility:** Generate batch manifests, monitor batch lifecycle, delegate result analysis, update baseline
 - **Handoff script:** `scripts/remote_execution_control_handoff.py`
 
 ### `metaopt-iteration-close-control`
 
 - **Scope:** `ROLL_ITERATION`, `QUIESCE_SLOTS` states
-- **Phases:** plan rollover (`PLAN_ROLL_ITERATION`) → gate rollover (`GATE_ROLL_ITERATION`) → gate quiesce (`GATE_QUIESCE_SLOTS`)
+- **Phases:** plan rollover (`plan_roll_iteration`) → gate rollover (`gate_roll_iteration`) → gate quiesce (`quiesce_slots`)
 - **Responsibility:** Orchestrate rollover filtering, emit iteration reports, evaluate stop conditions, drain active slots
 - **Handoff script:** `scripts/iteration_close_control_handoff.py`
 

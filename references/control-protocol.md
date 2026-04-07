@@ -96,18 +96,22 @@ Each control agent owns a defined set of state keys. Only the owning control age
 | Control Agent | Owned State Keys |
 |---------------|-----------------|
 | `metaopt-load-campaign` | `campaign_identity_hash`, `runtime_config_hash`, `objective_snapshot` |
-| `metaopt-hydrate-state` | `version`, `campaign_id`, `status`, `machine_state`, `current_iteration`, `next_action`, `baseline`, `runtime_capabilities`, `proposal_cycle` (initialization only), `active_slots` (initialization only), `current_proposals` (initialization only), `next_proposals` (initialization only), `completed_experiments` (initialization only), `key_learnings` (initialization only), `no_improve_iterations` (initialization only) |
+| `metaopt-hydrate-state` | `version`, `campaign_id`, `status` (initialization only), `current_iteration`, `next_action`, `baseline`, `runtime_capabilities`, `proposal_cycle` (initialization only), `active_slots` (initialization only), `current_proposals` (initialization only), `next_proposals` (initialization only), `completed_experiments` (initialization only), `key_learnings` (initialization only), `no_improve_iterations` (initialization only) |
 | `metaopt-background-control` | `active_slots` (background class), `proposal_cycle`, `current_proposals` (append only), `next_proposals` (append only) |
 | `metaopt-select-design` | `selected_experiment`, `proposal_cycle.current_pool_frozen` |
 | `metaopt-local-execution-control` | `local_changeset`, `selected_experiment.sanity_attempts`, `selected_experiment.diagnosis_history` |
 | `metaopt-remote-execution-control` | `remote_batches`, `selected_experiment.analysis_summary`, `baseline` (post-analysis update), `no_improve_iterations` |
-| `metaopt-iteration-close-control` | `current_iteration`, `current_proposals` (rollover reset), `next_proposals` (rollover drain), `selected_experiment` (clear to null), `local_changeset` (clear to null), `completed_experiments` (append), `key_learnings` (append), `active_slots` (drain/cancel) |
+| `metaopt-iteration-close-control` | `current_iteration`, `status` (lifecycle transitions, e.g. stop-condition → `"completed"`), `current_proposals` (rollover reset), `next_proposals` (rollover drain), `selected_experiment` (clear to null), `local_changeset` (clear to null), `completed_experiments` (append), `key_learnings` (append), `active_slots` (drain/cancel) |
+
+### Orchestrator-Managed Keys
+
+`machine_state` is **not** a `state_patch` key. It is exclusively set by the orchestrator from the envelope's `recommended_next_machine_state` field (see Orchestrator Responsibilities, step 5). The orchestrator validates that the transition is legal per `references/state-machine.md`. Control agents influence `machine_state` only by setting `recommended_next_machine_state` in their handoff envelope.
 
 ### Shared Keys
 
 The following keys are written by multiple control agents under strict ordering rules:
 
-- `machine_state` and `status`: written by every control agent as part of state transitions. The orchestrator validates that the new value is a legal transition from the current value per `references/state-machine.md`.
+- `status`: initialized by `metaopt-hydrate-state` during bootstrap; updated by `metaopt-iteration-close-control` for lifecycle transitions (e.g. setting `"completed"` when stop conditions are met). No other control agent writes `status`.
 - `next_action`: written by every control agent to describe what the orchestrator should do next.
 - `active_slots`: background-class slots are owned by `metaopt-background-control`; auxiliary-class slots are owned by the control agent that requested the launch. `metaopt-iteration-close-control` may drain or cancel any slot during `QUIESCE_SLOTS`.
 
@@ -116,10 +120,10 @@ The following keys are written by multiple control agents under strict ordering 
 The orchestrator is a mechanical executor. Given a control-handoff envelope, it:
 
 1. Validates the envelope structure
-2. Applies `state_patch` to `.ml-metaopt/state.json` (rejecting unauthorized keys)
+2. Applies `state_patch` to `.ml-metaopt/state.json` (rejecting unauthorized keys; `machine_state` is never a valid `state_patch` key)
 3. Executes `executor_directives` (file writes, worktree operations, command execution)
 4. Launches workers from `launch_requests`
-5. Transitions `machine_state` to `recommended_next_machine_state`
+5. Sets `machine_state` to `recommended_next_machine_state` (validating that the transition is legal per `references/state-machine.md`)
 6. Persists updated state
 
 The orchestrator never interprets semantic content (e.g., proposal quality, diagnosis routing, stop condition evaluation). These decisions belong exclusively to control agents.

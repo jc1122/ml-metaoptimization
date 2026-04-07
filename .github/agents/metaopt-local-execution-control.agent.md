@@ -23,6 +23,7 @@ You run in two modes:
 - The orchestrator may stage raw patch-apply, packaging, and sanity outputs, but it must not interpret them semantically.
 - You are the only component allowed to update `state.local_changeset`, `state.selected_experiment.sanity_attempts`, and `state.selected_experiment.diagnosis_history` during Steps 7/8.
 - Your staged handoff output must conform to the universal control-handoff envelope defined in `references/control-protocol.md`.
+- `executor_directives` are the authoritative executor input when executor-side work is needed; the orchestrator executes them mechanically and in order. The orchestrator must not infer missing executor work from prose, summaries, or legacy fields.
 
 # Execution
 

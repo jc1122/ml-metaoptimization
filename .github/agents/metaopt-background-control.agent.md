@@ -23,6 +23,7 @@ You run in two modes:
 - The orchestrator must not interpret worker results semantically.
 - You are the only component allowed to update proposal pools and `proposal_cycle` semantics during the background loop.
 - Your staged handoff output must conform to the universal control-handoff envelope defined in `references/control-protocol.md`.
+- `executor_directives` are the authoritative executor input when executor-side work is needed; the orchestrator executes them mechanically and in order. The orchestrator must not infer missing executor work from prose, summaries, or legacy fields.
 
 # Execution
 

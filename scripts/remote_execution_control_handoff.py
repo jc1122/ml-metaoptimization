@@ -257,6 +257,7 @@ def _plan_remote_batch(load_handoff: dict[str, Any], state_path: Path, output_pa
                 "reason": "submit batch to remote queue backend",
                 "command": enqueue_command,
                 "manifest_path": manifest_path,
+                "batch_id": batch_id,
             },
         ],
         "warnings": [],

@@ -586,6 +586,17 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
             )
             self.assertEqual(local_plan["worker_ref"], "metaopt-materialization-worker")
             self._assert_envelope(local_plan, "metaopt-local-execution-control", "plan_local_changeset")
+            # ── local plan must carry authoritative executor directives ──
+            local_plan_directives = local_plan["executor_directives"]
+            self.assertEqual(
+                [d["action"] for d in local_plan_directives],
+                ["apply_patch_artifacts", "package_code_artifact", "package_data_manifest", "run_sanity"],
+            )
+            for d in local_plan_directives:
+                self.assertTrue(d.get("reason"), f"local plan directive {d['action']} missing reason")
+            self.assertIn("worktree", local_plan_directives[0])
+            self.assertIn("worktree", local_plan_directives[1])
+            self.assertIn("worktree", local_plan_directives[3])
             (worker_results_dir / "materialization-1.json").write_text(
                 json.dumps(
                     {
@@ -678,6 +689,16 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
             )
             self.assertEqual(remote_plan["batch_id"], batch_id)
             self._assert_envelope(remote_plan, "metaopt-remote-execution-control", "plan_remote_batch")
+            # ── remote plan must carry write_manifest + enqueue_batch directives ──
+            remote_plan_directives = remote_plan["executor_directives"]
+            self.assertEqual(
+                [d["action"] for d in remote_plan_directives],
+                ["write_manifest", "enqueue_batch"],
+            )
+            self.assertEqual(remote_plan_directives[0]["batch_id"], batch_id)
+            self.assertIn("manifest_path", remote_plan_directives[0])
+            self.assertEqual(remote_plan_directives[1]["batch_id"], batch_id)
+            self.assertIn("command", remote_plan_directives[1])
             (executor_events_dir / f"enqueue-{batch_id}.json").write_text(
                 json.dumps({"batch_id": batch_id, "queue_ref": "ray-queue-123", "status": "queued"}),
                 encoding="utf-8",
@@ -705,6 +726,14 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
             )
             self.assertEqual(remote_gate["recommended_next_machine_state"], "WAIT_FOR_REMOTE_BATCH")
             self._assert_envelope(remote_gate, "metaopt-remote-execution-control", "gate_remote_batch_initial")
+            # ── initial gate must carry poll_batch_status directive ──
+            initial_gate_directives = remote_gate["executor_directives"]
+            self.assertEqual(
+                [d["action"] for d in initial_gate_directives],
+                ["poll_batch_status"],
+            )
+            self.assertEqual(initial_gate_directives[0]["batch_id"], batch_id)
+            self.assertIn("command", initial_gate_directives[0])
             (executor_events_dir / f"remote-status-{batch_id}.json").write_text(
                 json.dumps(
                     {
@@ -715,6 +744,35 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            # ── gate before results exist → must emit fetch_batch_results ──
+            fetch_handoff = self._run(
+                [
+                    "python3",
+                    str(REMOTE_SCRIPT),
+                    "--mode",
+                    "gate_remote_batch",
+                    "--load-handoff",
+                    str(load_output),
+                    "--state-path",
+                    str(state_path),
+                    "--tasks-dir",
+                    str(tasks_dir),
+                    "--worker-results-dir",
+                    str(worker_results_dir),
+                    "--executor-events-dir",
+                    str(executor_events_dir),
+                    "--output",
+                    str(remote_output),
+                ],
+                remote_output,
+            )
+            fetch_directives = fetch_handoff["executor_directives"]
+            self.assertEqual(
+                [d["action"] for d in fetch_directives],
+                ["fetch_batch_results"],
+            )
+            self.assertEqual(fetch_directives[0]["batch_id"], batch_id)
+            self.assertIn("command", fetch_directives[0])
             (executor_events_dir / f"remote-results-{batch_id}.json").write_text(
                 json.dumps(
                     {

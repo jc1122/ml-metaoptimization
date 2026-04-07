@@ -1339,6 +1339,40 @@ class MetaoptValidationTests(unittest.TestCase):
                 r"must conform.*control.handoff envelope",
             )
 
+    def test_control_agent_manifests_declare_directives_authoritative(self) -> None:
+        """Every control-agent manifest must declare executor_directives as the authoritative executor input."""
+        control_agent_manifests = [
+            ".github/agents/metaopt-load-campaign.agent.md",
+            ".github/agents/metaopt-hydrate-state.agent.md",
+            ".github/agents/metaopt-background-control.agent.md",
+            ".github/agents/metaopt-select-design.agent.md",
+            ".github/agents/metaopt-local-execution-control.agent.md",
+            ".github/agents/metaopt-remote-execution-control.agent.md",
+            ".github/agents/metaopt-iteration-close-control.agent.md",
+        ]
+        for manifest_path in control_agent_manifests:
+            content = _read_text(manifest_path)
+            self.assertIn(
+                "executor_directives",
+                content,
+                f"{manifest_path} must mention executor_directives",
+            )
+            _require_pattern(
+                self,
+                content,
+                r"`executor_directives`.*authoritative.*executor",
+            )
+            _require_pattern(
+                self,
+                content,
+                r"orchestrator.*execut(es|e).*mechanically.*in order",
+            )
+            _require_pattern(
+                self,
+                content,
+                r"must not infer.*executor work.*prose|must not infer.*executor work.*summar|must not infer.*executor work.*legacy",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

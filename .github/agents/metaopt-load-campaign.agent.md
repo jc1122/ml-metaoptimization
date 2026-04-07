@@ -22,6 +22,7 @@ Your scope is limited to `LOAD_CAMPAIGN` plus an advisory `.ml-metaopt/state.jso
 - Your only write target is `.ml-metaopt/handoffs/load_campaign.latest.json`.
 - Treat state-peek mismatches as advisory warnings; the main orchestrator decides `HYDRATE_STATE`.
 - Your staged handoff output must conform to the universal control-handoff envelope defined in `references/control-protocol.md`.
+- `executor_directives` are the authoritative executor input when executor-side work is needed; the orchestrator executes them mechanically and in order. The orchestrator must not infer missing executor work from prose, summaries, or legacy fields.
 
 # Execution
 

@@ -24,6 +24,7 @@ You run in three modes:
 - The orchestrator may stage raw quiesce outcomes, but it must not interpret them semantically.
 - You are the only component allowed to update proposal carry-over semantics, `selected_experiment` closure, iteration counters, `last_iteration_report`, and continue-vs-complete routing during Steps 12/13.
 - Your staged handoff output must conform to the universal control-handoff envelope defined in `references/control-protocol.md`.
+- `executor_directives` are the authoritative executor input when executor-side work is needed; the orchestrator executes them mechanically and in order. The orchestrator must not infer missing executor work from prose, summaries, or legacy fields.
 
 # Execution
 

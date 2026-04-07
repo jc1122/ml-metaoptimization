@@ -21,6 +21,7 @@ Your scope is limited to `HYDRATE_STATE`.
 - Verify worker-skill availability from `agents/worker-skills.json`.
 - Do not dispatch worker skills or backend commands.
 - Your staged handoff output must conform to the universal control-handoff envelope defined in `references/control-protocol.md`.
+- `executor_directives` are the authoritative executor input when executor-side work is needed; the orchestrator executes them mechanically and in order. The orchestrator must not infer missing executor work from prose, summaries, or legacy fields.
 - Write only:
   - `.ml-metaopt/state.json`
   - `AGENTS.md`

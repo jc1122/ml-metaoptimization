@@ -96,7 +96,7 @@ Each control agent owns a defined set of state keys. Only the owning control age
 | Control Agent | Owned State Keys |
 |---------------|-----------------|
 | `metaopt-load-campaign` | `campaign_identity_hash`, `runtime_config_hash`, `objective_snapshot` |
-| `metaopt-hydrate-state` | `version`, `campaign_id`, `status` (initialization only), `current_iteration`, `next_action`, `baseline`, `runtime_capabilities`, `proposal_cycle` (initialization only), `active_slots` (initialization only), `current_proposals` (initialization only), `next_proposals` (initialization only), `completed_experiments` (initialization only), `key_learnings` (initialization only), `no_improve_iterations` (initialization only) |
+| `metaopt-hydrate-state` | `version`, `campaign_id`, `status` (initialization only), `current_iteration`, `baseline`, `runtime_capabilities`, `proposal_cycle` (initialization only), `active_slots` (initialization only), `current_proposals` (initialization only), `next_proposals` (initialization only), `completed_experiments` (initialization only), `key_learnings` (initialization only), `no_improve_iterations` (initialization only) |
 | `metaopt-background-control` | `active_slots` (background class), `proposal_cycle`, `current_proposals` (append only), `next_proposals` (append only) |
 | `metaopt-select-design` | `selected_experiment`, `proposal_cycle.current_pool_frozen` |
 | `metaopt-local-execution-control` | `local_changeset`, `selected_experiment.sanity_attempts`, `selected_experiment.diagnosis_history` |
@@ -112,7 +112,7 @@ Each control agent owns a defined set of state keys. Only the owning control age
 The following keys are written by multiple control agents under strict ordering rules:
 
 - `status`: initialized by `metaopt-hydrate-state` during bootstrap; updated by `metaopt-iteration-close-control` for lifecycle transitions (e.g. setting `"completed"` when stop conditions are met). No other control agent writes `status`.
-- `next_action`: written by every control agent to describe what the orchestrator should do next.
+- `next_action`: exempt from single-owner rule. Every control agent writes this key in its `state_patch` to describe what the orchestrator should do next.
 - `active_slots`: background-class slots are owned by `metaopt-background-control`; auxiliary-class slots are owned by the control agent that requested the launch. `metaopt-iteration-close-control` may drain or cancel any slot during `QUIESCE_SLOTS`.
 
 ## Orchestrator Responsibilities

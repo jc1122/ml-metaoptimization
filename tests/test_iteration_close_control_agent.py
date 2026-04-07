@@ -454,10 +454,16 @@ class IterationCloseControlAgentTests(unittest.TestCase):
 
             self.assertEqual(payload["outcome"], "complete")
             directives = payload["executor_directives"]
-            directive_actions = [d["action"] for d in directives]
-            self.assertIn("remove_agents_hook", directive_actions)
-            self.assertIn("delete_state_file", directive_actions)
-            self.assertIn("emit_final_report", directive_actions)
+            self.assertEqual(
+                [directive["action"] for directive in directives],
+                ["remove_agents_hook", "delete_state_file", "emit_final_report"],
+            )
+            remove_hook = directives[0]
+            self.assertEqual(remove_hook["agents_path"], "AGENTS.md")
+            delete_state = directives[1]
+            self.assertEqual(delete_state["state_path"], ".ml-metaopt/state.json")
+            emit_final = directives[2]
+            self.assertEqual(emit_final["report_type"], "final")
 
     def test_quiesce_continue_has_no_terminal_cleanup_directives(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir_str:
@@ -516,10 +522,17 @@ class IterationCloseControlAgentTests(unittest.TestCase):
 
             self.assertTrue(payload["continue_campaign"])
             directives = payload["executor_directives"]
-            actions = [d["action"] for d in directives]
-            self.assertIn("emit_iteration_report", actions)
-            self.assertIn("drain_slots", actions)
-            self.assertIn("cancel_slots", actions)
+            self.assertEqual(
+                [directive["action"] for directive in directives],
+                ["emit_iteration_report", "drain_slots", "cancel_slots"],
+            )
+            report_dir = directives[0]
+            self.assertEqual(report_dir["report_type"], "iteration")
+            self.assertEqual(report_dir["iteration"], 3)
+            drain_dir = directives[1]
+            self.assertEqual(drain_dir["drain_window_seconds"], 60)
+            cancel_dir = directives[2]
+            self.assertEqual(cancel_dir["slot_ids"], ["bg-1", "bg-2"])
             for d in directives:
                 self.assertIn("reason", d)
                 self.assertTrue(d["reason"])

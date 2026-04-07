@@ -274,6 +274,11 @@ def _gate_roll_iteration(load_handoff: dict[str, Any], state_path: Path, worker_
         baseline_after,
         delta,
     )
+    active_slot_ids = [
+        slot["slot_id"]
+        for slot in state.get("active_slots", [])
+        if isinstance(slot, dict) and isinstance(slot.get("slot_id"), str) and slot["slot_id"]
+    ]
     _write_json(state_path, state)
 
     payload = {
@@ -295,15 +300,18 @@ def _gate_roll_iteration(load_handoff: dict[str, Any], state_path: Path, worker_
             {
                 "action": "emit_iteration_report",
                 "reason": "iteration rollover complete; publish iteration report",
+                "report_type": "iteration",
                 "iteration": iteration,
             },
             {
                 "action": "drain_slots",
                 "reason": "drain active background slots before next iteration or shutdown",
+                "drain_window_seconds": 60,
             },
             {
                 "action": "cancel_slots",
                 "reason": "cancel slots that cannot be drained within timeout",
+                "slot_ids": active_slot_ids,
             },
         ],
         "warnings": [],
@@ -338,9 +346,21 @@ def _quiesce_slots(state_path: Path, executor_events_dir: Path, output_path: Pat
         outcome = "complete"
         next_state = "COMPLETE"
         cleanup_directives = [
-            {"action": "remove_agents_hook", "reason": "campaign complete; orchestration hook no longer needed"},
-            {"action": "delete_state_file", "reason": "campaign complete; state file no longer needed"},
-            {"action": "emit_final_report", "reason": "campaign complete; produce final summary"},
+            {
+                "action": "remove_agents_hook",
+                "reason": "campaign complete; orchestration hook no longer needed",
+                "agents_path": "AGENTS.md",
+            },
+            {
+                "action": "delete_state_file",
+                "reason": "campaign complete; state file no longer needed",
+                "state_path": ".ml-metaopt/state.json",
+            },
+            {
+                "action": "emit_final_report",
+                "reason": "campaign complete; produce final summary",
+                "report_type": "final",
+            },
         ]
 
     _write_json(state_path, state)

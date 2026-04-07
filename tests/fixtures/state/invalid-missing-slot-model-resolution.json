@@ -95,5 +95,6 @@
   "key_learnings": [
     "Leakage checks must run in local sanity before enqueue"
   ],
-  "no_improve_iterations": 2
+  "no_improve_iterations": 2,
+  "campaign_started_at": "2026-04-01T00:00:00Z"
 }

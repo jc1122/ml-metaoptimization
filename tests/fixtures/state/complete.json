@@ -62,5 +62,6 @@
   "key_learnings": [
     "Weighted holdout stabilization improved the aggregate metric"
   ],
-  "no_improve_iterations": 0
+  "no_improve_iterations": 0,
+  "campaign_started_at": "2026-04-01T00:00:00Z"
 }

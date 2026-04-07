@@ -173,6 +173,7 @@ def _validate_state_payload(payload: dict) -> None:
         "completed_experiments",
         "key_learnings",
         "no_improve_iterations",
+        "campaign_started_at",
     }
     missing = required_keys - payload.keys()
     assert not missing, f"missing required state keys: {sorted(missing)}"
@@ -1250,9 +1251,14 @@ class MetaoptValidationTests(unittest.TestCase):
         _require_pattern(self, protocol, r"[Gg]ate")
 
     def test_contracts_document_campaign_started_at(self) -> None:
-        """contracts.md must document campaign_started_at as part of the state file."""
+        """contracts.md must list campaign_started_at as a required state-file key."""
         contracts = _read_text("references/contracts.md")
         self.assertIn("campaign_started_at", contracts)
+        # Must appear in the required keys section, not the recommended section
+        required_section_end = contracts.index("Recommended additional keys")
+        first_occurrence = contracts.index("campaign_started_at")
+        self.assertLess(first_occurrence, required_section_end,
+                        "campaign_started_at must be in the required keys section")
 
     def test_state_machine_documents_max_wallclock_hours_in_roll_iteration(self) -> None:
         """state-machine.md ROLL_ITERATION must document max_wallclock_hours stop condition."""

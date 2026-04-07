@@ -44,10 +44,11 @@
     "aggregate": 0.1284,
     "by_dataset": {
       "ds_main": 0.1269,
-      "ds_holdout": 0.1320
+      "ds_holdout": 0.132
     }
   },
   "completed_experiments": [],
   "key_learnings": [],
-  "no_improve_iterations": 1
+  "no_improve_iterations": 1,
+  "campaign_started_at": "2026-04-01T00:00:00Z"
 }

@@ -111,6 +111,7 @@ Recommended additional keys when useful:
 - `sanity_attempts_current_experiment`
 - `maintenance_summary`
 - `last_iteration_report`
+- `campaign_started_at` — ISO 8601 timestamp recording when the campaign was first initialized. Set during `HYDRATE_STATE` on fresh initialization; preserved across resumes. Used by `metaopt-iteration-close-control` to evaluate the `max_wallclock_hours` stop condition. When absent on resume (legacy states), hydration defaults it to the current timestamp.
 
 Status semantics:
 - `status` is the coarse lifecycle summary: `RUNNING`, `BLOCKED_CONFIG`, `FAILED`, or `COMPLETE`

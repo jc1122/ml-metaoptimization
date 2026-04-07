@@ -1249,6 +1249,22 @@ class MetaoptValidationTests(unittest.TestCase):
         _require_pattern(self, protocol, r"[Pp]lan")
         _require_pattern(self, protocol, r"[Gg]ate")
 
+    def test_contracts_document_campaign_started_at(self) -> None:
+        """contracts.md must document campaign_started_at as part of the state file."""
+        contracts = _read_text("references/contracts.md")
+        self.assertIn("campaign_started_at", contracts)
+
+    def test_state_machine_documents_max_wallclock_hours_in_roll_iteration(self) -> None:
+        """state-machine.md ROLL_ITERATION must document max_wallclock_hours stop condition."""
+        state_machine = _read_text("references/state-machine.md")
+        # The ROLL_ITERATION section should list max_wallclock_hours as a stop condition
+        self.assertIn("max_wallclock_hours", state_machine)
+
+    def test_state_machine_documents_terminal_cleanup_directives(self) -> None:
+        """state-machine.md terminal states must document explicit executor_directives for cleanup."""
+        state_machine = _read_text("references/state-machine.md")
+        self.assertIn("executor_directives", state_machine)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -403,6 +403,88 @@ class IterationCloseControlAgentTests(unittest.TestCase):
             self.assertEqual(updated_state["status"], "COMPLETE")
             self.assertEqual(updated_state["machine_state"], "COMPLETE")
 
+    def test_gate_roll_iteration_stops_on_max_wallclock_hours(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            state = self._base_state()
+            state["campaign_started_at"] = "2026-04-01T00:00:00Z"
+            load_handoff = self._write_load_handoff(Path(tempdir_str))
+            load_data = json.loads(load_handoff.read_text(encoding="utf-8"))
+            load_data["stop_conditions"]["max_wallclock_hours"] = 0.001
+            load_handoff.write_text(json.dumps(load_data), encoding="utf-8")
+
+            payload, updated_state, _ = self._run(
+                Path(tempdir_str),
+                mode="gate_roll_iteration",
+                state=state,
+                worker_results={
+                    "rollover-iter-3": {
+                        "filtered_proposals": [],
+                        "merged_proposals": [],
+                        "needs_fresh_ideation": False,
+                        "summary": {"carried_over": 0, "discarded": 0, "merged": 0, "final_pool_size": 0},
+                    }
+                },
+            )
+
+            self.assertFalse(payload["continue_campaign"])
+            self.assertEqual(payload["stop_reason"], "max_wallclock_hours")
+            self.assertEqual(updated_state["current_iteration"], 3)
+
+    def test_quiesce_complete_emits_terminal_cleanup_directives(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            state = self._base_state()
+            state["machine_state"] = "QUIESCE_SLOTS"
+            state["selected_experiment"] = None
+            payload, updated_state, _ = self._run(
+                Path(tempdir_str),
+                mode="quiesce_slots",
+                state=state,
+                executor_events={
+                    "quiesce-slots-iter-3": {
+                        "continue_campaign": False,
+                        "stop_reason": "target_metric",
+                        "finished_slots": [],
+                        "canceled_slots": [],
+                        "drain_duration_seconds": 5,
+                        "maintenance_apply_results": [],
+                        "summary": "all work drained cleanly",
+                    }
+                },
+            )
+
+            self.assertEqual(payload["outcome"], "complete")
+            directives = payload["executor_directives"]
+            directive_actions = [d["action"] for d in directives]
+            self.assertIn("remove_agents_hook", directive_actions)
+            self.assertIn("delete_state_file", directive_actions)
+            self.assertIn("emit_final_report", directive_actions)
+
+    def test_quiesce_continue_has_no_terminal_cleanup_directives(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            state = self._base_state()
+            state["machine_state"] = "QUIESCE_SLOTS"
+            state["current_iteration"] = 4
+            state["selected_experiment"] = None
+            payload, _, _ = self._run(
+                Path(tempdir_str),
+                mode="quiesce_slots",
+                state=state,
+                executor_events={
+                    "quiesce-slots-iter-4": {
+                        "continue_campaign": True,
+                        "stop_reason": "",
+                        "finished_slots": [],
+                        "canceled_slots": [],
+                        "drain_duration_seconds": 5,
+                        "maintenance_apply_results": [],
+                        "summary": "all work drained cleanly",
+                    }
+                },
+            )
+
+            self.assertEqual(payload["outcome"], "continue")
+            self.assertEqual(payload["executor_directives"], [])
+
     def _assert_envelope_keys(self, payload: dict, *, handoff_type: str = "ITERATION_CLOSE_CONTROL", control_agent: str = "metaopt-iteration-close-control") -> None:
         self.assertEqual(payload["handoff_type"], handoff_type)
         self.assertEqual(payload["control_agent"], control_agent)

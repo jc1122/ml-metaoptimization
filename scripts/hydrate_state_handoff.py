@@ -197,6 +197,7 @@ def _fresh_state(load_handoff: dict[str, Any], runtime_capabilities: dict[str, A
         "completed_experiments": [],
         "key_learnings": [],
         "no_improve_iterations": 0,
+        "campaign_started_at": timestamp(),
         "runtime_capabilities": {
             "verified_at": runtime_capabilities["verified_at"],
             "available_skills": runtime_capabilities["available_skills"],
@@ -289,6 +290,7 @@ def build_handoff(
             "missing_skills": runtime_capabilities["missing_skills"],
             "degraded_lanes": runtime_capabilities["degraded_lanes"],
         }
+        state.setdefault("campaign_started_at", timestamp())
         resume_mode = "existing"
         outcome = "resumed"
     else:

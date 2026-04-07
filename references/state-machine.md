@@ -192,7 +192,7 @@ This state is governed by `metaopt-iteration-close-control`. The control agent w
 - Increment iteration counters only when the campaign will continue into another iteration; if a stop condition is already met, keep `current_iteration` equal to the just-completed iteration number
 - Clear `selected_experiment` (set to `null`) after persisting the completed experiment record to `completed_experiments`
 - Check stop conditions using the aggregate metric
-- Stop when any configured stop condition is met: `target_metric`, `max_iterations`, or `max_no_improve_iterations`
+- Stop when any configured stop condition is met: `target_metric`, `max_iterations`, `max_no_improve_iterations`, or `max_wallclock_hours` (elapsed time since `campaign_started_at`)
 - Emit the iteration report using the contract in `references/contracts.md`
 - Transition to `QUIESCE_SLOTS` regardless of whether the campaign continues or stops
 
@@ -216,3 +216,5 @@ This state is governed by `metaopt-iteration-close-control`. The orchestrator dr
 - `FAILED`: remove the `AGENTS.md` hook, write the terminal error, preserve state, and stop
 
 All three terminal states remove the `AGENTS.md` hook using the same operation as the identity-drift path in `HYDRATE_STATE`: strip only the `<!-- ml-metaoptimization:begin -->...<!-- ml-metaoptimization:end -->` block. The difference is that terminal-state cleanup transitions the machine to a final state (`COMPLETE`, `BLOCKED_CONFIG`, or `FAILED`), whereas the identity-drift path is a hard stop that does not advance the state machine.
+
+When the campaign reaches a terminal state via `QUIESCE_SLOTS`, the control agent emits explicit `executor_directives` in the handoff output so the orchestrator does not need to infer cleanup intent. For `COMPLETE`, the directives are `remove_agents_hook`, `delete_state_file`, and `emit_final_report`. The orchestrator executes these directives mechanically without semantic interpretation.

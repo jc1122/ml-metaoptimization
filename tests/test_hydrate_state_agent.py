@@ -514,6 +514,115 @@ class HydrateStateHandoffTests(unittest.TestCase):
             self.assertEqual(payload["state_patch"], {})
             self.assertEqual(payload["executor_directives"], [])
 
+    def test_fresh_init_sets_campaign_started_at(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            payload, state_path, _ = self._run_tool(Path(tempdir_str))
+
+            self.assertEqual(payload["outcome"], "initialized")
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertIn("campaign_started_at", state)
+            self.assertRegex(state["campaign_started_at"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+
+    def test_resume_preserves_campaign_started_at(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            existing_state = {
+                "version": 3,
+                "campaign_id": "market-forecast-v3",
+                "campaign_identity_hash": "sha256:f50928628873800b25a5dfb41f2fd6c93acfc210424953f53a5005e09379fa4c",
+                "runtime_config_hash": "sha256:6f59ca57fb3da56f815d7fb03f8be7335fa9d14344c49154308e9e65990e9ac6",
+                "status": "RUNNING",
+                "machine_state": "WAIT_FOR_PROPOSAL_THRESHOLD",
+                "current_iteration": 3,
+                "next_action": "wait for enough proposals",
+                "objective_snapshot": {
+                    "metric": "rmse",
+                    "direction": "minimize",
+                    "aggregation": {"method": "weighted_mean", "weights": {"ds_main": 0.7, "ds_holdout": 0.3}},
+                    "improvement_threshold": 0.0005,
+                },
+                "proposal_cycle": {
+                    "cycle_id": "iter-3-cycle-1",
+                    "current_pool_frozen": False,
+                    "ideation_rounds_by_slot": {},
+                    "shortfall_reason": "not_enough_proposals",
+                },
+                "active_slots": [],
+                "current_proposals": [],
+                "next_proposals": [],
+                "selected_experiment": None,
+                "local_changeset": None,
+                "remote_batches": [],
+                "baseline": {"aggregate": 0.1284, "by_dataset": {"ds_main": 0.1269, "ds_holdout": 0.1320}},
+                "completed_experiments": [],
+                "key_learnings": [],
+                "no_improve_iterations": 0,
+                "runtime_capabilities": {
+                    "verified_at": "2026-04-06T00:00:00Z",
+                    "available_skills": [],
+                    "missing_skills": [],
+                    "degraded_lanes": [],
+                },
+                "campaign_started_at": "2026-04-01T10:00:00Z",
+            }
+            payload, state_path, _ = self._run_tool(
+                Path(tempdir_str),
+                state_payload=existing_state,
+            )
+
+            self.assertEqual(payload["outcome"], "resumed")
+            resumed = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(resumed["campaign_started_at"], "2026-04-01T10:00:00Z")
+
+    def test_resume_defaults_campaign_started_at_when_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            existing_state = {
+                "version": 3,
+                "campaign_id": "market-forecast-v3",
+                "campaign_identity_hash": "sha256:f50928628873800b25a5dfb41f2fd6c93acfc210424953f53a5005e09379fa4c",
+                "runtime_config_hash": "sha256:6f59ca57fb3da56f815d7fb03f8be7335fa9d14344c49154308e9e65990e9ac6",
+                "status": "RUNNING",
+                "machine_state": "WAIT_FOR_PROPOSAL_THRESHOLD",
+                "current_iteration": 3,
+                "next_action": "wait for enough proposals",
+                "objective_snapshot": {
+                    "metric": "rmse",
+                    "direction": "minimize",
+                    "aggregation": {"method": "weighted_mean", "weights": {"ds_main": 0.7, "ds_holdout": 0.3}},
+                    "improvement_threshold": 0.0005,
+                },
+                "proposal_cycle": {
+                    "cycle_id": "iter-3-cycle-1",
+                    "current_pool_frozen": False,
+                    "ideation_rounds_by_slot": {},
+                    "shortfall_reason": "not_enough_proposals",
+                },
+                "active_slots": [],
+                "current_proposals": [],
+                "next_proposals": [],
+                "selected_experiment": None,
+                "local_changeset": None,
+                "remote_batches": [],
+                "baseline": {"aggregate": 0.1284, "by_dataset": {"ds_main": 0.1269, "ds_holdout": 0.1320}},
+                "completed_experiments": [],
+                "key_learnings": [],
+                "no_improve_iterations": 0,
+                "runtime_capabilities": {
+                    "verified_at": "2026-04-06T00:00:00Z",
+                    "available_skills": [],
+                    "missing_skills": [],
+                    "degraded_lanes": [],
+                },
+            }
+            payload, state_path, _ = self._run_tool(
+                Path(tempdir_str),
+                state_payload=existing_state,
+            )
+
+            self.assertEqual(payload["outcome"], "resumed")
+            resumed = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertIn("campaign_started_at", resumed)
+            self.assertRegex(resumed["campaign_started_at"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+
     def test_agent_profile_exists_and_is_programmatic_only(self) -> None:
         self.assertTrue(AGENT_PROFILE.exists(), f"missing {AGENT_PROFILE}")
         content = AGENT_PROFILE.read_text(encoding="utf-8")

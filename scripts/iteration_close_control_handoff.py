@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -178,6 +179,13 @@ def _stop_reason(state: dict[str, Any], stop_conditions: dict[str, Any]) -> str:
         return "max_iterations"
     if state["no_improve_iterations"] >= stop_conditions["max_no_improve_iterations"]:
         return "max_no_improve_iterations"
+    started_at = state.get("campaign_started_at")
+    max_hours = stop_conditions.get("max_wallclock_hours")
+    if started_at and max_hours is not None:
+        start = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+        elapsed_hours = (datetime.now(timezone.utc) - start).total_seconds() / 3600
+        if elapsed_hours >= max_hours:
+            return "max_wallclock_hours"
     return ""
 
 
@@ -306,12 +314,18 @@ def _quiesce_slots(state_path: Path, executor_events_dir: Path, output_path: Pat
         state["next_action"] = "maintain background slot pool"
         outcome = "continue"
         next_state = "MAINTAIN_BACKGROUND_POOL"
+        cleanup_directives: list[dict[str, str]] = []
     else:
         state["status"] = "COMPLETE"
         state["machine_state"] = "COMPLETE"
         state["next_action"] = "emit final report and remove orchestration hook"
         outcome = "complete"
         next_state = "COMPLETE"
+        cleanup_directives = [
+            {"action": "remove_agents_hook"},
+            {"action": "delete_state_file"},
+            {"action": "emit_final_report"},
+        ]
 
     _write_json(state_path, state)
     payload = {
@@ -329,6 +343,7 @@ def _quiesce_slots(state_path: Path, executor_events_dir: Path, output_path: Pat
         "recommended_next_machine_state": next_state,
         "recommended_next_action": state["next_action"],
         "iteration_report": state.get("last_iteration_report"),
+        "executor_directives": cleanup_directives,
         "warnings": [],
         "summary": event.get("summary", "quiesce results integrated"),
     }

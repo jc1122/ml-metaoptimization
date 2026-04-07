@@ -7,6 +7,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from _handoff_utils import emit_handoff, read_json, timestamp, write_json
+
+_HANDOFF_TYPE = "REMOTE_EXECUTION_CONTROL"
+_CONTROL_AGENT = "metaopt-remote-execution-control"
+
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate Steps 9/11 remote execution control handoffs.")
@@ -21,16 +26,15 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _read_json(path: Path) -> Any:
-    return json.loads(path.read_text(encoding="utf-8"))
+    return read_json(path)
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_json(path, payload)
 
 
 def _timestamp() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return timestamp()
 
 
 def _runtime_error(
@@ -42,7 +46,7 @@ def _runtime_error(
 ) -> dict[str, Any]:
     payload = {
         "schema_version": 1,
-        "producer": "metaopt-remote-execution-control",
+        "producer": _CONTROL_AGENT,
         "phase": phase,
         "outcome": "runtime_error",
         "batch_id": None,
@@ -58,8 +62,7 @@ def _runtime_error(
         "warnings": warnings or [],
         "summary": summary,
     }
-    _write_json(output_path, payload)
-    return payload
+    return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
 
 def _load_inputs(load_handoff_path: Path, state_path: Path) -> tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None]:
@@ -229,7 +232,7 @@ def _plan_remote_batch(load_handoff: dict[str, Any], state_path: Path, output_pa
 
     payload = {
         "schema_version": 1,
-        "producer": "metaopt-remote-execution-control",
+        "producer": _CONTROL_AGENT,
         "phase": "PLAN_REMOTE_BATCH",
         "outcome": "planned",
         "batch_id": batch_id,
@@ -244,8 +247,7 @@ def _plan_remote_batch(load_handoff: dict[str, Any], state_path: Path, output_pa
         "warnings": [],
         "summary": "remote batch is ready for manifest write and enqueue",
     }
-    _write_json(output_path, payload)
-    return payload
+    return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
 
 def _validate_enqueue_ack(payload: dict[str, Any], batch_id: str) -> bool:
@@ -297,7 +299,7 @@ def _gate_remote_batch(
         _write_json(state_path, state)
         payload = {
             "schema_version": 1,
-            "producer": "metaopt-remote-execution-control",
+            "producer": _CONTROL_AGENT,
             "phase": "GATE_REMOTE_BATCH",
             "outcome": "waiting",
             "batch_id": batch_id,
@@ -313,8 +315,7 @@ def _gate_remote_batch(
             "warnings": [],
             "summary": "enqueue acknowledged and batch is now tracked remotely",
         }
-        _write_json(output_path, payload)
-        return payload
+        return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
     batch_id = _active_batch_id(state)
     if not batch_id:
@@ -353,7 +354,7 @@ def _gate_remote_batch(
         _write_json(state_path, state)
         payload = {
             "schema_version": 1,
-            "producer": "metaopt-remote-execution-control",
+            "producer": _CONTROL_AGENT,
             "phase": "GATE_REMOTE_BATCH",
             "outcome": "waiting",
             "batch_id": batch_id,
@@ -369,8 +370,7 @@ def _gate_remote_batch(
             "warnings": [],
             "summary": "remote batch is still in flight",
         }
-        _write_json(output_path, payload)
-        return payload
+        return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
     if status_payload["status"] == "completed":
         results_path = executor_events_dir / f"remote-results-{batch_id}.json"
@@ -380,7 +380,7 @@ def _gate_remote_batch(
             _write_json(state_path, state)
             payload = {
                 "schema_version": 1,
-                "producer": "metaopt-remote-execution-control",
+                "producer": _CONTROL_AGENT,
                 "phase": "GATE_REMOTE_BATCH",
                 "outcome": "fetch_results",
                 "batch_id": batch_id,
@@ -396,8 +396,7 @@ def _gate_remote_batch(
                 "warnings": [],
                 "summary": "remote batch completed and results must be fetched",
             }
-            _write_json(output_path, payload)
-            return payload
+            return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
         analysis_result_path = worker_results_dir / f"remote-analysis-{batch_id}.json"
         if not analysis_result_path.exists():
@@ -409,7 +408,7 @@ def _gate_remote_batch(
             _write_json(state_path, state)
             payload = {
                 "schema_version": 1,
-                "producer": "metaopt-remote-execution-control",
+                "producer": _CONTROL_AGENT,
                 "phase": "GATE_REMOTE_BATCH",
                 "outcome": "run_analysis",
                 "batch_id": batch_id,
@@ -425,15 +424,14 @@ def _gate_remote_batch(
                 "warnings": [],
                 "summary": "remote results are staged and ready for semantic analysis",
             }
-            _write_json(output_path, payload)
-            return payload
+            return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
         state["machine_state"] = "ANALYZE_RESULTS"
         state["next_action"] = "analyze remote results"
         _write_json(state_path, state)
         payload = {
             "schema_version": 1,
-            "producer": "metaopt-remote-execution-control",
+            "producer": _CONTROL_AGENT,
             "phase": "GATE_REMOTE_BATCH",
             "outcome": "analyze_results",
             "batch_id": batch_id,
@@ -449,8 +447,7 @@ def _gate_remote_batch(
             "warnings": [],
             "summary": "remote results and analysis artifacts are both available",
         }
-        _write_json(output_path, payload)
-        return payload
+        return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
     diagnosis_path = worker_results_dir / f"remote-diagnosis-{batch_id}.json"
     if not diagnosis_path.exists():
@@ -462,7 +459,7 @@ def _gate_remote_batch(
         _write_json(state_path, state)
         payload = {
             "schema_version": 1,
-            "producer": "metaopt-remote-execution-control",
+            "producer": _CONTROL_AGENT,
             "phase": "GATE_REMOTE_BATCH",
             "outcome": "run_remote_diagnosis",
             "batch_id": batch_id,
@@ -478,8 +475,7 @@ def _gate_remote_batch(
             "warnings": [],
             "summary": "remote batch failed and needs diagnosis before terminal routing",
         }
-        _write_json(output_path, payload)
-        return payload
+        return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
     diagnosis_payload = _read_json(diagnosis_path)
     recommendation = diagnosis_payload.get("fix_recommendation", {})
@@ -515,7 +511,7 @@ def _gate_remote_batch(
     _write_json(state_path, state)
     payload = {
         "schema_version": 1,
-        "producer": "metaopt-remote-execution-control",
+        "producer": _CONTROL_AGENT,
         "phase": "GATE_REMOTE_BATCH",
         "outcome": outcome,
         "batch_id": batch_id,
@@ -531,8 +527,7 @@ def _gate_remote_batch(
         "warnings": [],
         "summary": "remote failure diagnosis produced a terminal routing decision",
     }
-    _write_json(output_path, payload)
-    return payload
+    return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
 
 def _analyze_remote_results(
@@ -602,7 +597,7 @@ def _analyze_remote_results(
 
     payload = {
         "schema_version": 1,
-        "producer": "metaopt-remote-execution-control",
+        "producer": _CONTROL_AGENT,
         "phase": "ANALYZE_REMOTE_RESULTS",
         "outcome": "analyzed",
         "batch_id": batch_id,
@@ -618,8 +613,7 @@ def _analyze_remote_results(
         "warnings": [],
         "summary": "remote results analysis updated campaign state and baseline accounting",
     }
-    _write_json(output_path, payload)
-    return payload
+    return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
 
 def main() -> int:

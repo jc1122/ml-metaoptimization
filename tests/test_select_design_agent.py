@@ -444,6 +444,86 @@ class SelectDesignAgentTests(unittest.TestCase):
             self.assertEqual(payload["outcome"], "runtime_error")
             self.assertEqual(payload["recommended_next_action"], "repair or replace load_campaign.latest.json")
 
+    def _assert_envelope_keys(self, payload: dict, *, handoff_type: str, control_agent: str = "metaopt-select-design") -> None:
+        self.assertEqual(payload["handoff_type"], handoff_type)
+        self.assertEqual(payload["control_agent"], control_agent)
+        self.assertIsInstance(payload["launch_requests"], list)
+        self.assertIsInstance(payload["state_patch"], dict)
+        self.assertIsInstance(payload["executor_directives"], list)
+        self.assertIn("summary", payload)
+        self.assertIn("warnings", payload)
+        self.assertIn("recommended_next_machine_state", payload)
+
+    def test_plan_select_envelope_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            payload, _, _, _ = self._run(
+                Path(tempdir_str),
+                mode="plan_select_experiment",
+                state=self._base_state(),
+            )
+            self._assert_envelope_keys(payload, handoff_type="SELECT_DESIGN")
+
+    def test_gate_select_envelope_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            tempdir = Path(tempdir_str)
+            initial_state = self._base_state()
+            self._run(tempdir, mode="plan_select_experiment", state=initial_state)
+            selection_result = {
+                "winning_proposal": initial_state["current_proposals"][0],
+                "ranking_rationale": "Best fit.",
+            }
+            result_path = tempdir / ".ml-metaopt" / "worker-results" / "select-experiment-iter-1.json"
+            result_path.parent.mkdir(parents=True, exist_ok=True)
+            result_path.write_text(json.dumps(selection_result), encoding="utf-8")
+            payload, _, _, _ = self._run(
+                tempdir,
+                mode="gate_select_and_plan_design",
+                state=json.loads((tempdir / ".ml-metaopt" / "state.json").read_text(encoding="utf-8")),
+            )
+            self._assert_envelope_keys(payload, handoff_type="SELECT_DESIGN")
+
+    def test_finalize_design_envelope_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            tempdir = Path(tempdir_str)
+            initial_state = self._base_state()
+            self._run(tempdir, mode="plan_select_experiment", state=initial_state)
+            selection_result = {
+                "winning_proposal": initial_state["current_proposals"][0],
+                "ranking_rationale": "Best fit.",
+            }
+            sel_path = tempdir / ".ml-metaopt" / "worker-results" / "select-experiment-iter-1.json"
+            sel_path.parent.mkdir(parents=True, exist_ok=True)
+            sel_path.write_text(json.dumps(selection_result), encoding="utf-8")
+            self._run(
+                tempdir,
+                mode="gate_select_and_plan_design",
+                state=json.loads((tempdir / ".ml-metaopt" / "state.json").read_text(encoding="utf-8")),
+            )
+            design_result = {
+                "proposal_id": "market-forecast-v3-p1",
+                "experiment_name": "tighten-rolling-validation-v1",
+                "description": "Tighten validation windows.",
+            }
+            design_path = tempdir / ".ml-metaopt" / "worker-results" / "design-experiment-iter-1.json"
+            design_path.write_text(json.dumps(design_result), encoding="utf-8")
+            payload, _, _, _ = self._run(
+                tempdir,
+                mode="finalize_select_design",
+                state=json.loads((tempdir / ".ml-metaopt" / "state.json").read_text(encoding="utf-8")),
+            )
+            self._assert_envelope_keys(payload, handoff_type="SELECT_DESIGN")
+
+    def test_runtime_error_envelope_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            payload, _, _, _ = self._run(
+                Path(tempdir_str),
+                mode="plan_select_experiment",
+                state=self._base_state(),
+                malformed_handoff=True,
+            )
+            self._assert_envelope_keys(payload, handoff_type="SELECT_DESIGN")
+            self.assertEqual(payload["outcome"], "runtime_error")
+
     def test_agent_profiles_exist_and_are_programmatic_only(self) -> None:
         for profile in (CONTROL_AGENT, SELECTION_AGENT, DESIGN_AGENT):
             self.assertTrue(profile.exists(), f"missing {profile}")

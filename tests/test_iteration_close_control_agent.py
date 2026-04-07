@@ -403,6 +403,48 @@ class IterationCloseControlAgentTests(unittest.TestCase):
             self.assertEqual(updated_state["status"], "COMPLETE")
             self.assertEqual(updated_state["machine_state"], "COMPLETE")
 
+    def _assert_envelope_keys(self, payload: dict, *, handoff_type: str = "ITERATION_CLOSE_CONTROL", control_agent: str = "metaopt-iteration-close-control") -> None:
+        self.assertEqual(payload["handoff_type"], handoff_type)
+        self.assertEqual(payload["control_agent"], control_agent)
+        self.assertIsInstance(payload["launch_requests"], list)
+        self.assertIsInstance(payload["state_patch"], dict)
+        self.assertIsInstance(payload["executor_directives"], list)
+        self.assertIn("summary", payload)
+        self.assertIn("warnings", payload)
+        self.assertIn("recommended_next_machine_state", payload)
+
+    def test_plan_roll_iteration_envelope_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            payload, _, _ = self._run(
+                Path(tempdir_str),
+                mode="plan_roll_iteration",
+                state=self._base_state(),
+            )
+            self._assert_envelope_keys(payload)
+
+    def test_quiesce_slots_envelope_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            state = self._base_state()
+            state["machine_state"] = "QUIESCE_SLOTS"
+            state["selected_experiment"] = None
+            payload, _, _ = self._run(
+                Path(tempdir_str),
+                mode="quiesce_slots",
+                state=state,
+                executor_events={
+                    "quiesce-slots-iter-3": {
+                        "continue_campaign": False,
+                        "stop_reason": "target_metric",
+                        "finished_slots": [],
+                        "canceled_slots": [],
+                        "drain_duration_seconds": 5,
+                        "maintenance_apply_results": [],
+                        "summary": "all work drained cleanly",
+                    }
+                },
+            )
+            self._assert_envelope_keys(payload)
+
     def test_agent_profile_exists_and_declares_all_modes(self) -> None:
         self.assertTrue(AGENT_PROFILE.exists(), f"missing {AGENT_PROFILE}")
         content = AGENT_PROFILE.read_text(encoding="utf-8")

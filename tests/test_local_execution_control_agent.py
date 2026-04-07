@@ -422,6 +422,56 @@ class LocalExecutionControlAgentTests(unittest.TestCase):
             self.assertEqual(updated_state["status"], "FAILED")
             self.assertEqual(updated_state["machine_state"], "FAILED")
 
+    def _assert_envelope_keys(self, payload: dict, *, handoff_type: str = "LOCAL_EXECUTION_CONTROL", control_agent: str = "metaopt-local-execution-control") -> None:
+        self.assertEqual(payload["handoff_type"], handoff_type)
+        self.assertEqual(payload["control_agent"], control_agent)
+        self.assertIsInstance(payload["launch_requests"], list)
+        self.assertIsInstance(payload["state_patch"], dict)
+        self.assertIsInstance(payload["executor_directives"], list)
+        self.assertIn("summary", payload)
+        self.assertIn("warnings", payload)
+        self.assertIn("recommended_next_machine_state", payload)
+
+    def test_plan_mode_envelope_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            payload, _, _ = self._run(
+                Path(tempdir_str),
+                mode="plan_local_changeset",
+                state=self._base_state(),
+            )
+            self._assert_envelope_keys(payload)
+
+    def test_gate_sanity_pass_envelope_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            payload, _, _ = self._run(
+                Path(tempdir_str),
+                mode="gate_local_sanity",
+                state=self._base_state(),
+                worker_results={
+                    "materialization-1": {
+                        "status": "completed",
+                        "patch_artifacts": [],
+                        "verification_notes": ["ok"],
+                    }
+                },
+                executor_events={
+                    "local_changeset-1": {
+                        "integration_worktree": ".ml-metaopt/worktrees/iter-1-materialization",
+                        "apply_results": [],
+                        "code_artifact_uri": "code.tar.gz",
+                        "data_manifest_uri": "data.json",
+                    },
+                    "sanity-1": {
+                        "status": "passed",
+                        "exit_code": 0,
+                        "stdout": "ok",
+                        "stderr": "",
+                        "duration_seconds": 1,
+                    },
+                },
+            )
+            self._assert_envelope_keys(payload)
+
     def test_agent_profile_exists_and_declares_both_modes(self) -> None:
         self.assertTrue(AGENT_PROFILE.exists(), f"missing {AGENT_PROFILE}")
         content = AGENT_PROFILE.read_text(encoding="utf-8")

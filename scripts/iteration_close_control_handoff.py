@@ -3,9 +3,13 @@ from __future__ import annotations
 import argparse
 import json
 import re
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from _handoff_utils import emit_handoff, read_json, timestamp, write_json
+
+_HANDOFF_TYPE = "ITERATION_CLOSE_CONTROL"
+_CONTROL_AGENT = "metaopt-iteration-close-control"
 
 
 def _parse_args() -> argparse.Namespace:
@@ -21,22 +25,21 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _read_json(path: Path) -> Any:
-    return json.loads(path.read_text(encoding="utf-8"))
+    return read_json(path)
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_json(path, payload)
 
 
 def _timestamp() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return timestamp()
 
 
 def _runtime_error(output_path: Path, phase: str | None, action: str, summary: str, warnings: list[str] | None = None) -> dict[str, Any]:
     payload = {
         "schema_version": 1,
-        "producer": "metaopt-iteration-close-control",
+        "producer": _CONTROL_AGENT,
         "phase": phase,
         "outcome": "runtime_error",
         "worker_kind": None,
@@ -52,8 +55,7 @@ def _runtime_error(output_path: Path, phase: str | None, action: str, summary: s
         "warnings": warnings or [],
         "summary": summary,
     }
-    _write_json(output_path, payload)
-    return payload
+    return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
 
 def _load_inputs(load_handoff_path: Path, state_path: Path) -> tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None]:
@@ -195,7 +197,7 @@ def _plan_roll_iteration(load_handoff: dict[str, Any], state_path: Path, tasks_d
 
     payload = {
         "schema_version": 1,
-        "producer": "metaopt-iteration-close-control",
+        "producer": _CONTROL_AGENT,
         "phase": "PLAN_ROLL_ITERATION",
         "outcome": "planned",
         "worker_kind": "custom_agent",
@@ -211,8 +213,7 @@ def _plan_roll_iteration(load_handoff: dict[str, Any], state_path: Path, tasks_d
         "warnings": [],
         "summary": "iteration rollover worker is ready to run",
     }
-    _write_json(output_path, payload)
-    return payload
+    return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
 
 def _gate_roll_iteration(load_handoff: dict[str, Any], state_path: Path, worker_results_dir: Path, output_path: Path) -> dict[str, Any]:
@@ -268,7 +269,7 @@ def _gate_roll_iteration(load_handoff: dict[str, Any], state_path: Path, worker_
 
     payload = {
         "schema_version": 1,
-        "producer": "metaopt-iteration-close-control",
+        "producer": _CONTROL_AGENT,
         "phase": "GATE_ROLL_ITERATION",
         "outcome": "rollover_complete",
         "worker_kind": None,
@@ -284,8 +285,7 @@ def _gate_roll_iteration(load_handoff: dict[str, Any], state_path: Path, worker_
         "warnings": [],
         "summary": "rollover semantics applied and quiesce preparation is complete",
     }
-    _write_json(output_path, payload)
-    return payload
+    return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
 
 def _quiesce_slots(state_path: Path, executor_events_dir: Path, output_path: Path) -> dict[str, Any]:
@@ -316,7 +316,7 @@ def _quiesce_slots(state_path: Path, executor_events_dir: Path, output_path: Pat
     _write_json(state_path, state)
     payload = {
         "schema_version": 1,
-        "producer": "metaopt-iteration-close-control",
+        "producer": _CONTROL_AGENT,
         "phase": "QUIESCE_SLOTS",
         "outcome": outcome,
         "worker_kind": None,
@@ -332,8 +332,7 @@ def _quiesce_slots(state_path: Path, executor_events_dir: Path, output_path: Pat
         "warnings": [],
         "summary": event.get("summary", "quiesce results integrated"),
     }
-    _write_json(output_path, payload)
-    return payload
+    return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
 
 def main() -> int:

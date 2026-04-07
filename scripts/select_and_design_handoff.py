@@ -5,6 +5,11 @@ import json
 from pathlib import Path
 from typing import Any
 
+from _handoff_utils import emit_handoff, read_json, write_json
+
+_HANDOFF_TYPE = "SELECT_DESIGN"
+_CONTROL_AGENT = "metaopt-select-design"
+
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate Step 5/6 selection-and-design control handoffs.")
@@ -26,12 +31,11 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _read_json(path: Path) -> Any:
-    return json.loads(path.read_text(encoding="utf-8"))
+    return read_json(path)
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_json(path, payload)
 
 
 def _runtime_error(
@@ -45,7 +49,7 @@ def _runtime_error(
 ) -> dict[str, Any]:
     payload = {
         "schema_version": 1,
-        "producer": "metaopt-select-design",
+        "producer": _CONTROL_AGENT,
         "phase": phase,
         "outcome": "runtime_error",
         "proposal_id": proposal_id,
@@ -61,8 +65,7 @@ def _runtime_error(
         "warnings": warnings or [],
         "summary": summary,
     }
-    _write_json(output_path, payload)
-    return payload
+    return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
 
 def _load_inputs(load_handoff_path: Path, state_path: Path) -> tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None]:
@@ -251,7 +254,7 @@ def _plan_select_experiment(
 
     payload = {
         "schema_version": 1,
-        "producer": "metaopt-select-design",
+        "producer": _CONTROL_AGENT,
         "phase": "PLAN_SELECT_EXPERIMENT",
         "outcome": "planned",
         "proposal_id": None,
@@ -267,8 +270,7 @@ def _plan_select_experiment(
         "warnings": [],
         "summary": "selection worker is ready to choose one proposal from the frozen pool",
     }
-    _write_json(output_path, payload)
-    return payload
+    return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
 
 def _gate_select_and_plan_design(
@@ -346,7 +348,7 @@ def _gate_select_and_plan_design(
 
     payload = {
         "schema_version": 1,
-        "producer": "metaopt-select-design",
+        "producer": _CONTROL_AGENT,
         "phase": "GATE_SELECT_AND_PLAN_DESIGN",
         "outcome": "selection_complete",
         "proposal_id": winning_proposal["proposal_id"],
@@ -362,8 +364,7 @@ def _gate_select_and_plan_design(
         "warnings": [],
         "summary": "selection result validated and design worker is ready",
     }
-    _write_json(output_path, payload)
-    return payload
+    return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
 
 def _finalize_select_design(state_path: Path, worker_results_dir: Path, output_path: Path) -> dict[str, Any]:
@@ -424,7 +425,7 @@ def _finalize_select_design(state_path: Path, worker_results_dir: Path, output_p
 
     payload = {
         "schema_version": 1,
-        "producer": "metaopt-select-design",
+        "producer": _CONTROL_AGENT,
         "phase": "FINALIZE_SELECT_DESIGN",
         "outcome": "selected_and_designed",
         "proposal_id": proposal_id,
@@ -440,8 +441,7 @@ def _finalize_select_design(state_path: Path, worker_results_dir: Path, output_p
         "warnings": [],
         "summary": "experiment design finalized and ready for materialization",
     }
-    _write_json(output_path, payload)
-    return payload
+    return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
 
 def main() -> int:

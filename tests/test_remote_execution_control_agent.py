@@ -451,6 +451,63 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
             self.assertEqual(payload["recommended_next_action"], "repair or replace load_campaign.latest.json")
             self.assertEqual(json.dumps(updated_state, sort_keys=True), original)
 
+    def _assert_envelope_keys(self, payload: dict, *, handoff_type: str = "REMOTE_EXECUTION_CONTROL", control_agent: str = "metaopt-remote-execution-control") -> None:
+        self.assertEqual(payload["handoff_type"], handoff_type)
+        self.assertEqual(payload["control_agent"], control_agent)
+        self.assertIsInstance(payload["launch_requests"], list)
+        self.assertIsInstance(payload["state_patch"], dict)
+        self.assertIsInstance(payload["executor_directives"], list)
+        self.assertIn("summary", payload)
+        self.assertIn("warnings", payload)
+        self.assertIn("recommended_next_machine_state", payload)
+
+    def test_plan_remote_batch_envelope_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            payload, _, _ = self._run(
+                Path(tempdir_str),
+                mode="plan_remote_batch",
+                state=self._base_state(),
+            )
+            self._assert_envelope_keys(payload)
+
+    def test_analyze_remote_results_envelope_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            state = self._base_state()
+            state["machine_state"] = "WAIT_FOR_REMOTE_BATCH"
+            state["remote_batches"] = [{"batch_id": "batch-20260406-0002", "queue_ref": "ray-queue-123", "status": "completed"}]
+            payload, _, _ = self._run(
+                Path(tempdir_str),
+                mode="analyze_remote_results",
+                state=state,
+                executor_events={
+                    "remote-results-batch-20260406-0002": {
+                        "batch_id": "batch-20260406-0002",
+                        "status": "completed",
+                        "per_dataset": {"ds_main": 0.1208, "ds_holdout": 0.1225},
+                    }
+                },
+                worker_results={
+                    "remote-analysis-batch-20260406-0002": {
+                        "judgment": "improvement",
+                        "new_aggregate": 0.1213,
+                        "delta": -0.0071,
+                        "learnings": [],
+                    }
+                },
+            )
+            self._assert_envelope_keys(payload)
+
+    def test_runtime_error_envelope_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            payload, _, _ = self._run(
+                Path(tempdir_str),
+                mode="plan_remote_batch",
+                state=self._base_state(),
+                malformed_handoff=True,
+            )
+            self._assert_envelope_keys(payload)
+            self.assertEqual(payload["outcome"], "runtime_error")
+
     def test_agent_profile_exists_and_declares_all_modes(self) -> None:
         self.assertTrue(AGENT_PROFILE.exists(), f"missing {AGENT_PROFILE}")
         content = AGENT_PROFILE.read_text(encoding="utf-8")

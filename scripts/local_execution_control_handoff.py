@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from _handoff_utils import emit_handoff, read_json, timestamp, write_json
+
+_HANDOFF_TYPE = "LOCAL_EXECUTION_CONTROL"
+_CONTROL_AGENT = "metaopt-local-execution-control"
 
 
 def _parse_args() -> argparse.Namespace:
@@ -20,22 +24,21 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _read_json(path: Path) -> Any:
-    return json.loads(path.read_text(encoding="utf-8"))
+    return read_json(path)
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_json(path, payload)
 
 
 def _timestamp() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return timestamp()
 
 
 def _runtime_error(output_path: Path, action: str, summary: str, warnings: list[str] | None = None) -> dict[str, Any]:
     payload = {
         "schema_version": 1,
-        "producer": "metaopt-local-execution-control",
+        "producer": _CONTROL_AGENT,
         "phase": None,
         "outcome": "runtime_error",
         "worker_kind": None,
@@ -52,8 +55,7 @@ def _runtime_error(output_path: Path, action: str, summary: str, warnings: list[
         "warnings": warnings or [],
         "summary": summary,
     }
-    _write_json(output_path, payload)
-    return payload
+    return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
 
 def _load_inputs(load_handoff_path: Path, state_path: Path) -> tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None]:
@@ -249,7 +251,7 @@ def _plan_local_changeset(
 
     payload = {
         "schema_version": 1,
-        "producer": "metaopt-local-execution-control",
+        "producer": _CONTROL_AGENT,
         "phase": "PLAN_LOCAL_CHANGESET",
         "outcome": "planned",
         "worker_kind": "custom_agent",
@@ -266,8 +268,7 @@ def _plan_local_changeset(
         "warnings": [],
         "summary": f"planned {materialization_mode} local materialization task",
     }
-    _write_json(output_path, payload)
-    return payload
+    return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
 
 def _build_local_changeset(materialization_result: dict[str, Any], local_changeset_event: dict[str, Any]) -> dict[str, Any]:
@@ -330,7 +331,7 @@ def _gate_local_sanity(
         _write_json(state_path, state)
         payload = {
             "schema_version": 1,
-            "producer": "metaopt-local-execution-control",
+            "producer": _CONTROL_AGENT,
             "phase": "GATE_LOCAL_SANITY",
             "outcome": "enqueue_remote_batch",
             "worker_kind": None,
@@ -347,8 +348,7 @@ def _gate_local_sanity(
             "warnings": [],
             "summary": "local changeset passed sanity and is ready for remote enqueue",
         }
-        _write_json(output_path, payload)
-        return payload
+        return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
     if state["selected_experiment"].get("sanity_attempts", 0) >= 3:
         state["status"] = "FAILED"
@@ -357,7 +357,7 @@ def _gate_local_sanity(
         _write_json(state_path, state)
         payload = {
             "schema_version": 1,
-            "producer": "metaopt-local-execution-control",
+            "producer": _CONTROL_AGENT,
             "phase": "GATE_LOCAL_SANITY",
             "outcome": "failed",
             "worker_kind": None,
@@ -374,8 +374,7 @@ def _gate_local_sanity(
             "warnings": [],
             "summary": "sanity remediation attempt cap reached",
         }
-        _write_json(output_path, payload)
-        return payload
+        return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
     diagnosis_result_path = worker_results_dir / f"diagnosis-{attempt}.json"
     if not diagnosis_result_path.exists():
@@ -387,7 +386,7 @@ def _gate_local_sanity(
         _write_json(state_path, state)
         payload = {
             "schema_version": 1,
-            "producer": "metaopt-local-execution-control",
+            "producer": _CONTROL_AGENT,
             "phase": "GATE_LOCAL_SANITY",
             "outcome": "run_diagnosis",
             "worker_kind": "custom_agent",
@@ -404,8 +403,7 @@ def _gate_local_sanity(
             "warnings": [],
             "summary": "sanity failed and requires diagnosis before routing",
         }
-        _write_json(output_path, payload)
-        return payload
+        return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
     diagnosis_result = _read_json(diagnosis_result_path)
     action = _append_diagnosis(state, diagnosis_result, attempt)
@@ -438,7 +436,7 @@ def _gate_local_sanity(
     _write_json(state_path, state)
     payload = {
         "schema_version": 1,
-        "producer": "metaopt-local-execution-control",
+        "producer": _CONTROL_AGENT,
         "phase": "GATE_LOCAL_SANITY",
         "outcome": outcome,
         "worker_kind": None,
@@ -455,8 +453,7 @@ def _gate_local_sanity(
         "warnings": [],
         "summary": summary,
     }
-    _write_json(output_path, payload)
-    return payload
+    return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
 
 def main() -> int:

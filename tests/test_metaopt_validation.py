@@ -1306,7 +1306,7 @@ class MetaoptValidationTests(unittest.TestCase):
             _require_pattern(
                 self,
                 content,
-                r"[Cc]ontrol.protocol|[Hh]andoff.*envelope|[Uu]niversal.*[Ee]nvelope",
+                r"must conform.*control.handoff envelope",
             )
 
 

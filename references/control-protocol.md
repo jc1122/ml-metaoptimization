@@ -28,7 +28,7 @@ Every control agent emits a JSON handoff object conforming to this envelope. Fie
 | `recommended_next_machine_state` | string or null | yes | The machine state the orchestrator should transition to after applying this handoff. Null when the control agent defers the decision to a later gate phase. |
 | `launch_requests` | array | yes | Ordered list of worker launch requests for the orchestrator to execute. Empty array when no launches are needed. Each entry specifies `worker_ref`, `model_class`, `task_file`, and `result_file`. |
 | `state_patch` | object or null | yes | A partial state object whose keys the orchestrator merges into `.ml-metaopt/state.json`. Null when no state mutation is needed. Only keys owned by this control agent may appear. |
-| `executor_directives` | object or null | yes | Instructions for the orchestrator executor phase (e.g. commands to run, files to write, worktrees to create). Null when no executor action is needed. |
+| `executor_directives` | array or null | yes | Ordered list of instructions for the orchestrator executor phase (e.g. commands to run, files to write, worktrees to create). Empty array or null when no executor action is needed. |
 | `summary` | string | yes | Human-readable summary of the handoff decision for logging and debugging. |
 | `warnings` | array of strings | yes | Diagnostic warnings that do not block progress but should be logged. Empty array when none. |
 

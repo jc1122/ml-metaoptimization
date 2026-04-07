@@ -2,10 +2,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
-from datetime import datetime, timezone
+import sys
 from pathlib import Path
 from typing import Any
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _handoff_utils import emit_handoff, read_json, timestamp, write_json
+
+_CONTROL_AGENT = "metaopt-background-control"
 
 
 def _parse_args() -> argparse.Namespace:
@@ -18,19 +24,6 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--slot-events-dir", required=True)
     parser.add_argument("--output", required=True)
     return parser.parse_args()
-
-
-def _read_json(path: Path) -> Any:
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def _write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-
-
-def _timestamp() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _proposal_sequence(state: dict[str, Any]) -> int:
@@ -112,7 +105,7 @@ def _plan_background_work(
     tasks_dir: Path,
     output_path: Path,
 ) -> dict[str, Any]:
-    state = _read_json(state_path)
+    state = read_json(state_path)
     dispatch_policy = load_handoff["dispatch_policy"]
     proposal_policy = load_handoff["proposal_policy"]
 
@@ -120,7 +113,7 @@ def _plan_background_work(
         state["next_action"] = "select experiment"
         payload = {
             "schema_version": 1,
-            "producer": "metaopt-background-control",
+            "producer": _CONTROL_AGENT,
             "phase": "PLAN_BACKGROUND_WORK",
             "pool_status": "ready",
             "recommended_executor_phase": "GATE_BACKGROUND_WORK",
@@ -132,9 +125,8 @@ def _plan_background_work(
             "shortfall_reason": "",
             "summary": "proposal pool already satisfies selection gate",
         }
-        _write_json(state_path, state)
-        _write_json(output_path, payload)
-        return payload
+        write_json(state_path, state)
+        return emit_handoff(output_path, payload, handoff_type="PLAN_BACKGROUND_WORK", control_agent=_CONTROL_AGENT)
 
     active_background = [slot for slot in state["active_slots"] if slot["slot_class"] == "background" and slot["status"] == "running"]
     needed = max(0, dispatch_policy["background_slots"] - len(active_background))
@@ -193,7 +185,7 @@ def _plan_background_work(
 
     payload = {
         "schema_version": 1,
-        "producer": "metaopt-background-control",
+        "producer": _CONTROL_AGENT,
         "phase": "PLAN_BACKGROUND_WORK",
         "pool_status": "building",
         "recommended_executor_phase": "EXECUTE_BACKGROUND_WORK",
@@ -205,9 +197,8 @@ def _plan_background_work(
         "shortfall_reason": state["proposal_cycle"]["shortfall_reason"],
         "summary": "background slots planned for continued proposal accumulation",
     }
-    _write_json(state_path, state)
-    _write_json(output_path, payload)
-    return payload
+    write_json(state_path, state)
+    return emit_handoff(output_path, payload, handoff_type="PLAN_BACKGROUND_WORK", control_agent=_CONTROL_AGENT)
 
 
 def _gate_background_work(
@@ -217,7 +208,7 @@ def _gate_background_work(
     slot_events_dir: Path,
     output_path: Path,
 ) -> dict[str, Any]:
-    state = _read_json(state_path)
+    state = read_json(state_path)
     proposal_policy = load_handoff["proposal_policy"]
     sequence = _proposal_sequence(state)
     processed_slots: list[str] = []
@@ -227,13 +218,13 @@ def _gate_background_work(
         event_path = slot_events_dir / f"{slot_id}.json"
         if not event_path.exists():
             continue
-        slot_event = _read_json(event_path)
+        slot_event = read_json(event_path)
         if slot_event.get("status") != "completed":
             continue
         result_path = worker_results_dir / f"{slot_id}.json"
         if not result_path.exists():
             continue
-        result = _read_json(result_path)
+        result = read_json(result_path)
         processed_slots.append(slot_id)
         slot["status"] = "completed"
 
@@ -245,7 +236,7 @@ def _gate_background_work(
                 enriched["proposal_id"] = f"{state['campaign_id']}-p{sequence}"
                 enriched["source_slot_id"] = slot_id
                 enriched["creation_iteration"] = state["current_iteration"]
-                enriched["created_at"] = _timestamp()
+                enriched["created_at"] = timestamp()
                 destination = "current_proposals" if not state["proposal_cycle"]["current_pool_frozen"] else "next_proposals"
                 state[destination].append(enriched)
             rounds = state["proposal_cycle"]["ideation_rounds_by_slot"]
@@ -271,7 +262,7 @@ def _gate_background_work(
 
     payload = {
         "schema_version": 1,
-        "producer": "metaopt-background-control",
+        "producer": _CONTROL_AGENT,
         "phase": "GATE_BACKGROUND_WORK",
         "pool_status": pool_status,
         "recommended_next_machine_state": recommended_next_machine_state,
@@ -281,14 +272,13 @@ def _gate_background_work(
         "processed_slots": processed_slots,
         "summary": summary,
     }
-    _write_json(state_path, state)
-    _write_json(output_path, payload)
-    return payload
+    write_json(state_path, state)
+    return emit_handoff(output_path, payload, handoff_type="GATE_BACKGROUND_WORK", control_agent=_CONTROL_AGENT)
 
 
 def main() -> int:
     args = _parse_args()
-    load_handoff = _read_json(Path(args.load_handoff))
+    load_handoff = read_json(Path(args.load_handoff))
     state_path = Path(args.state_path)
     tasks_dir = Path(args.tasks_dir)
     worker_results_dir = Path(args.worker_results_dir)

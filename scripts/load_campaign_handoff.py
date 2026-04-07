@@ -3,10 +3,15 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
+import sys
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _handoff_utils import emit_handoff
 
 
 REQUIRED_TOP_LEVEL_FIELDS = (
@@ -275,9 +280,12 @@ def build_handoff(campaign_path: Path, state_path: Path, output_path: Path) -> d
         "summary": summary,
     }
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(handoff, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    return handoff
+    return emit_handoff(
+        output_path,
+        handoff,
+        handoff_type="LOAD_CAMPAIGN",
+        control_agent="metaopt-load-campaign",
+    )
 
 
 def main() -> int:

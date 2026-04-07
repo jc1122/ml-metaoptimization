@@ -459,6 +459,61 @@ class HydrateStateHandoffTests(unittest.TestCase):
             self.assertTrue(state_path.exists())
             self.assertEqual(state_path.read_text(encoding="utf-8"), "{not-json")
 
+    def test_fresh_init_contains_control_protocol_envelope_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            payload, _, _ = self._run_tool(Path(tempdir_str))
+
+            self.assertEqual(payload["handoff_type"], "HYDRATE_STATE")
+            self.assertEqual(payload["control_agent"], "metaopt-hydrate-state")
+            self.assertEqual(payload["launch_requests"], [])
+            self.assertEqual(payload["state_patch"], {})
+            self.assertEqual(payload["executor_directives"], [])
+            self.assertIn("summary", payload)
+            self.assertIn("warnings", payload)
+
+    def test_runtime_error_contains_control_protocol_envelope_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            payload, _, _ = self._run_tool(Path(tempdir_str), handoff_outcome="blocked_config")
+
+            self.assertEqual(payload["handoff_type"], "HYDRATE_STATE")
+            self.assertEqual(payload["control_agent"], "metaopt-hydrate-state")
+            self.assertEqual(payload["launch_requests"], [])
+            self.assertEqual(payload["state_patch"], {})
+            self.assertEqual(payload["executor_directives"], [])
+
+    def test_identity_mismatch_contains_control_protocol_envelope_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            stale_state = {
+                "version": 3,
+                "campaign_id": "old-campaign",
+                "campaign_identity_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+                "runtime_config_hash": "sha256:6f59ca57fb3da56f815d7fb03f8be7335fa9d14344c49154308e9e65990e9ac6",
+                "status": "RUNNING",
+                "machine_state": "MAINTAIN_BACKGROUND_POOL",
+                "current_iteration": 1,
+                "next_action": "maintain background slot pool",
+                "objective_snapshot": {"metric": "rmse", "direction": "minimize", "aggregation": {}, "improvement_threshold": 0.0005},
+                "proposal_cycle": {"cycle_id": "iter-1-cycle-1", "current_pool_frozen": False, "ideation_rounds_by_slot": {}, "shortfall_reason": ""},
+                "active_slots": [],
+                "current_proposals": [],
+                "next_proposals": [],
+                "selected_experiment": None,
+                "local_changeset": None,
+                "remote_batches": [],
+                "baseline": {"aggregate": 0.1284, "by_dataset": {"ds_main": 0.1269}},
+                "completed_experiments": [],
+                "key_learnings": [],
+                "no_improve_iterations": 0,
+                "runtime_capabilities": {"verified_at": "2026-04-06T00:00:00Z", "available_skills": [], "missing_skills": [], "degraded_lanes": []},
+            }
+            payload, _, _ = self._run_tool(Path(tempdir_str), state_payload=stale_state)
+
+            self.assertEqual(payload["handoff_type"], "HYDRATE_STATE")
+            self.assertEqual(payload["control_agent"], "metaopt-hydrate-state")
+            self.assertEqual(payload["launch_requests"], [])
+            self.assertEqual(payload["state_patch"], {})
+            self.assertEqual(payload["executor_directives"], [])
+
     def test_agent_profile_exists_and_is_programmatic_only(self) -> None:
         self.assertTrue(AGENT_PROFILE.exists(), f"missing {AGENT_PROFILE}")
         content = AGENT_PROFILE.read_text(encoding="utf-8")

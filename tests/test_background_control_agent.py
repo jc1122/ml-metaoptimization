@@ -277,6 +277,41 @@ class BackgroundControlAgentTests(unittest.TestCase):
             self.assertEqual(payload["recommended_next_machine_state"], "SELECT_EXPERIMENT")
             self.assertEqual(updated_state["proposal_cycle"]["shortfall_reason"], "")
 
+    def test_plan_mode_contains_control_protocol_envelope_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            payload, _, _ = self._run(
+                Path(tempdir_str),
+                mode="plan_background_work",
+                state=self._base_state(),
+            )
+
+            self.assertEqual(payload["handoff_type"], "PLAN_BACKGROUND_WORK")
+            self.assertEqual(payload["control_agent"], "metaopt-background-control")
+            self.assertIsInstance(payload["launch_requests"], list)
+            self.assertEqual(payload["state_patch"], {})
+            self.assertEqual(payload["executor_directives"], [])
+            self.assertIn("summary", payload)
+            self.assertIn("warnings", payload)
+
+    def test_gate_mode_contains_control_protocol_envelope_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            state = self._base_state()
+            state["current_proposals"] = [{"proposal_id": "market-forecast-v3-p1"}, {"proposal_id": "market-forecast-v3-p2"}]
+            state["proposal_cycle"]["ideation_rounds_by_slot"] = {"bg-1": 2, "bg-2": 2}
+            payload, _, _ = self._run(
+                Path(tempdir_str),
+                mode="gate_background_work",
+                state=state,
+            )
+
+            self.assertEqual(payload["handoff_type"], "GATE_BACKGROUND_WORK")
+            self.assertEqual(payload["control_agent"], "metaopt-background-control")
+            self.assertEqual(payload["launch_requests"], [])
+            self.assertEqual(payload["state_patch"], {})
+            self.assertEqual(payload["executor_directives"], [])
+            self.assertIn("summary", payload)
+            self.assertIn("warnings", payload)
+
     def test_agent_profile_exists_and_declares_both_modes(self) -> None:
         self.assertTrue(AGENT_PROFILE.exists(), f"missing {AGENT_PROFILE}")
         content = AGENT_PROFILE.read_text(encoding="utf-8")

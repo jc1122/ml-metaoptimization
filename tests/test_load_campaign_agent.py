@@ -148,6 +148,35 @@ class LoadCampaignHandoffTests(unittest.TestCase):
             self.assertEqual(payload["recommended_next_machine_state"], "HYDRATE_STATE")
             self.assertIn("state identity mismatch detected", payload["warnings"])
 
+    def test_valid_handoff_contains_control_protocol_envelope_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            tempdir = Path(tempdir_str)
+            campaign = (ROOT / "ml_metaopt_campaign.example.yaml").read_text(encoding="utf-8")
+            state = json.dumps(
+                {"campaign_identity_hash": "sha256:f50928628873800b25a5dfb41f2fd6c93acfc210424953f53a5005e09379fa4c"}
+            )
+            payload = self._run_tool(tempdir, campaign_text=campaign, state_text=state)
+
+            self.assertEqual(payload["handoff_type"], "LOAD_CAMPAIGN")
+            self.assertEqual(payload["control_agent"], "metaopt-load-campaign")
+            self.assertEqual(payload["launch_requests"], [])
+            self.assertEqual(payload["state_patch"], {})
+            self.assertEqual(payload["executor_directives"], [])
+            self.assertIn("summary", payload)
+            self.assertIn("warnings", payload)
+
+    def test_blocked_handoff_contains_control_protocol_envelope_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            tempdir = Path(tempdir_str)
+            invalid_campaign = "version: 2\ncampaign_id: bad\n"
+            payload = self._run_tool(tempdir, campaign_text=invalid_campaign)
+
+            self.assertEqual(payload["handoff_type"], "LOAD_CAMPAIGN")
+            self.assertEqual(payload["control_agent"], "metaopt-load-campaign")
+            self.assertEqual(payload["launch_requests"], [])
+            self.assertEqual(payload["state_patch"], {})
+            self.assertEqual(payload["executor_directives"], [])
+
     def test_agent_profile_exists_and_is_programmatic_only(self) -> None:
         self.assertTrue(AGENT_PROFILE.exists(), f"missing {AGENT_PROFILE}")
         content = AGENT_PROFILE.read_text(encoding="utf-8")

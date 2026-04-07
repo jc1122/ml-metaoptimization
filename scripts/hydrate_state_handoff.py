@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
-from datetime import datetime, timezone
+import sys
 from pathlib import Path
 from typing import Any
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _handoff_utils import emit_handoff, read_json, timestamp, write_json
 
 
 AGENTS_HOOK = """<!-- ml-metaoptimization:begin -->
@@ -55,19 +59,15 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _read_json(path: Path) -> Any:
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def _timestamp() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+_HANDOFF_TYPE = "HYDRATE_STATE"
+_CONTROL_AGENT = "metaopt-hydrate-state"
 
 
 def _runtime_error(output_path: Path, summary: str, *, warnings: list[str] | None = None, state_preserved: bool = False) -> dict[str, Any]:
     payload = {
         "schema_version": 1,
-        "producer": "metaopt-hydrate-state",
-        "phase": "HYDRATE_STATE",
+        "producer": _CONTROL_AGENT,
+        "phase": _HANDOFF_TYPE,
         "outcome": "runtime_error",
         "state_path": None,
         "state_written": False,
@@ -85,22 +85,20 @@ def _runtime_error(output_path: Path, summary: str, *, warnings: list[str] | Non
         "warnings": warnings or [],
         "summary": summary,
     }
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    return payload
+    return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
 
 def _load_step1_handoff(path: Path) -> dict[str, Any] | None:
     if not path.exists():
         return None
-    payload = _read_json(path)
+    payload = read_json(path)
     if not isinstance(payload, dict):
         return None
     return payload
 
 
 def _probe_skills(manifest_path: Path) -> dict[str, Any]:
-    payload = _read_json(manifest_path)
+    payload = read_json(manifest_path)
     skills = payload.get("skills")
     if not isinstance(skills, list):
         raise ValueError("skills manifest must contain a list under 'skills'")
@@ -126,7 +124,7 @@ def _probe_skills(manifest_path: Path) -> dict[str, Any]:
             degraded_lanes.append(skill.get("degraded_lane", lane))
 
     return {
-        "verified_at": _timestamp(),
+        "verified_at": timestamp(),
         "available_skills": sorted(available),
         "missing_skills": sorted(missing),
         "degraded_lanes": sorted(set(degraded_lanes)),
@@ -244,7 +242,7 @@ def build_handoff(
 
     if state_path.exists():
         try:
-            existing_state = _validate_existing_state(_read_json(state_path))
+            existing_state = _validate_existing_state(read_json(state_path))
         except Exception as exc:
             warnings.append(f"existing state unreadable: {exc}")
             return _runtime_error(
@@ -258,8 +256,8 @@ def build_handoff(
             agents_action = _remove_hook(agents_path)
             payload = {
                 "schema_version": 1,
-                "producer": "metaopt-hydrate-state",
-                "phase": "HYDRATE_STATE",
+                "producer": _CONTROL_AGENT,
+                "phase": _HANDOFF_TYPE,
                 "outcome": "blocked_config",
                 "state_path": str(state_path),
                 "state_written": False,
@@ -282,9 +280,7 @@ def build_handoff(
                 "warnings": warnings,
                 "summary": "state identity mismatch detected; preserved stale state and blocked resume",
             }
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            output_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-            return payload
+            return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
         state = existing_state
         state["runtime_capabilities"] = {
@@ -315,8 +311,8 @@ def build_handoff(
 
     payload = {
         "schema_version": 1,
-        "producer": "metaopt-hydrate-state",
-        "phase": "HYDRATE_STATE",
+        "producer": _CONTROL_AGENT,
+        "phase": _HANDOFF_TYPE,
         "outcome": outcome,
         "state_path": str(state_path),
         "state_written": state_written,
@@ -340,9 +336,7 @@ def build_handoff(
             else "required skill missing; wrote blocked state"
         ),
     }
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    return payload
+    return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
 
 def main() -> int:

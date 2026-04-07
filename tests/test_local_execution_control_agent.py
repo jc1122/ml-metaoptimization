@@ -500,9 +500,15 @@ class LocalExecutionControlAgentTests(unittest.TestCase):
             )
             directives = payload["executor_directives"]
             by_action = {d["action"]: d for d in directives}
-            self.assertIn("worktree", by_action["apply_patch_artifacts"])
+            self.assertIn("result_file", by_action["apply_patch_artifacts"])
+            self.assertIn("target_worktree", by_action["apply_patch_artifacts"])
+            self.assertIn("worktree", by_action["package_code_artifact"])
             self.assertIn("code_roots", by_action["package_code_artifact"])
+            self.assertIn("worktree", by_action["package_data_manifest"])
+            self.assertIn("data_roots", by_action["package_data_manifest"])
+            self.assertIn("worktree", by_action["run_sanity"])
             self.assertIn("command", by_action["run_sanity"])
+            self.assertIn("max_duration_seconds", by_action["run_sanity"])
 
     def test_plan_remediation_has_no_executor_directives(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir_str:

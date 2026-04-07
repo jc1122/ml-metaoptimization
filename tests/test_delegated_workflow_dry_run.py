@@ -594,9 +594,14 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
             )
             for d in local_plan_directives:
                 self.assertTrue(d.get("reason"), f"local plan directive {d['action']} missing reason")
-            self.assertIn("worktree", local_plan_directives[0])
+            self.assertIn("result_file", local_plan_directives[0])
+            self.assertIn("target_worktree", local_plan_directives[0])
             self.assertIn("worktree", local_plan_directives[1])
+            self.assertIn("code_roots", local_plan_directives[1])
+            self.assertIn("worktree", local_plan_directives[2])
+            self.assertIn("data_roots", local_plan_directives[2])
             self.assertIn("worktree", local_plan_directives[3])
+            self.assertIn("max_duration_seconds", local_plan_directives[3])
             (worker_results_dir / "materialization-1.json").write_text(
                 json.dumps(
                     {

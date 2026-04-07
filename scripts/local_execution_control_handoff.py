@@ -261,6 +261,7 @@ def _plan_local_changeset(
                 "action": "apply_patch_artifacts",
                 "reason": "apply materialization patches to integration worktree",
                 "worktree": required_worktree,
+                "target_worktree": required_worktree,
                 "result_file": str(Path(".ml-metaopt") / "worker-results" / f"materialization-{attempt}.json"),
             },
             {

@@ -54,10 +54,10 @@ Every control agent emits a JSON handoff object conforming to this envelope. Fie
 
 #### Local execution directives
 
-- `apply_patch_artifacts` — required fields: `patch_paths`, `target_worktree`
-- `package_code_artifact` — required fields: `worktree`, `output_uri`
-- `package_data_manifest` — required fields: `output_uri`
-- `run_sanity` — required fields: `command`, `max_duration_seconds`
+- `apply_patch_artifacts` — required fields: `result_file`, `target_worktree`
+- `package_code_artifact` — required fields: `worktree`, `code_roots`
+- `package_data_manifest` — required fields: `worktree`, `data_roots`
+- `run_sanity` — required fields: `worktree`, `command`, `max_duration_seconds`
 
 #### Iteration-close and terminal directives
 

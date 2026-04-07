@@ -1271,6 +1271,14 @@ class MetaoptValidationTests(unittest.TestCase):
         ):
             self.assertIn(f"`{action_name}`", protocol)
 
+    def test_control_protocol_documents_local_directive_fields(self) -> None:
+        """control-protocol.md must describe the concrete fields the executor consumes for local directives."""
+        protocol = _read_text("references/control-protocol.md")
+        _require_pattern(self, protocol, r"`apply_patch_artifacts`.*`result_file`.*`target_worktree`")
+        _require_pattern(self, protocol, r"`package_code_artifact`.*`worktree`.*`code_roots`")
+        _require_pattern(self, protocol, r"`package_data_manifest`.*`worktree`.*`data_roots`")
+        _require_pattern(self, protocol, r"`run_sanity`.*`worktree`.*`command`.*`max_duration_seconds`")
+
     def test_directive_docs_require_mechanical_execution_not_inference(self) -> None:
         """Directive docs must say the orchestrator executes directives mechanically instead of inferring executor work from prose."""
         protocol = _read_text("references/control-protocol.md")

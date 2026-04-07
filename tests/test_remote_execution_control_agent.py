@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 import subprocess
 import tempfile
@@ -14,6 +15,10 @@ ANALYSIS_WORKER_PROFILE = ROOT / ".github" / "agents" / "metaopt-analysis-worker
 
 
 class RemoteExecutionControlAgentTests(unittest.TestCase):
+    def _today_batch_id(self, sequence: int = 2) -> str:
+        today = datetime.now(timezone.utc).strftime("%Y%m%d")
+        return f"batch-{today}-{sequence:04d}"
+
     def _write_load_handoff(self, tempdir: Path, *, malformed: bool = False) -> Path:
         handoff = tempdir / ".ml-metaopt" / "handoffs" / "load_campaign.latest.json"
         handoff.parent.mkdir(parents=True, exist_ok=True)
@@ -197,6 +202,7 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
 
     def test_plan_remote_batch_emits_manifest_and_batch_id(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir_str:
+            batch_id = self._today_batch_id()
             payload, updated_state, _ = self._run(
                 Path(tempdir_str),
                 mode="plan_remote_batch",
@@ -205,14 +211,40 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
 
             self.assertEqual(payload["phase"], "PLAN_REMOTE_BATCH")
             self.assertEqual(payload["outcome"], "planned")
-            self.assertEqual(payload["batch_id"], "batch-20260406-0002")
+            self.assertEqual(payload["batch_id"], batch_id)
             self.assertEqual(payload["recommended_next_machine_state"], "ENQUEUE_REMOTE_BATCH")
-            self.assertTrue(payload["manifest_path"].endswith("batch-20260406-0002.json"))
+            self.assertTrue(payload["manifest_path"].endswith(f"{batch_id}.json"))
             self.assertEqual(updated_state["machine_state"], "ENQUEUE_REMOTE_BATCH")
 
     def test_gate_remote_batch_records_enqueue_ack_and_advances_to_wait(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir_str:
+            batch_id = self._today_batch_id()
             state = self._base_state()
+            payload, updated_state, _ = self._run(
+                Path(tempdir_str),
+                mode="gate_remote_batch",
+                state=state,
+                executor_events={
+                    f"enqueue-{batch_id}": {
+                        "batch_id": batch_id,
+                        "queue_ref": "ray-queue-123",
+                        "status": "queued",
+                    }
+                },
+            )
+
+            self.assertEqual(payload["outcome"], "waiting")
+            self.assertEqual(updated_state["machine_state"], "WAIT_FOR_REMOTE_BATCH")
+            self.assertEqual(updated_state["remote_batches"][0]["batch_id"], batch_id)
+            self.assertEqual(updated_state["remote_batches"][0]["queue_ref"], "ray-queue-123")
+
+    def test_gate_remote_batch_uses_pending_batch_id_from_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            state = self._base_state()
+            state["pending_remote_batch"] = {
+                "batch_id": "batch-20260406-0002",
+                "manifest_path": ".ml-metaopt/artifacts/manifests/batch-20260406-0002.json",
+            }
             payload, updated_state, _ = self._run(
                 Path(tempdir_str),
                 mode="gate_remote_batch",

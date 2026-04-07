@@ -99,6 +99,19 @@ def _next_batch_id(state: dict[str, Any]) -> str:
     return f"batch-{today}-{max_seen + 1:04d}"
 
 
+def _pending_batch(state: dict[str, Any]) -> dict[str, Any] | None:
+    pending = state.get("pending_remote_batch")
+    if not isinstance(pending, dict):
+        return None
+    batch_id = pending.get("batch_id")
+    manifest_path = pending.get("manifest_path")
+    if not isinstance(batch_id, str) or not batch_id:
+        return None
+    if not isinstance(manifest_path, str) or not manifest_path:
+        return None
+    return pending
+
+
 def _active_batch_id(state: dict[str, Any]) -> str | None:
     remote_batches = state.get("remote_batches", [])
     if not remote_batches:
@@ -204,8 +217,16 @@ def _plan_remote_batch(load_handoff: dict[str, Any], state_path: Path, output_pa
             "local_changeset missing",
         )
 
-    batch_id = _next_batch_id(state)
-    manifest_path = str(Path(".ml-metaopt") / "artifacts" / "manifests" / f"{batch_id}.json")
+    pending_batch = _pending_batch(state)
+    if pending_batch is None:
+        batch_id = _next_batch_id(state)
+        manifest_path = str(Path(".ml-metaopt") / "artifacts" / "manifests" / f"{batch_id}.json")
+        state["pending_remote_batch"] = {"batch_id": batch_id, "manifest_path": manifest_path}
+        _write_json(state_path, state)
+    else:
+        batch_id = pending_batch["batch_id"]
+        manifest_path = pending_batch["manifest_path"]
+
     payload = {
         "schema_version": 1,
         "producer": "metaopt-remote-execution-control",
@@ -245,7 +266,8 @@ def _gate_remote_batch(
 ) -> dict[str, Any]:
     state = _read_json(state_path)
     if state["machine_state"] == "ENQUEUE_REMOTE_BATCH":
-        batch_id = _next_batch_id(state)
+        pending_batch = _pending_batch(state)
+        batch_id = pending_batch["batch_id"] if pending_batch is not None else _next_batch_id(state)
         enqueue_path = executor_events_dir / f"enqueue-{batch_id}.json"
         if not enqueue_path.exists():
             return _runtime_error(
@@ -269,6 +291,7 @@ def _gate_remote_batch(
                 "status": "queued",
             }
         )
+        state.pop("pending_remote_batch", None)
         state["machine_state"] = "WAIT_FOR_REMOTE_BATCH"
         state["next_action"] = "poll remote batch status"
         _write_json(state_path, state)

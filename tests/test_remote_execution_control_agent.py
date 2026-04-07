@@ -508,6 +508,177 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
             self._assert_envelope_keys(payload)
             self.assertEqual(payload["outcome"], "runtime_error")
 
+    # ── directive-driven execution tests ─────────────────────────────
+
+    def test_plan_remote_batch_emits_write_manifest_and_enqueue_directives(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            batch_id = self._today_batch_id()
+            payload, _, _ = self._run(
+                Path(tempdir_str),
+                mode="plan_remote_batch",
+                state=self._base_state(),
+            )
+
+            directives = payload["executor_directives"]
+            actions = [d["action"] for d in directives]
+            self.assertEqual(actions, ["write_manifest", "enqueue_batch"])
+
+            write_d = directives[0]
+            self.assertEqual(write_d["manifest_path"], payload["manifest_path"])
+            self.assertEqual(write_d["batch_id"], batch_id)
+            self.assertIn("reason", write_d)
+
+            enqueue_d = directives[1]
+            self.assertEqual(enqueue_d["command"], "python3 /opt/ray-hetzner/metaopt/enqueue_batch.py --manifest")
+            self.assertEqual(enqueue_d["manifest_path"], payload["manifest_path"])
+            self.assertIn("reason", enqueue_d)
+
+    def test_gate_remote_batch_enqueue_ack_emits_poll_directive(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            batch_id = self._today_batch_id()
+            state = self._base_state()
+            payload, _, _ = self._run(
+                Path(tempdir_str),
+                mode="gate_remote_batch",
+                state=state,
+                executor_events={
+                    f"enqueue-{batch_id}": {
+                        "batch_id": batch_id,
+                        "queue_ref": "ray-queue-123",
+                        "status": "queued",
+                    }
+                },
+            )
+
+            self.assertEqual(payload["outcome"], "waiting")
+            directives = payload["executor_directives"]
+            self.assertEqual(len(directives), 1)
+            self.assertEqual(directives[0]["action"], "poll_batch_status")
+            self.assertEqual(directives[0]["command"], "python3 /opt/ray-hetzner/metaopt/get_batch_status.py --batch-id")
+            self.assertEqual(directives[0]["batch_id"], batch_id)
+
+    def test_gate_remote_batch_still_running_emits_poll_directive(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            state = self._base_state()
+            state["machine_state"] = "WAIT_FOR_REMOTE_BATCH"
+            state["remote_batches"] = [{"batch_id": "batch-20260406-0002", "queue_ref": "ray-queue-123", "status": "running"}]
+            payload, _, _ = self._run(
+                Path(tempdir_str),
+                mode="gate_remote_batch",
+                state=state,
+                executor_events={
+                    "remote-status-batch-20260406-0002": {
+                        "batch_id": "batch-20260406-0002",
+                        "status": "running",
+                    }
+                },
+            )
+
+            self.assertEqual(payload["outcome"], "waiting")
+            directives = payload["executor_directives"]
+            self.assertEqual(len(directives), 1)
+            self.assertEqual(directives[0]["action"], "poll_batch_status")
+            self.assertEqual(directives[0]["command"], "python3 /opt/ray-hetzner/metaopt/get_batch_status.py --batch-id")
+            self.assertEqual(directives[0]["batch_id"], "batch-20260406-0002")
+
+    def test_gate_remote_batch_completed_no_results_emits_fetch_directive(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            state = self._base_state()
+            state["machine_state"] = "WAIT_FOR_REMOTE_BATCH"
+            state["remote_batches"] = [{"batch_id": "batch-20260406-0002", "queue_ref": "ray-queue-123", "status": "running"}]
+            payload, _, _ = self._run(
+                Path(tempdir_str),
+                mode="gate_remote_batch",
+                state=state,
+                executor_events={
+                    "remote-status-batch-20260406-0002": {
+                        "batch_id": "batch-20260406-0002",
+                        "status": "completed",
+                        "timestamps": {"queued_at": "2026-04-06T10:00:00Z", "started_at": "2026-04-06T10:02:00Z"},
+                    }
+                },
+            )
+
+            self.assertEqual(payload["outcome"], "fetch_results")
+            directives = payload["executor_directives"]
+            self.assertEqual(len(directives), 1)
+            self.assertEqual(directives[0]["action"], "fetch_batch_results")
+            self.assertEqual(directives[0]["command"], "python3 /opt/ray-hetzner/metaopt/fetch_batch_results.py --batch-id")
+            self.assertEqual(directives[0]["batch_id"], "batch-20260406-0002")
+
+    def test_gate_remote_batch_analysis_launch_has_no_executor_directives(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            state = self._base_state()
+            state["machine_state"] = "WAIT_FOR_REMOTE_BATCH"
+            state["remote_batches"] = [{"batch_id": "batch-20260406-0002", "queue_ref": "ray-queue-123", "status": "completed"}]
+            payload, _, _ = self._run(
+                Path(tempdir_str),
+                mode="gate_remote_batch",
+                state=state,
+                executor_events={
+                    "remote-status-batch-20260406-0002": {
+                        "batch_id": "batch-20260406-0002",
+                        "status": "completed",
+                        "timestamps": {"queued_at": "2026-04-06T10:00:00Z", "started_at": "2026-04-06T10:02:00Z"},
+                    },
+                    "remote-results-batch-20260406-0002": {
+                        "batch_id": "batch-20260406-0002",
+                        "status": "completed",
+                        "best_aggregate_result": {"metric": "rmse", "value": 0.1213},
+                        "per_dataset": {"ds_main": 0.1208, "ds_holdout": 0.1225},
+                        "artifact_locations": {},
+                        "logs_location": "s3://logs",
+                    },
+                },
+            )
+
+            self.assertEqual(payload["outcome"], "run_analysis")
+            self.assertEqual(payload["worker_ref"], "metaopt-analysis-worker")
+            self.assertEqual(payload["executor_directives"], [])
+
+    def test_gate_remote_batch_diagnosis_launch_has_no_executor_directives(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            state = self._base_state()
+            state["machine_state"] = "WAIT_FOR_REMOTE_BATCH"
+            state["remote_batches"] = [{"batch_id": "batch-20260406-0002", "queue_ref": "ray-queue-123", "status": "running"}]
+            payload, _, _ = self._run(
+                Path(tempdir_str),
+                mode="gate_remote_batch",
+                state=state,
+                executor_events={
+                    "remote-status-batch-20260406-0002": {
+                        "batch_id": "batch-20260406-0002",
+                        "status": "failed",
+                        "timestamps": {"queued_at": "2026-04-06T10:00:00Z"},
+                        "classification": "infra_error",
+                        "message": "worker exited",
+                        "returncode": 137,
+                    }
+                },
+            )
+
+            self.assertEqual(payload["outcome"], "run_remote_diagnosis")
+            self.assertEqual(payload["worker_ref"], "metaopt-diagnosis-worker")
+            self.assertEqual(payload["executor_directives"], [])
+
+    def test_plan_remote_batch_stability_emits_same_directives(self) -> None:
+        """Re-running plan on a state with pending_remote_batch uses same batch_id in directives."""
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            state = self._base_state()
+            state["pending_remote_batch"] = {
+                "batch_id": "batch-20260406-0002",
+                "manifest_path": ".ml-metaopt/artifacts/manifests/batch-20260406-0002.json",
+            }
+            payload, _, _ = self._run(
+                Path(tempdir_str),
+                mode="plan_remote_batch",
+                state=state,
+            )
+
+            directives = payload["executor_directives"]
+            self.assertEqual(directives[0]["batch_id"], "batch-20260406-0002")
+            self.assertEqual(directives[1]["manifest_path"], ".ml-metaopt/artifacts/manifests/batch-20260406-0002.json")
+
     def test_agent_profile_exists_and_declares_all_modes(self) -> None:
         self.assertTrue(AGENT_PROFILE.exists(), f"missing {AGENT_PROFILE}")
         content = AGENT_PROFILE.read_text(encoding="utf-8")

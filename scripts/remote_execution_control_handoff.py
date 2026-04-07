@@ -230,6 +230,7 @@ def _plan_remote_batch(load_handoff: dict[str, Any], state_path: Path, output_pa
         batch_id = pending_batch["batch_id"]
         manifest_path = pending_batch["manifest_path"]
 
+    enqueue_command = load_handoff["remote_queue"]["enqueue_command"]
     payload = {
         "schema_version": 1,
         "producer": _CONTROL_AGENT,
@@ -238,12 +239,26 @@ def _plan_remote_batch(load_handoff: dict[str, Any], state_path: Path, output_pa
         "batch_id": batch_id,
         "manifest_path": manifest_path,
         "task_file": None,
-        "enqueue_command": load_handoff["remote_queue"]["enqueue_command"],
+        "enqueue_command": enqueue_command,
         "recommended_executor_phase": "EXECUTE_REMOTE_ENQUEUE",
         "recommended_next_machine_state": "ENQUEUE_REMOTE_BATCH",
         "recommended_next_action": "write manifest and enqueue batch",
         "judgment": None,
         "delta": None,
+        "executor_directives": [
+            {
+                "action": "write_manifest",
+                "reason": "batch manifest must be written before enqueue",
+                "batch_id": batch_id,
+                "manifest_path": manifest_path,
+            },
+            {
+                "action": "enqueue_batch",
+                "reason": "submit batch to remote queue backend",
+                "command": enqueue_command,
+                "manifest_path": manifest_path,
+            },
+        ],
         "warnings": [],
         "summary": "remote batch is ready for manifest write and enqueue",
     }
@@ -260,6 +275,7 @@ def _validate_enqueue_ack(payload: dict[str, Any], batch_id: str) -> bool:
 
 
 def _gate_remote_batch(
+    load_handoff: dict[str, Any],
     state_path: Path,
     tasks_dir: Path,
     worker_results_dir: Path,
@@ -312,6 +328,14 @@ def _gate_remote_batch(
             "recommended_next_action": "poll remote batch status",
             "judgment": None,
             "delta": None,
+            "executor_directives": [
+                {
+                    "action": "poll_batch_status",
+                    "reason": "batch is queued; poll for status updates",
+                    "command": load_handoff["remote_queue"]["status_command"],
+                    "batch_id": batch_id,
+                },
+            ],
             "warnings": [],
             "summary": "enqueue acknowledged and batch is now tracked remotely",
         }
@@ -367,6 +391,14 @@ def _gate_remote_batch(
             "recommended_next_action": "poll remote batch status",
             "judgment": None,
             "delta": None,
+            "executor_directives": [
+                {
+                    "action": "poll_batch_status",
+                    "reason": "batch is still in flight; poll for status updates",
+                    "command": load_handoff["remote_queue"]["status_command"],
+                    "batch_id": batch_id,
+                },
+            ],
             "warnings": [],
             "summary": "remote batch is still in flight",
         }
@@ -393,6 +425,14 @@ def _gate_remote_batch(
                 "recommended_next_action": "run results_command for active batch",
                 "judgment": None,
                 "delta": None,
+                "executor_directives": [
+                    {
+                        "action": "fetch_batch_results",
+                        "reason": "batch completed; results must be fetched from backend",
+                        "command": load_handoff["remote_queue"]["results_command"],
+                        "batch_id": batch_id,
+                    },
+                ],
                 "warnings": [],
                 "summary": "remote batch completed and results must be fetched",
             }
@@ -628,6 +668,7 @@ def main() -> int:
         payload = _plan_remote_batch(load_handoff, Path(args.state_path), Path(args.output))
     elif args.mode == "gate_remote_batch":
         payload = _gate_remote_batch(
+            load_handoff,
             Path(args.state_path),
             Path(args.tasks_dir),
             Path(args.worker_results_dir),

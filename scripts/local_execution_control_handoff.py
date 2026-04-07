@@ -249,6 +249,44 @@ def _plan_local_changeset(
     state["next_action"] = "execute local changeset plan"
     _write_json(state_path, state)
 
+    # Standard materialization emits explicit executor directives for the
+    # mechanical steps that follow worker completion.  Remediation and
+    # conflict-resolution paths only re-launch the worker, so they carry
+    # no executor directives.
+    if materialization_mode == "standard":
+        artifacts = load_handoff.get("artifacts", {})
+        sanity_cfg = load_handoff.get("sanity", {})
+        executor_directives: list[dict[str, Any]] = [
+            {
+                "action": "apply_patch_artifacts",
+                "reason": "apply materialization patches to integration worktree",
+                "worktree": required_worktree,
+                "result_file": str(Path(".ml-metaopt") / "worker-results" / f"materialization-{attempt}.json"),
+            },
+            {
+                "action": "package_code_artifact",
+                "reason": "package code tree for remote execution",
+                "worktree": required_worktree,
+                "code_roots": artifacts.get("code_roots", ["."]),
+                "exclude": artifacts.get("exclude", []),
+            },
+            {
+                "action": "package_data_manifest",
+                "reason": "build data manifest for remote execution",
+                "worktree": required_worktree,
+                "data_roots": artifacts.get("data_roots", []),
+            },
+            {
+                "action": "run_sanity",
+                "reason": "run local sanity check before proceeding to remote enqueue",
+                "worktree": required_worktree,
+                "command": sanity_cfg.get("command", ""),
+                "max_duration_seconds": sanity_cfg.get("max_duration_seconds"),
+            },
+        ]
+    else:
+        executor_directives = []
+
     payload = {
         "schema_version": 1,
         "producer": _CONTROL_AGENT,
@@ -265,6 +303,7 @@ def _plan_local_changeset(
         "recommended_next_machine_state": "MATERIALIZE_CHANGESET",
         "recommended_next_action": "launch materialization worker and run sanity",
         "diagnosis_action": None,
+        "executor_directives": executor_directives,
         "warnings": [],
         "summary": f"planned {materialization_mode} local materialization task",
     }

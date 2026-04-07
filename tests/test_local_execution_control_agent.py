@@ -472,6 +472,132 @@ class LocalExecutionControlAgentTests(unittest.TestCase):
             )
             self._assert_envelope_keys(payload)
 
+    # ── executor_directives tests ──────────────────────────────────────
+
+    def test_plan_standard_emits_executor_directives(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            payload, _, _ = self._run(
+                Path(tempdir_str),
+                mode="plan_local_changeset",
+                state=self._base_state(),
+            )
+            directives = payload["executor_directives"]
+            actions = [d["action"] for d in directives]
+            self.assertEqual(
+                actions,
+                ["apply_patch_artifacts", "package_code_artifact", "package_data_manifest", "run_sanity"],
+            )
+            for d in directives:
+                self.assertIsInstance(d["reason"], str)
+                self.assertTrue(d["reason"])
+
+    def test_plan_standard_directives_carry_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            payload, _, _ = self._run(
+                Path(tempdir_str),
+                mode="plan_local_changeset",
+                state=self._base_state(),
+            )
+            directives = payload["executor_directives"]
+            by_action = {d["action"]: d for d in directives}
+            self.assertIn("worktree", by_action["apply_patch_artifacts"])
+            self.assertIn("code_roots", by_action["package_code_artifact"])
+            self.assertIn("command", by_action["run_sanity"])
+
+    def test_plan_remediation_has_no_executor_directives(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            state = self._base_state()
+            state["selected_experiment"]["sanity_attempts"] = 1
+            state["selected_experiment"]["diagnosis_history"] = [
+                {
+                    "attempt": 1,
+                    "root_cause": "missing guard",
+                    "classification": "code_error",
+                    "action": "fix",
+                    "code_guidance": "Add temporal leakage guard",
+                    "config_guidance": None,
+                    "diagnosed_at": "2026-04-06T00:10:00Z",
+                }
+            ]
+            payload, _, _ = self._run(
+                Path(tempdir_str),
+                mode="plan_local_changeset",
+                state=state,
+            )
+            self.assertEqual(payload["executor_directives"], [])
+
+    def test_plan_conflict_resolution_has_no_executor_directives(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            payload, _, _ = self._run(
+                Path(tempdir_str),
+                mode="plan_local_changeset",
+                state=self._base_state(),
+                executor_events={
+                    "local_changeset-1": {
+                        "integration_worktree": ".ml-metaopt/worktrees/iter-1-integration",
+                        "apply_results": [
+                            {
+                                "patch_path": ".ml-metaopt/artifacts/patches/batch-0001/aux-1.patch",
+                                "status": "conflict",
+                                "error": "merge conflict in src/pipeline.py",
+                            }
+                        ],
+                        "code_artifact_uri": None,
+                        "data_manifest_uri": None,
+                    }
+                },
+            )
+            self.assertEqual(payload["executor_directives"], [])
+
+    def test_gate_diagnosis_launch_has_no_executor_directives(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            payload, _, _ = self._run(
+                Path(tempdir_str),
+                mode="gate_local_sanity",
+                state=self._base_state(),
+                executor_events={
+                    "sanity-1": {
+                        "status": "failed",
+                        "exit_code": 1,
+                        "stdout": "",
+                        "stderr": "temporal leakage detected",
+                        "duration_seconds": 2.3,
+                    }
+                },
+            )
+            self.assertEqual(payload["executor_directives"], [])
+
+    def test_gate_sanity_pass_has_no_executor_directives(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            payload, _, _ = self._run(
+                Path(tempdir_str),
+                mode="gate_local_sanity",
+                state=self._base_state(),
+                worker_results={
+                    "materialization-1": {
+                        "status": "completed",
+                        "patch_artifacts": [],
+                        "verification_notes": ["ok"],
+                    }
+                },
+                executor_events={
+                    "local_changeset-1": {
+                        "integration_worktree": ".ml-metaopt/worktrees/iter-1-materialization",
+                        "apply_results": [],
+                        "code_artifact_uri": "code.tar.gz",
+                        "data_manifest_uri": "data.json",
+                    },
+                    "sanity-1": {
+                        "status": "passed",
+                        "exit_code": 0,
+                        "stdout": "ok",
+                        "stderr": "",
+                        "duration_seconds": 1,
+                    },
+                },
+            )
+            self.assertEqual(payload["executor_directives"], [])
+
     def test_agent_profile_exists_and_declares_both_modes(self) -> None:
         self.assertTrue(AGENT_PROFILE.exists(), f"missing {AGENT_PROFILE}")
         content = AGENT_PROFILE.read_text(encoding="utf-8")

@@ -1271,6 +1271,44 @@ class MetaoptValidationTests(unittest.TestCase):
         state_machine = _read_text("references/state-machine.md")
         self.assertIn("executor_directives", state_machine)
 
+    def test_control_agent_manifests_reference_control_protocol(self) -> None:
+        """Every control-agent manifest must reference references/control-protocol.md."""
+        control_agent_manifests = [
+            ".github/agents/metaopt-load-campaign.agent.md",
+            ".github/agents/metaopt-hydrate-state.agent.md",
+            ".github/agents/metaopt-background-control.agent.md",
+            ".github/agents/metaopt-select-design.agent.md",
+            ".github/agents/metaopt-local-execution-control.agent.md",
+            ".github/agents/metaopt-remote-execution-control.agent.md",
+            ".github/agents/metaopt-iteration-close-control.agent.md",
+        ]
+        for manifest_path in control_agent_manifests:
+            content = _read_text(manifest_path)
+            self.assertIn(
+                "references/control-protocol.md",
+                content,
+                f"{manifest_path} must reference the control protocol",
+            )
+
+    def test_control_agent_manifests_state_handoff_conformance(self) -> None:
+        """Every control-agent manifest must state that handoff output conforms to the control protocol."""
+        control_agent_manifests = [
+            ".github/agents/metaopt-load-campaign.agent.md",
+            ".github/agents/metaopt-hydrate-state.agent.md",
+            ".github/agents/metaopt-background-control.agent.md",
+            ".github/agents/metaopt-select-design.agent.md",
+            ".github/agents/metaopt-local-execution-control.agent.md",
+            ".github/agents/metaopt-remote-execution-control.agent.md",
+            ".github/agents/metaopt-iteration-close-control.agent.md",
+        ]
+        for manifest_path in control_agent_manifests:
+            content = _read_text(manifest_path)
+            _require_pattern(
+                self,
+                content,
+                r"[Cc]ontrol.protocol|[Hh]andoff.*envelope|[Uu]niversal.*[Ee]nvelope",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -23,6 +23,7 @@ You run in three modes:
 - You write staged task files and handoff artifacts for the orchestrator.
 - The orchestrator may stage raw quiesce outcomes, but it must not interpret them semantically.
 - You are the only component allowed to update proposal carry-over semantics, `selected_experiment` closure, iteration counters, `last_iteration_report`, and continue-vs-complete routing during Steps 12/13.
+- Your staged handoff output must conform to the universal control-handoff envelope defined in `references/control-protocol.md`.
 
 # Execution
 

@@ -21,6 +21,7 @@ Your scope is limited to `LOAD_CAMPAIGN` plus an advisory `.ml-metaopt/state.jso
 - Do not dispatch worker skills or backend commands.
 - Your only write target is `.ml-metaopt/handoffs/load_campaign.latest.json`.
 - Treat state-peek mismatches as advisory warnings; the main orchestrator decides `HYDRATE_STATE`.
+- Your staged handoff output must conform to the universal control-handoff envelope defined in `references/control-protocol.md`.
 
 # Execution
 

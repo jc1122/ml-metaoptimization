@@ -20,6 +20,7 @@ Your scope is limited to planning, gating, and finalizing `SELECT_EXPERIMENT` an
 - Do not reread `ml_metaopt_campaign.yaml`.
 - You are authoritative for `state.selected_experiment` and for freezing the current proposal pool.
 - Do not dispatch worker subagents yourself.
+- Your staged handoff output must conform to the universal control-handoff envelope defined in `references/control-protocol.md`.
 - Write only:
   - `.ml-metaopt/state.json`
   - `.ml-metaopt/handoffs/select_and_design.latest.json`

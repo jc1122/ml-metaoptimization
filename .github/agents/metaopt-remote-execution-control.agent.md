@@ -23,6 +23,7 @@ You run in three modes:
 - You write staged task files and handoff artifacts for the orchestrator.
 - The orchestrator may stage raw enqueue, status, and results payloads, but it must not interpret them semantically.
 - You are the only component allowed to update `remote_batches`, `selected_experiment.analysis_summary`, `key_learnings`, `completed_experiments`, and remote-step machine-state transitions during Steps 9/11.
+- Your staged handoff output must conform to the universal control-handoff envelope defined in `references/control-protocol.md`.
 
 # Execution
 

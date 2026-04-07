@@ -22,6 +22,7 @@ You run in two modes:
 - You write staged task files and handoff artifacts for the orchestrator.
 - The orchestrator may stage raw patch-apply, packaging, and sanity outputs, but it must not interpret them semantically.
 - You are the only component allowed to update `state.local_changeset`, `state.selected_experiment.sanity_attempts`, and `state.selected_experiment.diagnosis_history` during Steps 7/8.
+- Your staged handoff output must conform to the universal control-handoff envelope defined in `references/control-protocol.md`.
 
 # Execution
 

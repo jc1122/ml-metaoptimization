@@ -166,6 +166,54 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
         manifest_path.write_text(json.dumps(payload), encoding="utf-8")
         return manifest_path
 
+    # Universal envelope keys required by references/control-protocol.md
+    _ENVELOPE_KEYS = {
+        "handoff_type",
+        "control_agent",
+        "recommended_next_machine_state",
+        "launch_requests",
+        "state_patch",
+        "executor_directives",
+        "summary",
+        "warnings",
+    }
+
+    _CONTROL_AGENTS = {
+        "metaopt-load-campaign",
+        "metaopt-hydrate-state",
+        "metaopt-background-control",
+        "metaopt-select-design",
+        "metaopt-local-execution-control",
+        "metaopt-remote-execution-control",
+        "metaopt-iteration-close-control",
+    }
+
+    def _assert_envelope(self, payload: dict, expected_agent: str, label: str) -> None:
+        """Validate that *payload* conforms to the universal control-handoff envelope."""
+        missing = self._ENVELOPE_KEYS - payload.keys()
+        self.assertFalse(missing, f"{label}: missing envelope keys {missing}")
+
+        self.assertIsInstance(payload["handoff_type"], str, f"{label}: handoff_type must be a string")
+        self.assertTrue(payload["handoff_type"], f"{label}: handoff_type must be non-empty")
+
+        self.assertEqual(payload["control_agent"], expected_agent, f"{label}: wrong control_agent")
+        self.assertIn(payload["control_agent"], self._CONTROL_AGENTS, f"{label}: unknown control_agent")
+
+        rec = payload["recommended_next_machine_state"]
+        self.assertTrue(rec is None or isinstance(rec, str), f"{label}: recommended_next_machine_state must be str|null")
+
+        self.assertIsInstance(payload["launch_requests"], list, f"{label}: launch_requests must be a list")
+        self.assertTrue(
+            payload["state_patch"] is None or isinstance(payload["state_patch"], dict),
+            f"{label}: state_patch must be dict|null",
+        )
+        self.assertTrue(
+            payload["executor_directives"] is None or isinstance(payload["executor_directives"], (dict, list)),
+            f"{label}: executor_directives must be dict|list|null",
+        )
+        self.assertIsInstance(payload["summary"], str, f"{label}: summary must be a string")
+        self.assertIsInstance(payload["warnings"], list, f"{label}: warnings must be a list")
+
     def _run(self, cmd: list[str], output_path: Path) -> dict:
         completed = subprocess.run(
             cmd,
@@ -216,6 +264,7 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
                 load_output,
             )
             self.assertEqual(load_payload["outcome"], "ok")
+            self._assert_envelope(load_payload, "metaopt-load-campaign", "load_campaign")
 
             hydrate_output = handoffs_dir / "hydrate_state.latest.json"
             hydrate_payload = self._run(
@@ -236,6 +285,7 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
                 hydrate_output,
             )
             self.assertEqual(hydrate_payload["outcome"], "initialized")
+            self._assert_envelope(hydrate_payload, "metaopt-hydrate-state", "hydrate_state")
             state = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual(state["machine_state"], "MAINTAIN_BACKGROUND_POOL")
 
@@ -263,6 +313,7 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
             )
             self.assertEqual(bg_plan["phase"], "PLAN_BACKGROUND_WORK")
             self.assertEqual(len(bg_plan["launch_requests"]), 2)
+            self._assert_envelope(bg_plan, "metaopt-background-control", "plan_background_work")
 
             ideation_candidates = [
                 {
@@ -320,6 +371,7 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
                 bg_gate_output,
             )
             self.assertEqual(bg_gate["recommended_next_machine_state"], "SELECT_EXPERIMENT")
+            self._assert_envelope(bg_gate, "metaopt-background-control", "gate_background_work")
             state = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual(state["machine_state"], "MAINTAIN_BACKGROUND_POOL")
             self.assertEqual(state["next_action"], "select experiment")
@@ -346,6 +398,7 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
                 select_plan_output,
             )
             self.assertEqual(select_plan["worker_ref"], "metaopt-selection-worker")
+            self._assert_envelope(select_plan, "metaopt-select-design", "plan_select_experiment")
             selected_proposal = json.loads(state_path.read_text(encoding="utf-8"))["current_proposals"][0]
             (worker_results_dir / "select-experiment-iter-1.json").write_text(
                 json.dumps(
@@ -377,6 +430,7 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
                 select_plan_output,
             )
             self.assertEqual(design_plan["worker_ref"], "metaopt-design-worker")
+            self._assert_envelope(design_plan, "metaopt-select-design", "gate_select_and_plan_design")
             state = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual(state["machine_state"], "DESIGN_EXPERIMENT")
             self.assertIsNone(state["selected_experiment"]["design"])
@@ -419,6 +473,7 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
                 select_plan_output,
             )
             self.assertEqual(select_finalize["recommended_next_machine_state"], "MATERIALIZE_CHANGESET")
+            self._assert_envelope(select_finalize, "metaopt-select-design", "finalize_select_design")
 
             local_output = handoffs_dir / "local_execution.latest.json"
             local_plan = self._run(
@@ -443,6 +498,7 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
                 local_output,
             )
             self.assertEqual(local_plan["worker_ref"], "metaopt-materialization-worker")
+            self._assert_envelope(local_plan, "metaopt-local-execution-control", "plan_local_changeset")
             (worker_results_dir / "materialization-1.json").write_text(
                 json.dumps(
                     {
@@ -504,6 +560,7 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
                 local_output,
             )
             self.assertEqual(local_gate["recommended_next_machine_state"], "ENQUEUE_REMOTE_BATCH")
+            self._assert_envelope(local_gate, "metaopt-local-execution-control", "gate_local_sanity")
             state = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual(state["machine_state"], "ENQUEUE_REMOTE_BATCH")
             self.assertIsInstance(state["local_changeset"], dict)
@@ -533,6 +590,7 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
                 remote_output,
             )
             self.assertEqual(remote_plan["batch_id"], batch_id)
+            self._assert_envelope(remote_plan, "metaopt-remote-execution-control", "plan_remote_batch")
             (executor_events_dir / f"enqueue-{batch_id}.json").write_text(
                 json.dumps({"batch_id": batch_id, "queue_ref": "ray-queue-123", "status": "queued"}),
                 encoding="utf-8",
@@ -559,6 +617,7 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
                 remote_output,
             )
             self.assertEqual(remote_gate["recommended_next_machine_state"], "WAIT_FOR_REMOTE_BATCH")
+            self._assert_envelope(remote_gate, "metaopt-remote-execution-control", "gate_remote_batch_initial")
             (executor_events_dir / f"remote-status-{batch_id}.json").write_text(
                 json.dumps(
                     {
@@ -604,6 +663,7 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
                 remote_output,
             )
             self.assertEqual(remote_analysis_request["worker_ref"], "metaopt-analysis-worker")
+            self._assert_envelope(remote_analysis_request, "metaopt-remote-execution-control", "gate_remote_batch_analysis_request")
             (worker_results_dir / f"remote-analysis-{batch_id}.json").write_text(
                 json.dumps(
                     {
@@ -639,6 +699,7 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
                 remote_output,
             )
             self.assertEqual(analyze_ready["recommended_next_machine_state"], "ANALYZE_RESULTS")
+            self._assert_envelope(analyze_ready, "metaopt-remote-execution-control", "gate_remote_batch_analyze_ready")
             analyzed = self._run(
                 [
                     "python3",
@@ -661,6 +722,7 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
                 remote_output,
             )
             self.assertEqual(analyzed["recommended_next_machine_state"], "ROLL_ITERATION")
+            self._assert_envelope(analyzed, "metaopt-remote-execution-control", "analyze_remote_results")
             state = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual(state["baseline"]["aggregate"], 0.1198)
             self.assertEqual(state["machine_state"], "ROLL_ITERATION")
@@ -688,6 +750,7 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
                 iteration_output,
             )
             self.assertEqual(roll_plan["worker_ref"], "metaopt-rollover-worker")
+            self._assert_envelope(roll_plan, "metaopt-iteration-close-control", "plan_roll_iteration")
             (worker_results_dir / "rollover-iter-1.json").write_text(
                 json.dumps(
                     {
@@ -729,6 +792,7 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
             )
             self.assertFalse(roll_gate["continue_campaign"])
             self.assertEqual(roll_gate["stop_reason"], "target_metric")
+            self._assert_envelope(roll_gate, "metaopt-iteration-close-control", "gate_roll_iteration")
             state = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual(state["machine_state"], "QUIESCE_SLOTS")
             self.assertIsNone(state["selected_experiment"])
@@ -769,6 +833,7 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
                 iteration_output,
             )
             self.assertEqual(quiesced["recommended_next_machine_state"], "COMPLETE")
+            self._assert_envelope(quiesced, "metaopt-iteration-close-control", "quiesce_slots")
             final_state = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual(final_state["status"], "COMPLETE")
             self.assertEqual(final_state["machine_state"], "COMPLETE")

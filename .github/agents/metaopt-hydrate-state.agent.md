@@ -20,6 +20,7 @@ Your scope is limited to `HYDRATE_STATE`.
 - You are authoritative for `.ml-metaopt/state.json` and the `AGENTS.md` resume hook.
 - Verify worker-skill availability from `agents/worker-skills.json`.
 - Do not dispatch worker skills or backend commands.
+- Your staged handoff output must conform to the universal control-handoff envelope defined in `references/control-protocol.md`.
 - Write only:
   - `.ml-metaopt/state.json`
   - `AGENTS.md`

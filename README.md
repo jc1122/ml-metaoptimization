@@ -25,6 +25,12 @@ The tests pin the public contract for:
 - state-file fixtures and lifecycle pairing rules
 - cross-document consistency between the skill and reference docs
 
+## Preflight Prerequisite
+
+Before starting the resumable orchestrator loop, run the one-shot `metaopt-preflight` skill.
+It validates environment readiness and emits `.ml-metaopt/preflight-readiness.json`.
+`LOAD_CAMPAIGN` gates on this artifact — if it is missing, stale, or failed the orchestrator blocks with `BLOCKED_CONFIG`.
+
 ## Ecosystem
 
 This orchestrator delegates to the following worker targets:

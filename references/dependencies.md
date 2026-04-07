@@ -1,5 +1,12 @@
 # Dependencies
 
+## Preflight Prerequisite
+
+The one-shot `metaopt-preflight` skill must run before the orchestrator loop begins.
+It validates environment readiness (backend connectivity, tool availability, campaign coherence)
+and emits `.ml-metaopt/preflight-readiness.json`. `LOAD_CAMPAIGN` gates on this artifact:
+if it is missing, stale, or records a failed status the orchestrator blocks with `BLOCKED_CONFIG`.
+
 ## Hard Runtime Dependencies
 
 - GitHub Copilot agent runtime with subagent dispatch
@@ -9,6 +16,7 @@
 - target repository files:
   - `ml_metaopt_campaign.yaml`
   - `AGENTS.md`
+  - `.ml-metaopt/preflight-readiness.json` (emitted by `metaopt-preflight`; prerequisite before `LOAD_CAMPAIGN` proceeds)
   - `.ml-metaopt/state.json` (created on first run if absent, then reused for resume)
 - skill repo assets:
   - `SKILL.md`

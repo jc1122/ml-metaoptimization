@@ -34,6 +34,7 @@ Always use the strongest available model in the same class and record the substi
   ml_metaopt_campaign.yaml
   AGENTS.md
   .ml-metaopt/
+    preflight-readiness.json   # emitted by metaopt-preflight; required before LOAD_CAMPAIGN proceeds
     state.json
     artifacts/
       code/
@@ -41,6 +42,9 @@ Always use the strongest available model in the same class and record the substi
       manifests/
       patches/
 ```
+
+`.ml-metaopt/preflight-readiness.json` is the readiness artifact produced by `metaopt-preflight`.
+`LOAD_CAMPAIGN` reads this artifact after campaign validation passes; if it is missing, stale (hash mismatch), or failed, the orchestrator transitions to `BLOCKED_CONFIG` with a directive to run or re-run `metaopt-preflight`.
 
 Append this block to `AGENTS.md` on initialization if it is not already present:
 

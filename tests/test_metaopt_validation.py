@@ -1381,6 +1381,70 @@ class MetaoptValidationTests(unittest.TestCase):
                 r"must not infer.*executor work.*prose|must not infer.*executor work.*summar|must not infer.*executor work.*legacy",
             )
 
+    # ------------------------------------------------------------------
+    # Preflight dependency documentation consistency
+    # ------------------------------------------------------------------
+
+    def test_preflight_dependency_documented_across_public_docs(self) -> None:
+        """README, SKILL.md, and dependencies.md must all document the
+        metaopt-preflight prerequisite and the readiness artifact path."""
+        readme = _read_text("README.md")
+        skill_md = _read_text("SKILL.md")
+        dependencies = _read_text("references/dependencies.md")
+
+        artifact_path = ".ml-metaopt/preflight-readiness.json"
+        preflight_name = "metaopt-preflight"
+
+        for doc_name, text in [
+            ("README.md", readme),
+            ("SKILL.md", skill_md),
+            ("references/dependencies.md", dependencies),
+        ]:
+            with self.subTest(doc=doc_name, check="preflight_name"):
+                self.assertIn(
+                    preflight_name, text,
+                    f"{doc_name} must mention {preflight_name}",
+                )
+
+        # The readiness artifact path must be documented in SKILL.md
+        # and dependencies.md (the two operational references).
+        for doc_name, text in [
+            ("SKILL.md", skill_md),
+            ("references/dependencies.md", dependencies),
+        ]:
+            with self.subTest(doc=doc_name, check="artifact_path"):
+                self.assertIn(
+                    artifact_path, text,
+                    f"{doc_name} must mention {artifact_path}",
+                )
+
+        # dependencies.md must position preflight as a startup prerequisite
+        _require_pattern(
+            self,
+            dependencies,
+            r"[Pp]reflight.*prerequisite|[Pp]rerequisite.*preflight|[Pp]reflight.*before.*LOAD_CAMPAIGN|[Pp]reflight.*before.*orchestr",
+        )
+
+    def test_skill_md_startup_path_requires_preflight(self) -> None:
+        """SKILL.md Required Files or startup path must mention the
+        preflight readiness artifact so the contract does not imply the
+        campaign can start without preflight."""
+        skill_md = _read_text("SKILL.md")
+
+        # The Required Files section (or a nearby startup section) must
+        # reference the preflight artifact.
+        required_files_onward = skill_md.split("## Required Files")[1].split("## Behavioral Guarantees")[0]
+        self.assertIn(
+            "preflight-readiness.json",
+            required_files_onward,
+            "Required Files section must reference preflight-readiness.json",
+        )
+        self.assertIn(
+            "metaopt-preflight",
+            required_files_onward,
+            "Required Files section must reference metaopt-preflight as the artifact source",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

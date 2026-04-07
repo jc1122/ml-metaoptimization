@@ -4,6 +4,8 @@ This reference maps each dispatch state in the state machine to the worker targe
 
 The orchestrator is a transport and runtime shell. It launches workers from pre-staged task files written by control agents, stages raw worker outputs, and re-invokes the governing control agent to gate results. It does not construct prompt envelopes inline or make semantic dispatch decisions. See `references/control-protocol.md` for the control-handoff protocol.
 
+The orchestrator must not infer executor work from prose in this document. When executor-side work is required, the governing control agent emits explicit `executor_directives`; when no executor-side work is required, the handoff must still emit `executor_directives = []`.
+
 Load this file before dispatching any worker subagent.
 
 ## Dispatch Types

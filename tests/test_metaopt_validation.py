@@ -1250,6 +1250,36 @@ class MetaoptValidationTests(unittest.TestCase):
         _require_pattern(self, protocol, r"[Pp]lan")
         _require_pattern(self, protocol, r"[Gg]ate")
 
+    def test_control_protocol_defines_executor_directive_catalog(self) -> None:
+        """control-protocol.md must define the concrete executor directive catalog."""
+        protocol = _read_text("references/control-protocol.md")
+        for action_name in (
+            "write_manifest",
+            "enqueue_batch",
+            "poll_batch_status",
+            "fetch_batch_results",
+            "apply_patch_artifacts",
+            "package_code_artifact",
+            "package_data_manifest",
+            "run_sanity",
+            "emit_iteration_report",
+            "drain_slots",
+            "cancel_slots",
+            "remove_agents_hook",
+            "delete_state_file",
+            "emit_final_report",
+        ):
+            self.assertIn(f"`{action_name}`", protocol)
+
+    def test_directive_docs_require_mechanical_execution_not_inference(self) -> None:
+        """Directive docs must say the orchestrator executes directives mechanically instead of inferring executor work from prose."""
+        protocol = _read_text("references/control-protocol.md")
+        state_machine = _read_text("references/state-machine.md")
+        dispatch_guide = _read_text("references/dispatch-guide.md")
+        _require_pattern(self, protocol, r"execute.*mechanically")
+        _require_pattern(self, dispatch_guide, r"must not infer.*executor work")
+        _require_pattern(self, state_machine, r"executor_directives")
+
     def test_contracts_document_campaign_started_at(self) -> None:
         """contracts.md must list campaign_started_at as a required state-file key."""
         contracts = _read_text("references/contracts.md")

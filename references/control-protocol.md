@@ -32,6 +32,42 @@ Every control agent emits a JSON handoff object conforming to this envelope. Fie
 | `summary` | string | yes | Human-readable summary of the handoff decision for logging and debugging. |
 | `warnings` | array of strings | yes | Diagnostic warnings that do not block progress but should be logged. Empty array when none. |
 
+### Executor Directive Rules
+
+- `executor_directives` is the authoritative description of executor-side work.
+- When a phase requires executor activity, the governing control agent must emit explicit directive objects instead of relying on prose in `summary`, `next_action`, or the state-machine narrative.
+- The orchestrator must execute `executor_directives` mechanically in order and must not infer missing executor work from free-form text.
+- Each directive object must contain:
+  - `action` — required non-empty string
+  - `reason` — required non-empty string explaining why the directive exists
+  - action-specific fields documented below
+- Phases that have no executor-side work must still emit `executor_directives = []`.
+
+### Executor Directive Catalog
+
+#### Remote execution directives
+
+- `write_manifest` — required fields: `manifest_path`, `batch_id`
+- `enqueue_batch` — required fields: `command`, `manifest_path`, `batch_id`
+- `poll_batch_status` — required fields: `command`, `batch_id`
+- `fetch_batch_results` — required fields: `command`, `batch_id`
+
+#### Local execution directives
+
+- `apply_patch_artifacts` — required fields: `patch_paths`, `target_worktree`
+- `package_code_artifact` — required fields: `worktree`, `output_uri`
+- `package_data_manifest` — required fields: `output_uri`
+- `run_sanity` — required fields: `command`, `max_duration_seconds`
+
+#### Iteration-close and terminal directives
+
+- `emit_iteration_report` — required fields: `report_type`, `iteration`
+- `drain_slots` — required fields: `drain_window_seconds`
+- `cancel_slots` — required fields: `slot_ids`
+- `remove_agents_hook` — required fields: `agents_path`
+- `delete_state_file` — required fields: `state_path`
+- `emit_final_report` — required fields: `report_type`
+
 ### Legacy Compatibility
 
 Existing handoff scripts use `producer` instead of `control_agent` and `phase`/`outcome` instead of `handoff_type`. The canonical field names above are the target schema. During migration, both forms are accepted — the orchestrator treats `producer` as equivalent to `control_agent` and constructs `handoff_type` from `producer` + `phase` when the new field is absent.

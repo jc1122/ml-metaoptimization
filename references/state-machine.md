@@ -40,6 +40,12 @@ Every delegated phase is governed by a mandatory control agent. The orchestrator
 3. Process remote batch status changes
 4. Evaluate transition guards
 
+## Executor Directives
+
+- Whenever executor-side work is required, the governing control agent must emit explicit `executor_directives` in the handoff envelope.
+- The orchestrator executes these directives mechanically and must not infer executor work from prose descriptions in this document.
+- A phase that has no executor-side work still emits `executor_directives = []` so the absence of work is explicit.
+
 ## Transition Semantics
 
 ### `LOAD_CAMPAIGN`

@@ -571,7 +571,7 @@ class SelectDesignAgentTests(unittest.TestCase):
             self.assertEqual(design_lr["preferred_model"], "claude-opus-4.6-fast")
 
     def test_finalize_rejects_design_with_materialization_lane_fields(self) -> None:
-        """Design result containing patch_artifacts or apply_results must be rejected."""
+        """Design result containing patch_artifacts or apply_results must block to BLOCKED_PROTOCOL."""
         with tempfile.TemporaryDirectory() as tempdir_str:
             tempdir = Path(tempdir_str)
             state = self._base_state()
@@ -606,12 +606,18 @@ class SelectDesignAgentTests(unittest.TestCase):
                 state=json.loads((tempdir / ".ml-metaopt" / "state.json").read_text(encoding="utf-8")),
             )
 
-            self.assertEqual(payload["outcome"], "runtime_error")
+            # Must transition to BLOCKED_PROTOCOL, not runtime_error
+            self.assertEqual(payload["outcome"], "blocked_protocol")
+            self.assertEqual(payload["recommended_next_machine_state"], "BLOCKED_PROTOCOL")
             self.assertIn("materialization", payload["summary"])
-            # Design must NOT have been accepted
+            self.assertIn("protocol violation", payload["recommended_next_action"])
+            self.assertTrue(len(payload["warnings"]) > 0)
+            # State on disk must reflect BLOCKED_PROTOCOL
             state_after = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(state_after["status"], "BLOCKED_PROTOCOL")
+            self.assertEqual(state_after["machine_state"], "BLOCKED_PROTOCOL")
+            self.assertIn("protocol violation", state_after["next_action"])
             self.assertIsNone(state_after["selected_experiment"]["design"])
-            self.assertEqual(state_after["machine_state"], "DESIGN_EXPERIMENT")
 
     def test_agent_profiles_exist_and_are_programmatic_only(self) -> None:
         for profile in (CONTROL_AGENT, SELECTION_AGENT, DESIGN_AGENT):

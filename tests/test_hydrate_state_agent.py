@@ -495,7 +495,70 @@ class HydrateStateHandoffTests(unittest.TestCase):
             self.assertEqual(state["active_slots"], [])
             self.assertNotIn("ml-metaoptimization:begin", agents_path.read_text(encoding="utf-8"))
 
-    def test_invalid_step1_handoff_returns_runtime_error_without_state_write(self) -> None:
+    def test_terminal_state_preserved_when_blocking_skill_also_present(self) -> None:
+        """Regression: a terminal existing state must not be overwritten by _blocked_state when blocking_skill is set."""
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            existing_state = {
+                "version": 3,
+                "campaign_id": "market-forecast-v3",
+                "campaign_identity_hash": "sha256:f50928628873800b25a5dfb41f2fd6c93acfc210424953f53a5005e09379fa4c",
+                "runtime_config_hash": "sha256:6f59ca57fb3da56f815d7fb03f8be7335fa9d14344c49154308e9e65990e9ac6",
+                "status": "BLOCKED_PROTOCOL",
+                "machine_state": "BLOCKED_PROTOCOL",
+                "current_iteration": 4,
+                "next_action": "protocol violation: ideation result contains semantic-lane fields; manual intervention required",
+                "objective_snapshot": {
+                    "metric": "rmse",
+                    "direction": "minimize",
+                    "aggregation": {"method": "weighted_mean", "weights": {"ds_main": 0.7, "ds_holdout": 0.3}},
+                    "improvement_threshold": 0.0005,
+                },
+                "proposal_cycle": {
+                    "cycle_id": "iter-4-cycle-1",
+                    "current_pool_frozen": True,
+                    "ideation_rounds_by_slot": {},
+                    "shortfall_reason": "",
+                },
+                "active_slots": [],
+                "current_proposals": [],
+                "next_proposals": [],
+                "selected_experiment": None,
+                "local_changeset": None,
+                "remote_batches": [],
+                "baseline": {"aggregate": 0.1213, "by_dataset": {"ds_main": 0.1208, "ds_holdout": 0.1225}},
+                "completed_experiments": [],
+                "key_learnings": ["important finding from earlier iterations"],
+                "no_improve_iterations": 0,
+                "runtime_capabilities": {
+                    "verified_at": "2026-04-06T00:00:00Z",
+                    "available_skills": [],
+                    "missing_skills": [],
+                    "degraded_lanes": [],
+                },
+            }
+            payload, state_path, agents_path = self._run_tool(
+                Path(tempdir_str),
+                state_payload=existing_state,
+                missing_required=True,
+                agents_text=AGENTS_HOOK,
+            )
+
+            # Must report terminal, not blocked_config
+            self.assertEqual(payload["outcome"], "terminal")
+            self.assertEqual(payload["effective_status"], "BLOCKED_PROTOCOL")
+            self.assertEqual(payload["effective_machine_state"], "BLOCKED_PROTOCOL")
+            self.assertEqual(payload["resume_mode"], "existing")
+            self.assertTrue(payload["state_written"])
+            self.assertEqual(payload["agents_hook_action"], "removed")
+
+            # Campaign-specific state must be preserved, not replaced with fresh _blocked_state
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(state["status"], "BLOCKED_PROTOCOL")
+            self.assertEqual(state["machine_state"], "BLOCKED_PROTOCOL")
+            self.assertEqual(state["current_iteration"], 4)
+            self.assertIn("protocol violation", state["next_action"])
+            self.assertEqual(state["key_learnings"], ["important finding from earlier iterations"])
+            self.assertNotIn("ml-metaoptimization:begin", agents_path.read_text(encoding="utf-8"))
         with tempfile.TemporaryDirectory() as tempdir_str:
             payload, state_path, agents_path = self._run_tool(
                 Path(tempdir_str),

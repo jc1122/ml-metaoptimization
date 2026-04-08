@@ -442,13 +442,32 @@ def _finalize_select_design(state_path: Path, worker_results_dir: Path, output_p
 
     drift_fields = check_lane_drift("design", design_result)
     if drift_fields:
-        return _runtime_error(
-            output_path,
-            "FINALIZE_SELECT_DESIGN",
-            "remove materialization fields from design result and re-run finalization",
-            f"design result contains materialization-lane fields: {drift_fields}",
-            proposal_id=proposal_id,
+        state["status"] = "BLOCKED_PROTOCOL"
+        state["machine_state"] = "BLOCKED_PROTOCOL"
+        state["next_action"] = (
+            "protocol violation: design result contains materialization-lane "
+            f"fields {drift_fields}; manual intervention required"
         )
+        _write_json(state_path, state)
+        payload = {
+            "schema_version": 1,
+            "producer": _CONTROL_AGENT,
+            "phase": "FINALIZE_SELECT_DESIGN",
+            "outcome": "blocked_protocol",
+            "proposal_id": proposal_id,
+            "worker_kind": None,
+            "worker_ref": None,
+            "task_file": None,
+            "result_file": None,
+            "recommended_executor_phase": None,
+            "recommended_next_machine_state": "BLOCKED_PROTOCOL",
+            "recommended_next_action": state["next_action"],
+            "selection_rationale": selected_experiment.get("selection_rationale"),
+            "design_summary": None,
+            "warnings": [f"lane drift detected in design result: {drift_fields}"],
+            "summary": f"design result contains materialization-lane fields: {drift_fields}",
+        }
+        return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
     selected_experiment["design"] = design_result
     state["proposal_cycle"]["current_pool_frozen"] = True

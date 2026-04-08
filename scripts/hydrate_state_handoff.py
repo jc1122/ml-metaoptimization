@@ -302,7 +302,7 @@ def build_handoff(
         resume_mode = "fresh"
         outcome = "initialized"
 
-    if runtime_capabilities["blocking_skill"]:
+    if runtime_capabilities["blocking_skill"] and outcome != "terminal":
         state = _blocked_state(
             load_handoff,
             runtime_capabilities,

@@ -4,6 +4,25 @@ from __future__ import annotations
 from typing import Any
 
 
+# --- Semantic-lane fields that indicate worker lane drift ---
+# If a worker result contains fields from a different lane, the control agent
+# must reject or block rather than propagating cross-lane contamination.
+LANE_DRIFT_FIELDS: dict[str, frozenset[str]] = {
+    "ideation": frozenset({
+        "patch_artifacts",
+        "apply_results",
+        "code_patch",
+        "code_patches",
+        "code_changes",
+        "fix_recommendations",
+    }),
+    "design": frozenset({
+        "patch_artifacts",
+        "apply_results",
+    }),
+}
+
+
 # --- Allowed slot modes per slot class ---
 ALLOWED_SLOT_MODES: dict[str, frozenset[str]] = {
     "background": frozenset({"ideation", "maintenance"}),
@@ -132,3 +151,12 @@ def validate_executor_policy(
             )
 
     return directives
+
+
+def check_lane_drift(lane: str, result: dict[str, Any]) -> list[str]:
+    """Return sorted list of forbidden fields found in *result* for *lane*.
+
+    An empty list means no drift was detected.
+    """
+    forbidden = LANE_DRIFT_FIELDS.get(lane, frozenset())
+    return sorted(forbidden & result.keys())

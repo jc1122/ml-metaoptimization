@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _guardrail_utils import check_lane_drift
 from _handoff_utils import emit_handoff, read_json, timestamp, write_json
 
 _CONTROL_AGENT = "metaopt-background-control"
@@ -229,6 +230,39 @@ def _gate_background_work(
         slot["status"] = "completed"
 
         if slot["mode"] == "ideation" and result.get("status") == "completed":
+            drift_fields = check_lane_drift("ideation", result)
+            if drift_fields:
+                state["status"] = "BLOCKED_PROTOCOL"
+                state["machine_state"] = "BLOCKED_PROTOCOL"
+                state["next_action"] = (
+                    "protocol violation: ideation result contains semantic-lane "
+                    f"fields {drift_fields}; manual intervention required"
+                )
+                write_json(state_path, state)
+                payload = {
+                    "schema_version": 1,
+                    "producer": _CONTROL_AGENT,
+                    "phase": "GATE_BACKGROUND_WORK",
+                    "pool_status": "blocked",
+                    "recommended_next_machine_state": "BLOCKED_PROTOCOL",
+                    "current_proposal_count": len(state["current_proposals"]),
+                    "next_proposal_count": len(state["next_proposals"]),
+                    "shortfall_reason": "",
+                    "processed_slots": processed_slots,
+                    "summary": (
+                        f"ideation result from {slot_id} leaked semantic-lane "
+                        f"fields: {drift_fields}"
+                    ),
+                    "warnings": [
+                        f"lane drift detected in {slot_id}: {drift_fields}"
+                    ],
+                }
+                return emit_handoff(
+                    output_path,
+                    payload,
+                    handoff_type="GATE_BACKGROUND_WORK",
+                    control_agent=_CONTROL_AGENT,
+                )
             candidates = result.get("proposal_candidates", [])
             for candidate in candidates:
                 sequence += 1

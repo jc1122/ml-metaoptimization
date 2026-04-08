@@ -312,6 +312,71 @@ class BackgroundControlAgentTests(unittest.TestCase):
             self.assertIn("summary", payload)
             self.assertIn("warnings", payload)
 
+    def test_plan_launch_request_has_legal_slot_class_mode_and_preferred_model(self) -> None:
+        """Background launch requests must carry legal slot_class, mode, and preferred_model."""
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            payload, _, _ = self._run(
+                Path(tempdir_str),
+                mode="plan_background_work",
+                state=self._base_state(),
+            )
+
+            self.assertGreater(len(payload["launch_requests"]), 0)
+            for lr in payload["launch_requests"]:
+                self.assertEqual(lr["slot_class"], "background")
+                self.assertIn(lr["mode"], {"ideation", "maintenance"})
+                self.assertIn("preferred_model", lr)
+                self.assertIsInstance(lr["preferred_model"], str)
+                self.assertTrue(lr["preferred_model"])
+                # Legal worker tuple
+                self.assertIn("worker_kind", lr)
+                self.assertIn("worker_ref", lr)
+
+    def test_gate_returns_blocked_protocol_when_ideation_result_leaks_lane_fields(self) -> None:
+        """If ideation output contains semantic-lane fields, gate must fail closed with BLOCKED_PROTOCOL."""
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            state = self._base_state()
+            state["active_slots"] = [
+                {
+                    "slot_id": "bg-1",
+                    "slot_class": "background",
+                    "mode": "ideation",
+                    "model_class": "general_worker",
+                    "requested_model": "Auto",
+                    "resolved_model": "Auto",
+                    "status": "running",
+                    "attempt": 1,
+                    "task_summary": "Generate proposals",
+                }
+            ]
+            # Ideation result that has leaked materialization-lane fields
+            leaked_result = {
+                "slot_id": "bg-1",
+                "mode": "ideation",
+                "status": "completed",
+                "summary": "drifted into materialization",
+                "proposal_candidates": [
+                    {"title": "Something", "rationale": "Something"},
+                ],
+                "code_changes": [{"path": "src/foo.py", "intent": "fix bug"}],
+                "patch_artifacts": [{"file": "src/foo.py", "diff": "--- a\n+++ b"}],
+            }
+            payload, updated_state, _ = self._run(
+                Path(tempdir_str),
+                mode="gate_background_work",
+                state=state,
+                slot_events={
+                    "bg-1": {"slot_id": "bg-1", "status": "completed", "result_file": "bg-1.json"},
+                },
+                worker_results={"bg-1": leaked_result},
+            )
+
+            self.assertEqual(payload["recommended_next_machine_state"], "BLOCKED_PROTOCOL")
+            self.assertEqual(updated_state["status"], "BLOCKED_PROTOCOL")
+            self.assertEqual(updated_state["machine_state"], "BLOCKED_PROTOCOL")
+            # Proposals must NOT have been enriched
+            self.assertEqual(len(updated_state["current_proposals"]), 0)
+
     def test_agent_profile_exists_and_declares_both_modes(self) -> None:
         self.assertTrue(AGENT_PROFILE.exists(), f"missing {AGENT_PROFILE}")
         content = AGENT_PROFILE.read_text(encoding="utf-8")

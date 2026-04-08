@@ -524,6 +524,95 @@ class SelectDesignAgentTests(unittest.TestCase):
             self._assert_envelope_keys(payload, handoff_type="SELECT_DESIGN")
             self.assertEqual(payload["outcome"], "runtime_error")
 
+    def test_plan_select_launch_request_includes_preferred_model_for_strong_reasoner(self) -> None:
+        """Selection launch request must carry preferred_model == 'claude-opus-4.6-fast'."""
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            payload, _, _, _ = self._run(
+                Path(tempdir_str),
+                mode="plan_select_experiment",
+                state=self._base_state(),
+            )
+
+            self.assertEqual(payload["outcome"], "planned")
+            self.assertGreater(len(payload["launch_requests"]), 0)
+            sel_lr = payload["launch_requests"][0]
+            self.assertEqual(sel_lr["slot_class"], "auxiliary")
+            self.assertEqual(sel_lr["mode"], "selection")
+            self.assertEqual(sel_lr["worker_ref"], "metaopt-selection-worker")
+            self.assertEqual(sel_lr["model_class"], "strong_reasoner")
+            self.assertEqual(sel_lr["preferred_model"], "claude-opus-4.6-fast")
+
+    def test_gate_select_design_launch_request_includes_preferred_model_for_strong_reasoner(self) -> None:
+        """Design launch request must carry preferred_model == 'claude-opus-4.6-fast'."""
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            tempdir = Path(tempdir_str)
+            initial_state = self._base_state()
+            self._run(tempdir, mode="plan_select_experiment", state=initial_state)
+            selection_result = {
+                "winning_proposal": initial_state["current_proposals"][0],
+                "ranking_rationale": "Best fit.",
+            }
+            result_path = tempdir / ".ml-metaopt" / "worker-results" / "select-experiment-iter-1.json"
+            result_path.parent.mkdir(parents=True, exist_ok=True)
+            result_path.write_text(json.dumps(selection_result), encoding="utf-8")
+            payload, _, _, _ = self._run(
+                tempdir,
+                mode="gate_select_and_plan_design",
+                state=json.loads((tempdir / ".ml-metaopt" / "state.json").read_text(encoding="utf-8")),
+            )
+
+            self.assertEqual(payload["outcome"], "selection_complete")
+            self.assertGreater(len(payload["launch_requests"]), 0)
+            design_lr = payload["launch_requests"][0]
+            self.assertEqual(design_lr["slot_class"], "auxiliary")
+            self.assertEqual(design_lr["mode"], "design")
+            self.assertEqual(design_lr["worker_ref"], "metaopt-design-worker")
+            self.assertEqual(design_lr["model_class"], "strong_reasoner")
+            self.assertEqual(design_lr["preferred_model"], "claude-opus-4.6-fast")
+
+    def test_finalize_rejects_design_with_materialization_lane_fields(self) -> None:
+        """Design result containing patch_artifacts or apply_results must be rejected."""
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            tempdir = Path(tempdir_str)
+            state = self._base_state()
+            self._run(tempdir, mode="plan_select_experiment", state=state)
+            selection_result = {
+                "winning_proposal": state["current_proposals"][0],
+                "ranking_rationale": "Validation work is the highest-confidence improvement path.",
+            }
+            selection_path = tempdir / ".ml-metaopt" / "worker-results" / "select-experiment-iter-1.json"
+            selection_path.parent.mkdir(parents=True, exist_ok=True)
+            selection_path.write_text(json.dumps(selection_result), encoding="utf-8")
+            self._run(
+                tempdir,
+                mode="gate_select_and_plan_design",
+                state=json.loads((tempdir / ".ml-metaopt" / "state.json").read_text(encoding="utf-8")),
+            )
+            # Design result that has crossed into materialization semantics
+            bad_design_result = {
+                "proposal_id": "market-forecast-v3-p1",
+                "experiment_name": "tighten-rolling-validation-v1",
+                "description": "Tighten validation windows.",
+                "code_changes": [{"path": "src/train.py", "intent": "strengthen validation"}],
+                "patch_artifacts": [{"file": "src/train.py", "diff": "--- a\n+++ b"}],
+                "apply_results": [{"status": "applied", "file": "src/train.py"}],
+            }
+            design_path = tempdir / ".ml-metaopt" / "worker-results" / "design-experiment-iter-1.json"
+            design_path.write_text(json.dumps(bad_design_result), encoding="utf-8")
+
+            payload, state_path, _, _ = self._run(
+                tempdir,
+                mode="finalize_select_design",
+                state=json.loads((tempdir / ".ml-metaopt" / "state.json").read_text(encoding="utf-8")),
+            )
+
+            self.assertEqual(payload["outcome"], "runtime_error")
+            self.assertIn("materialization", payload["summary"])
+            # Design must NOT have been accepted
+            state_after = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertIsNone(state_after["selected_experiment"]["design"])
+            self.assertEqual(state_after["machine_state"], "DESIGN_EXPERIMENT")
+
     def test_agent_profiles_exist_and_are_programmatic_only(self) -> None:
         for profile in (CONTROL_AGENT, SELECTION_AGENT, DESIGN_AGENT):
             self.assertTrue(profile.exists(), f"missing {profile}")

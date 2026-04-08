@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from _handoff_utils import emit_handoff, read_json, write_json
+from _guardrail_utils import check_lane_drift
 
 _HANDOFF_TYPE = "SELECT_DESIGN"
 _CONTROL_AGENT = "metaopt-select-design"
@@ -267,6 +268,17 @@ def _plan_select_experiment(
         "recommended_next_action": "launch selection worker",
         "selection_rationale": None,
         "design_summary": None,
+        "launch_requests": [
+            {
+                "slot_class": "auxiliary",
+                "mode": "selection",
+                "worker_kind": "custom_agent",
+                "worker_ref": "metaopt-selection-worker",
+                "model_class": "strong_reasoner",
+                "task_file": task_file,
+                "result_file": result_file,
+            },
+        ],
         "warnings": [],
         "summary": "selection worker is ready to choose one proposal from the frozen pool",
     }
@@ -361,6 +373,17 @@ def _gate_select_and_plan_design(
         "recommended_next_action": "launch design worker",
         "selection_rationale": selection_rationale,
         "design_summary": None,
+        "launch_requests": [
+            {
+                "slot_class": "auxiliary",
+                "mode": "design",
+                "worker_kind": "custom_agent",
+                "worker_ref": "metaopt-design-worker",
+                "model_class": "strong_reasoner",
+                "task_file": task_file,
+                "result_file": result_file,
+            },
+        ],
         "warnings": [],
         "summary": "selection result validated and design worker is ready",
     }
@@ -414,6 +437,16 @@ def _finalize_select_design(state_path: Path, worker_results_dir: Path, output_p
             "FINALIZE_SELECT_DESIGN",
             "repair design worker result and re-run finalization",
             "design result proposal_id does not match selected_experiment",
+            proposal_id=proposal_id,
+        )
+
+    drift_fields = check_lane_drift("design", design_result)
+    if drift_fields:
+        return _runtime_error(
+            output_path,
+            "FINALIZE_SELECT_DESIGN",
+            "remove materialization fields from design result and re-run finalization",
+            f"design result contains materialization-lane fields: {drift_fields}",
             proposal_id=proposal_id,
         )
 

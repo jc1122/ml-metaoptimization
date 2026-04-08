@@ -1501,6 +1501,44 @@ class MetaoptValidationTests(unittest.TestCase):
         _require_pattern(self, backend, r"[Nn]o raw SSH|[Nn]ever.*raw.*SSH")
         _require_pattern(self, backend, r"[Pp]rotocol breach|[Vv]iolation")
 
+    def test_backend_contract_blocks_direct_fallback_tools_by_name(self) -> None:
+        """backend-contract.md should explicitly name the ad-hoc tools that
+        must never be used as remote-execution fallbacks."""
+        backend = _read_text("references/backend-contract.md")
+        _require_pattern(self, backend, r"ray job submit|ray start|ray stop")
+        _require_pattern(self, backend, r"scp|rsync")
+        _require_pattern(self, backend, r"hcloud")
+
+    def test_control_protocol_forbids_hand_authored_semantic_state_edits(self) -> None:
+        """control-protocol.md must say the orchestrator never hand-edits
+        semantic state and only applies control-agent state patches plus the
+        recommended machine_state transition."""
+        protocol = _read_text("references/control-protocol.md")
+        _require_pattern(self, protocol, r"never hand.edit|must not hand.edit|manual state")
+        _require_pattern(self, protocol, r"state_patch")
+        _require_pattern(self, protocol, r"recommended_next_machine_state")
+
+    def test_skill_md_forbids_direct_project_file_edits_by_orchestrator(self) -> None:
+        """SKILL.md must make direct repo edits by the orchestrator a protocol
+        breach rather than an acceptable shortcut around worker lanes."""
+        skill = _read_text("SKILL.md")
+        _require_pattern(self, skill, r"must not.*edit.*project files|never.*edit.*project files")
+        _require_pattern(self, skill, r"materialization-worker|semantic code changes")
+
+    def test_remote_control_manifest_forbids_raw_remote_fallbacks(self) -> None:
+        """The remote control-agent manifest should explicitly forbid Ray CLI,
+        SSH/SCP, and cloud-console fallbacks when queue execution has trouble."""
+        manifest = _read_text(".github/agents/metaopt-remote-execution-control.agent.md")
+        _require_pattern(self, manifest, r"must not.*ray|never.*ray")
+        _require_pattern(self, manifest, r"ssh|scp|hcloud")
+
+    def test_iteration_close_manifest_forbids_manual_state_closure(self) -> None:
+        """The iteration-close control-agent manifest should explicitly forbid
+        hand-authored rollover/terminal state edits by the orchestrator."""
+        manifest = _read_text(".github/agents/metaopt-iteration-close-control.agent.md")
+        _require_pattern(self, manifest, r"must not.*hand.edit|never.*hand.edit|manual state")
+        _require_pattern(self, manifest, r"selected_experiment|COMPLETE|BLOCKED_PROTOCOL")
+
     def test_blocked_protocol_in_dispatch_guide(self) -> None:
         """dispatch-guide.md must reference BLOCKED_PROTOCOL for missing
         artifact preconditions."""

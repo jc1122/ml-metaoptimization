@@ -6,6 +6,8 @@ The orchestrator interacts with remote execution **only** through this queue-bas
 
 **Queue-only rule:** The skill must never execute raw SSH commands, Ray cluster operations, `kubectl exec`, or any direct cluster interaction. All remote execution flows through the three declared queue commands below. Any attempt to bypass this contract — whether by a control agent emitting raw-cluster executor directives or by the orchestrator constructing ad-hoc remote commands — is a protocol breach and must be rejected. If a control agent emits an executor directive with a blocked action (e.g. `ssh_command`, `raw_ssh`, `shell_exec`, `kubectl_exec`), the guardrail validators reject it before execution. No raw SSH, Ray CLI, or direct cluster probing is permitted from within this skill.
 
+Forbidden fallback examples include `ray job submit`, `ray start`, `ray stop`, `scp`, `rsync`, and cloud-console or cloud-CLI lifecycle detours such as `hcloud`. If the queue backend cannot represent the needed next step, the orchestrator must fail closed to `BLOCKED_PROTOCOL` or route through the diagnosis lane; it must never invent a direct-per-node execution path.
+
 ## Required Backend Commands
 
 Declared in `ml_metaopt_campaign.yaml` under `remote_queue`:

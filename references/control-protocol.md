@@ -90,6 +90,8 @@ Each entry in `launch_requests` specifies:
 
 When a control agent encounters unsupported semantic work, lane drift, missing worker artifacts, or any protocol violation it cannot resolve, it must fail closed to `BLOCKED_PROTOCOL` rather than improvising or allowing the orchestrator to attempt generic semantic fallback. The orchestrator is mechanical — it has no ability to perform semantic work — so any attempt to work around a protocol gap would produce undefined behavior.
 
+The orchestrator must never hand-edit semantic state. It only applies control-agent `state_patch` updates, executes `executor_directives`, and sets `machine_state` from `recommended_next_machine_state`. Manual state edits to fields such as `baseline`, `selected_experiment`, `completed_experiments`, `key_learnings`, `status`, or `next_action` are protocol violations, even when they appear equivalent to the intended outcome.
+
 Control agents that may emit `BLOCKED_PROTOCOL`:
 - `metaopt-hydrate-state`: prior state has an unrecoverable protocol violation
 - `metaopt-background-control`: ideation result contains semantic-lane fields (lane drift)

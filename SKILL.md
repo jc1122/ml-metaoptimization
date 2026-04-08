@@ -66,6 +66,7 @@ If `AGENTS.md` does not exist on first run, create it before appending the marke
 
 - never ask the user for campaign-defining inputs
 - never let the orchestrator perform semantic coding directly
+- the orchestrator must not edit project files directly; it may only apply worker-produced patches mechanically or write protocol-owned artifacts/manifests/state files
 - generic semantic fallback is forbidden: if the orchestrator encounters unsupported semantic work, it must never improvise; instead it fails closed to `BLOCKED_PROTOCOL` with recovery guidance
 - refill an empty background slot before launching lower-priority work
 - use the queue backend contract instead of raw cluster operations

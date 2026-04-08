@@ -59,6 +59,49 @@ def _runtime_error(output_path: Path, phase: str | None, action: str, summary: s
     return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
 
+def _blocked_protocol(
+    output_path: Path,
+    state_path: Path,
+    state: dict[str, Any],
+    *,
+    phase: str,
+    summary: str,
+    warnings: list[str],
+    next_action: str,
+) -> dict[str, Any]:
+    state["status"] = "BLOCKED_PROTOCOL"
+    state["machine_state"] = "BLOCKED_PROTOCOL"
+    state["next_action"] = next_action
+    _write_json(state_path, state)
+
+    payload = {
+        "schema_version": 1,
+        "producer": _CONTROL_AGENT,
+        "phase": phase,
+        "outcome": "blocked_protocol",
+        "worker_kind": None,
+        "worker_ref": None,
+        "task_file": None,
+        "result_file": None,
+        "continue_campaign": False,
+        "stop_reason": "protocol_violation",
+        "recommended_executor_phase": None,
+        "recommended_next_machine_state": "BLOCKED_PROTOCOL",
+        "recommended_next_action": next_action,
+        "iteration_report": state.get("last_iteration_report"),
+        "executor_directives": [
+            {
+                "action": "remove_agents_hook",
+                "reason": "protocol blocked; orchestration hook no longer needed",
+                "agents_path": "AGENTS.md",
+            }
+        ],
+        "warnings": warnings,
+        "summary": summary,
+    }
+    return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
+
+
 def _load_inputs(load_handoff_path: Path, state_path: Path) -> tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None]:
     try:
         load_handoff = _read_json(load_handoff_path)
@@ -74,6 +117,100 @@ def _load_inputs(load_handoff_path: Path, state_path: Path) -> tuple[dict[str, A
     if not isinstance(state, dict):
         return load_handoff, None, {"action": "repair or replace .ml-metaopt/state.json", "summary": "state invalid", "warnings": []}
     return load_handoff, state, None
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _validate_rollover_result(payload: Any) -> list[str]:
+    warnings: list[str] = []
+    if not isinstance(payload, dict):
+        return ["rollover worker result must be a JSON object"]
+
+    required = ("filtered_proposals", "merged_proposals", "needs_fresh_ideation", "summary")
+    for key in required:
+        if key not in payload:
+            warnings.append(f"missing field: {key}")
+
+    filtered = payload.get("filtered_proposals")
+    if "filtered_proposals" in payload and not isinstance(filtered, list):
+        warnings.append("filtered_proposals must be a list")
+    elif isinstance(filtered, list):
+        for index, proposal in enumerate(filtered):
+            if not isinstance(proposal, dict):
+                warnings.append(f"filtered_proposals[{index}] must be an object")
+                continue
+            for field in ("proposal_id", "source_slot_id", "creation_iteration", "created_at", "title", "rationale", "expected_impact", "target_area"):
+                if field not in proposal:
+                    warnings.append(f"filtered_proposals[{index}] missing field: {field}")
+
+    merged = payload.get("merged_proposals")
+    if "merged_proposals" in payload and not isinstance(merged, list):
+        warnings.append("merged_proposals must be a list")
+    elif isinstance(merged, list):
+        for index, proposal in enumerate(merged):
+            if not isinstance(proposal, dict):
+                warnings.append(f"merged_proposals[{index}] must be an object")
+                continue
+            for field in ("title", "rationale", "expected_impact", "target_area"):
+                if field not in proposal:
+                    warnings.append(f"merged_proposals[{index}] missing field: {field}")
+
+    needs_fresh_ideation = payload.get("needs_fresh_ideation")
+    if "needs_fresh_ideation" in payload and not isinstance(needs_fresh_ideation, bool):
+        warnings.append("needs_fresh_ideation must be a boolean")
+
+    summary = payload.get("summary")
+    if "summary" in payload and not isinstance(summary, dict):
+        warnings.append("summary must be an object")
+    elif isinstance(summary, dict):
+        for field in ("carried_over", "discarded", "merged", "final_pool_size"):
+            if field not in summary:
+                warnings.append(f"summary missing field: {field}")
+            elif not _is_number(summary[field]):
+                warnings.append(f"summary.{field} must be numeric")
+
+    return warnings
+
+
+def _validate_quiesce_event(payload: Any) -> list[str]:
+    warnings: list[str] = []
+    if not isinstance(payload, dict):
+        return ["quiesce executor event must be a JSON object"]
+
+    for field in ("finished_slots", "canceled_slots", "drain_duration_seconds", "maintenance_apply_results", "summary"):
+        if field not in payload:
+            warnings.append(f"missing field: {field}")
+
+    if "finished_slots" in payload and not isinstance(payload.get("finished_slots"), list):
+        warnings.append("finished_slots must be a list")
+    if "canceled_slots" in payload and not isinstance(payload.get("canceled_slots"), list):
+        warnings.append("canceled_slots must be a list")
+    if "maintenance_apply_results" in payload and not isinstance(payload.get("maintenance_apply_results"), list):
+        warnings.append("maintenance_apply_results must be a list")
+    if "drain_duration_seconds" in payload and not _is_number(payload.get("drain_duration_seconds")):
+        warnings.append("drain_duration_seconds must be numeric")
+    if "summary" in payload and (not isinstance(payload.get("summary"), str) or not payload["summary"]):
+        warnings.append("summary must be a non-empty string")
+
+    continue_campaign = payload.get("continue_campaign")
+    blocked_protocol = payload.get("blocked_protocol", False)
+    if continue_campaign is not None and not isinstance(continue_campaign, bool):
+        warnings.append("continue_campaign must be a boolean when present")
+    if "blocked_protocol" in payload and not isinstance(blocked_protocol, bool):
+        warnings.append("blocked_protocol must be a boolean when present")
+
+    if continue_campaign is None and "blocked_protocol" not in payload:
+        warnings.append("quiesce event must explicitly choose continue_campaign or blocked_protocol")
+    if continue_campaign is True and blocked_protocol:
+        warnings.append("quiesce event cannot set both continue_campaign and blocked_protocol")
+    if continue_campaign is False and not blocked_protocol:
+        stop_reason = payload.get("stop_reason")
+        if not isinstance(stop_reason, str) or not stop_reason:
+            warnings.append("stop_reason must be a non-empty string when stopping")
+
+    return warnings
 
 
 def _proposal_sequence(state: dict[str, Any]) -> int:
@@ -233,6 +370,17 @@ def _gate_roll_iteration(load_handoff: dict[str, Any], state_path: Path, worker_
         return _runtime_error(output_path, "GATE_ROLL_ITERATION", "stage rollover worker output before gating", "rollover worker result missing")
 
     rollover_result = _read_json(result_path)
+    rollover_warnings = _validate_rollover_result(rollover_result)
+    if rollover_warnings:
+        return _blocked_protocol(
+            output_path,
+            state_path,
+            state,
+            phase="GATE_ROLL_ITERATION",
+            summary="rollover worker output violates the iteration-close contract shape",
+            warnings=rollover_warnings,
+            next_action="repair rollover worker output and resume from the preserved state",
+        )
     filtered = rollover_result.get("filtered_proposals", [])
     merged = rollover_result.get("merged_proposals", [])
 
@@ -327,6 +475,17 @@ def _quiesce_slots(state_path: Path, executor_events_dir: Path, output_path: Pat
     if not event_path.exists():
         return _runtime_error(output_path, "QUIESCE_SLOTS", "stage quiesce executor output before gating", "quiesce event missing")
     event = _read_json(event_path)
+    event_warnings = _validate_quiesce_event(event)
+    if event_warnings:
+        return _blocked_protocol(
+            output_path,
+            state_path,
+            state,
+            phase="QUIESCE_SLOTS",
+            summary="quiesce executor output violates the iteration-close contract shape",
+            warnings=event_warnings,
+            next_action="repair quiesce executor output and resume from the preserved state",
+        )
 
     if state.get("local_changeset") is not None:
         state["local_changeset"]["apply_results"].extend(event.get("maintenance_apply_results", []))

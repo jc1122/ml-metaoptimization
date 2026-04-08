@@ -965,7 +965,7 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
                             }
                         ],
                         "needs_fresh_ideation": False,
-                        "summary": "target metric already met; no carry-over needed for continuation",
+                        "summary": {"carried_over": 0, "discarded": 0, "merged": 1, "final_pool_size": 1},
                     }
                 ),
                 encoding="utf-8",

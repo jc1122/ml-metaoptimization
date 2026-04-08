@@ -596,6 +596,69 @@ class IterationCloseControlAgentTests(unittest.TestCase):
             self.assertEqual(payload["launch_requests"], [],
                 "runtime_error must not spawn workers")
 
+    def test_regression_malformed_rollover_result_blocks_protocol(self) -> None:
+        """Drift temptation: accept a half-written rollover payload and keep
+        going. The control agent must fail closed instead of treating missing
+        contract fields as empty defaults."""
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            state = self._base_state()
+            original_iteration = state["current_iteration"]
+            original_selected = state["selected_experiment"]["proposal_id"]
+            original_pool = list(state["next_proposals"])
+
+            payload, updated_state, _ = self._run(
+                Path(tempdir_str),
+                mode="gate_roll_iteration",
+                state=state,
+                worker_results={
+                    "rollover-iter-3": {
+                        "filtered_proposals": [],
+                        # missing merged_proposals + needs_fresh_ideation
+                        "summary": {"carried_over": 0, "discarded": 0, "merged": 0, "final_pool_size": 0},
+                    }
+                },
+            )
+
+            self.assertEqual(payload["outcome"], "blocked_protocol")
+            self.assertEqual(payload["recommended_next_machine_state"], "BLOCKED_PROTOCOL")
+            self.assertEqual(updated_state["status"], "BLOCKED_PROTOCOL")
+            self.assertEqual(updated_state["machine_state"], "BLOCKED_PROTOCOL")
+            self.assertEqual(updated_state["current_iteration"], original_iteration)
+            self.assertEqual(updated_state["selected_experiment"]["proposal_id"], original_selected)
+            self.assertEqual(updated_state["next_proposals"], original_pool)
+            self.assertEqual(payload["launch_requests"], [])
+
+    def test_regression_quiesce_requires_explicit_routing_event(self) -> None:
+        """Drift temptation: interpret an underspecified quiesce event as a
+        clean stop. The control agent must block rather than invent continue vs
+        complete semantics from missing fields."""
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            state = self._base_state()
+            state["machine_state"] = "QUIESCE_SLOTS"
+            state["selected_experiment"] = None
+            original_completed = list(state["completed_experiments"])
+            original_baseline = dict(state["baseline"])
+
+            payload, updated_state, _ = self._run(
+                Path(tempdir_str),
+                mode="quiesce_slots",
+                state=state,
+                executor_events={
+                    "quiesce-slots-iter-3": {
+                        # missing continue_campaign/blocked_protocol and drain metadata
+                        "summary": "executor wrote an incomplete quiesce event",
+                    }
+                },
+            )
+
+            self.assertEqual(payload["outcome"], "blocked_protocol")
+            self.assertEqual(payload["recommended_next_machine_state"], "BLOCKED_PROTOCOL")
+            self.assertEqual(updated_state["status"], "BLOCKED_PROTOCOL")
+            self.assertEqual(updated_state["machine_state"], "BLOCKED_PROTOCOL")
+            self.assertEqual(updated_state["completed_experiments"], original_completed)
+            self.assertEqual(updated_state["baseline"], original_baseline)
+            self.assertEqual(payload["launch_requests"], [])
+
     def test_quiesce_continue_has_no_terminal_cleanup_directives(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir_str:
             state = self._base_state()

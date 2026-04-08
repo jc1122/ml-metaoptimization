@@ -45,6 +45,7 @@ ALLOWED_WORKERS: frozenset[str] = frozenset({
 PREFERRED_MODEL_BY_CLASS: dict[str, str] = {
     "general_worker": "claude-sonnet-4",
     "strong_reasoner": "claude-opus-4.6-fast",
+    "strong_coder": "claude-opus-4.6-fast",
 }
 
 # --- Allowed executor directive actions ---

@@ -166,7 +166,9 @@ digraph machine {
     "WAIT_FOR_PROPOSAL_THRESHOLD" -> "MAINTAIN_BACKGROUND_POOL" [label="not enough proposals"];
     "WAIT_FOR_PROPOSAL_THRESHOLD" -> "SELECT_EXPERIMENT" [label="threshold met"];
     "SELECT_EXPERIMENT" -> "DESIGN_EXPERIMENT";
+    "SELECT_EXPERIMENT" -> "BLOCKED_PROTOCOL" [label="selection protocol breach"];
     "DESIGN_EXPERIMENT" -> "MATERIALIZE_CHANGESET";
+    "DESIGN_EXPERIMENT" -> "BLOCKED_PROTOCOL" [label="design protocol breach"];
     "MATERIALIZE_CHANGESET" -> "LOCAL_SANITY";
     "LOCAL_SANITY" -> "LOCAL_SANITY" [label="fix and rerun (max 3 attempts)"];
     "LOCAL_SANITY" -> "FAILED" [label="attempt cap reached"];
@@ -180,6 +182,7 @@ digraph machine {
     "ANALYZE_RESULTS" -> "BLOCKED_PROTOCOL" [label="missing analysis artifact"];
     "ANALYZE_RESULTS" -> "ROLL_ITERATION";
     "ROLL_ITERATION" -> "QUIESCE_SLOTS";
+    "ROLL_ITERATION" -> "BLOCKED_PROTOCOL" [label="rollover protocol breach"];
     "QUIESCE_SLOTS" -> "COMPLETE" [label="stop condition met"];
     "QUIESCE_SLOTS" -> "BLOCKED_PROTOCOL" [label="protocol cannot proceed"];
     "QUIESCE_SLOTS" -> "MAINTAIN_BACKGROUND_POOL" [label="reinvoke and resume"];

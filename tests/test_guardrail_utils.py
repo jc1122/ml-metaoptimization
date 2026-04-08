@@ -81,6 +81,18 @@ class NormalizeLaunchRequestsTests(unittest.TestCase):
         result = normalize_launch_requests([request])
         self.assertEqual(result[0]["preferred_model"], "claude-opus-4.6-fast")
 
+    def test_strong_coder_gets_preferred_model(self) -> None:
+        request = {
+            "slot_id": "mat-1",
+            "slot_class": "auxiliary",
+            "mode": "materialization",
+            "worker_kind": "custom_agent",
+            "worker_ref": "metaopt-materialization-worker",
+            "model_class": "strong_coder",
+        }
+        result = normalize_launch_requests([request])
+        self.assertEqual(result[0]["preferred_model"], "claude-opus-4.6-fast")
+
     def test_preferred_model_not_overwritten_when_present(self) -> None:
         request = {
             "slot_id": "bg-1",
@@ -180,8 +192,15 @@ class ConstantsSanityTests(unittest.TestCase):
     def test_preferred_model_strong_reasoner(self) -> None:
         self.assertEqual(PREFERRED_MODEL_BY_CLASS["strong_reasoner"], "claude-opus-4.6-fast")
 
+    def test_preferred_model_strong_coder(self) -> None:
+        self.assertEqual(PREFERRED_MODEL_BY_CLASS["strong_coder"], "claude-opus-4.6-fast")
+
     def test_preferred_model_general_worker(self) -> None:
         self.assertEqual(PREFERRED_MODEL_BY_CLASS["general_worker"], "claude-sonnet-4")
+
+    def test_all_model_classes_have_preferred_model(self) -> None:
+        expected_classes = {"general_worker", "strong_reasoner", "strong_coder"}
+        self.assertEqual(set(PREFERRED_MODEL_BY_CLASS.keys()), expected_classes)
 
     def test_background_modes_do_not_include_materialization(self) -> None:
         self.assertNotIn("materialization", ALLOWED_SLOT_MODES["background"])

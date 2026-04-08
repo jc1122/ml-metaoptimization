@@ -20,6 +20,7 @@ Used for rollover. The orchestrator launches the subagent synchronously during a
 
 Every `launch_requests` entry may include a `preferred_model` field — a deterministic model hint specifying which model the orchestrator should use for the launch. The guardrail utility `normalize_launch_requests()` adds `preferred_model` automatically when absent:
 - `strong_reasoner` → `claude-opus-4.6-fast`
+- `strong_coder` → `claude-opus-4.6-fast`
 - `general_worker` → `claude-sonnet-4`
 
 The `preferred_model` is a deterministic launch parameter, not an excuse for semantic fallback. If the preferred model is unavailable, the orchestrator uses the strongest available model in the same class and records the substitution in the slot metadata (`requested_model` vs `resolved_model`).

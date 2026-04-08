@@ -1428,6 +1428,19 @@ class MetaoptValidationTests(unittest.TestCase):
         _require_pattern(self, skill, r'"BLOCKED_PROTOCOL".*doublecircle')
         _require_pattern(self, skill, r'-> "BLOCKED_PROTOCOL"')
 
+    def test_blocked_protocol_select_design_edges_in_diagram(self) -> None:
+        """SKILL.md diagram must have BLOCKED_PROTOCOL edges from
+        SELECT_EXPERIMENT and DESIGN_EXPERIMENT for protocol breaches."""
+        skill = _read_text("SKILL.md")
+        _require_pattern(self, skill, r'"SELECT_EXPERIMENT" -> "BLOCKED_PROTOCOL"')
+        _require_pattern(self, skill, r'"DESIGN_EXPERIMENT" -> "BLOCKED_PROTOCOL"')
+
+    def test_blocked_protocol_roll_iteration_edge_in_diagram(self) -> None:
+        """SKILL.md diagram must have BLOCKED_PROTOCOL edge from
+        ROLL_ITERATION for iteration-close protocol breach."""
+        skill = _read_text("SKILL.md")
+        _require_pattern(self, skill, r'"ROLL_ITERATION" -> "BLOCKED_PROTOCOL"')
+
     def test_blocked_protocol_in_contracts_status_semantics(self) -> None:
         """contracts.md status semantics must pair BLOCKED_PROTOCOL status
         with BLOCKED_PROTOCOL machine_state."""
@@ -1456,11 +1469,21 @@ class MetaoptValidationTests(unittest.TestCase):
         guide = _read_text("references/dispatch-guide.md")
         self.assertIn("preferred_model", guide)
         self.assertIn("claude-opus-4.6-fast", guide)
+        _require_pattern(self, guide, r"strong_coder.*claude-opus-4\.6-fast|claude-opus-4\.6-fast.*strong_coder")
 
     def test_preferred_model_documented_in_control_protocol(self) -> None:
-        """control-protocol.md launch_requests must document preferred_model."""
+        """control-protocol.md launch_requests must document preferred_model
+        and mention strong_coder enrichment."""
         protocol = _read_text("references/control-protocol.md")
         self.assertIn("preferred_model", protocol)
+        self.assertIn("strong_coder", protocol)
+
+    def test_strong_coder_in_guardrail_preferred_model_map(self) -> None:
+        """_guardrail_utils.PREFERRED_MODEL_BY_CLASS must include strong_coder
+        so materialization launches are enriched correctly."""
+        from _guardrail_utils import PREFERRED_MODEL_BY_CLASS
+        self.assertIn("strong_coder", PREFERRED_MODEL_BY_CLASS)
+        self.assertEqual(PREFERRED_MODEL_BY_CLASS["strong_coder"], "claude-opus-4.6-fast")
 
     def test_worker_artifact_preconditions_in_worker_lanes(self) -> None:
         """worker-lanes.md must document that remediation requires

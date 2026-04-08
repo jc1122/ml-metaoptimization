@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from _guardrail_utils import normalize_launch_requests, validate_executor_policy
+
 
 def read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
@@ -57,9 +59,13 @@ def emit_handoff(
     payload.setdefault("handoff_type", handoff_type)
     payload.setdefault("control_agent", control_agent)
     payload.setdefault("launch_requests", [])
+    payload["launch_requests"] = normalize_launch_requests(payload["launch_requests"])
     payload.setdefault("state_patch", {})
     payload.setdefault("executor_directives", [])
     payload["executor_directives"] = normalize_directives(payload["executor_directives"])
+    payload["executor_directives"] = validate_executor_policy(
+        control_agent, payload.get("phase"), payload["executor_directives"]
+    )
     payload.setdefault("summary", "")
     payload.setdefault("warnings", [])
     write_json(output_path, payload)

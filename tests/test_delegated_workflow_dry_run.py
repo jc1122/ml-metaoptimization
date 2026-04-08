@@ -341,11 +341,11 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
             out = Path(td) / "h.json"
             payload = emit_handoff(
                 out,
-                {"executor_directives": [{"action": "a", "reason": "r"}]},
+                {"executor_directives": [{"action": "run_sanity", "reason": "r"}]},
                 handoff_type="TEST",
                 control_agent="test-agent",
             )
-            self.assertEqual(payload["executor_directives"], [{"action": "a", "reason": "r"}])
+            self.assertEqual(payload["executor_directives"], [{"action": "run_sanity", "reason": "r"}])
 
     def test_emit_handoff_defaults_to_empty_directives(self) -> None:
         from _handoff_utils import emit_handoff

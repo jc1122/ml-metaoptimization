@@ -527,6 +527,75 @@ class IterationCloseControlAgentTests(unittest.TestCase):
             self.assertNotIn("delete_state_file", directive_actions)
             self.assertNotIn("emit_final_report", directive_actions)
 
+    # ── drift regression: protocol gap blocks instead of inventing ────
+
+    def test_regression_quiesce_blocked_preserves_state_for_human_review(self) -> None:
+        """Drift temptation: on BLOCKED_PROTOCOL, the iteration close control
+        might clear state, delete artefacts, or invent a recovery lane.
+        The correct behaviour is to preserve state intact (except status/machine_state)
+        so a human can inspect and resume."""
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            state = self._base_state()
+            state["machine_state"] = "QUIESCE_SLOTS"
+            state["selected_experiment"] = None
+            original_baseline = dict(state["baseline"])
+            original_completed = list(state["completed_experiments"])
+            original_learnings = list(state["key_learnings"])
+
+            payload, updated_state, _ = self._run(
+                Path(tempdir_str),
+                mode="quiesce_slots",
+                state=state,
+                executor_events={
+                    "quiesce-slots-iter-3": {
+                        "continue_campaign": False,
+                        "blocked_protocol": True,
+                        "stop_reason": "protocol_violation",
+                        "finished_slots": [],
+                        "canceled_slots": [],
+                        "drain_duration_seconds": 5,
+                        "maintenance_apply_results": [],
+                        "summary": "protocol cannot represent next step",
+                    }
+                },
+            )
+
+            self.assertEqual(updated_state["status"], "BLOCKED_PROTOCOL")
+            self.assertEqual(updated_state["machine_state"], "BLOCKED_PROTOCOL")
+            # Campaign progress must be preserved for human review
+            self.assertEqual(updated_state["baseline"], original_baseline,
+                "baseline must be preserved on BLOCKED_PROTOCOL")
+            self.assertEqual(updated_state["completed_experiments"], original_completed,
+                "completed_experiments must be preserved on BLOCKED_PROTOCOL")
+            self.assertEqual(updated_state["key_learnings"], original_learnings,
+                "key_learnings must be preserved on BLOCKED_PROTOCOL")
+            # No invented workers
+            self.assertEqual(payload["launch_requests"], [],
+                "BLOCKED_PROTOCOL must not launch recovery workers")
+
+    def test_regression_rollover_gap_blocks_not_invents_new_iteration(self) -> None:
+        """Drift temptation: gate_roll_iteration is called without a rollover
+        worker result.  The control agent must emit a runtime_error rather than
+        inventing a synthetic rollover or advancing the iteration counter."""
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            state = self._base_state()
+            original_iteration = state["current_iteration"]
+            # No rollover worker result provided
+            payload, updated_state, _ = self._run(
+                Path(tempdir_str),
+                mode="gate_roll_iteration",
+                state=state,
+            )
+
+            # Must be runtime_error — not a synthetic advance
+            self.assertEqual(payload["outcome"], "runtime_error")
+            # Iteration must NOT have been incremented
+            self.assertEqual(updated_state["current_iteration"], original_iteration,
+                "iteration must not advance without rollover worker output")
+            # No launch requests for invented workers
+            self.assertEqual(payload["launch_requests"], [],
+                "runtime_error must not spawn workers")
+
     def test_quiesce_continue_has_no_terminal_cleanup_directives(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir_str:
             state = self._base_state()

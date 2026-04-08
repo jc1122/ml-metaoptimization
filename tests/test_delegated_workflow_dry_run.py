@@ -1059,5 +1059,288 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
             self.assertEqual(final_state["completed_experiments"][-1]["batch_id"], batch_id)
 
 
+    # ── drift regression: end-to-end guardrail scenarios ────────────
+
+    def test_regression_workflow_blocks_on_protocol_gap_instead_of_inventing_lane(self) -> None:
+        """Drift temptation: when a phase has no valid next step, the workflow
+        must transition to BLOCKED_PROTOCOL rather than inventing a new lane,
+        mode, or worker dispatch that the protocol doesn't define.
+
+        Scenario: analyze_remote_results is called but no analysis worker
+        result file exists.  The correct behaviour is BLOCKED_PROTOCOL with
+        state preserved; the *wrong* behaviour would be to fall through to
+        ROLL_ITERATION or to invent an ad-hoc retry/code-build lane.
+        """
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            tempdir = Path(tempdir_str)
+            campaign_path = self._write_campaign(tempdir)
+            skills_manifest = self._write_skills_manifest(tempdir)
+            state_path = tempdir / ".ml-metaopt" / "state.json"
+            handoffs_dir = tempdir / ".ml-metaopt" / "handoffs"
+            tasks_dir = tempdir / ".ml-metaopt" / "tasks"
+            worker_results_dir = tempdir / ".ml-metaopt" / "worker-results"
+            executor_events_dir = tempdir / ".ml-metaopt" / "executor-events"
+            for d in (handoffs_dir, tasks_dir, worker_results_dir, executor_events_dir):
+                d.mkdir(parents=True, exist_ok=True)
+            self._write_preflight_artifact(tempdir, campaign_path)
+
+            # Bootstrap through load + hydrate
+            load_output = handoffs_dir / "load_campaign.latest.json"
+            self._run(
+                ["python3", str(LOAD_SCRIPT), "--campaign-path", str(campaign_path),
+                 "--state-path", str(state_path), "--output", str(load_output)],
+                load_output,
+            )
+            hydrate_output = handoffs_dir / "hydrate_state.latest.json"
+            agents_path = tempdir / "AGENTS.md"
+            self._run(
+                ["python3", str(HYDRATE_SCRIPT), "--load-handoff", str(load_output),
+                 "--state-path", str(state_path), "--agents-path", str(agents_path),
+                 "--skills-manifest", str(skills_manifest), "--output", str(hydrate_output)],
+                hydrate_output,
+            )
+
+            # Fast-forward state to ANALYZE_RESULTS with a completed remote batch
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            state["machine_state"] = "ANALYZE_RESULTS"
+            state["selected_experiment"] = {
+                "proposal_id": "market-forecast-v3-p1",
+                "proposal_snapshot": {"proposal_id": "market-forecast-v3-p1", "title": "Test"},
+                "selection_rationale": "best fit",
+                "sanity_attempts": 1,
+                "design": {"proposal_id": "market-forecast-v3-p1"},
+                "diagnosis_history": [],
+                "analysis_summary": None,
+            }
+            state["local_changeset"] = {
+                "integration_worktree": ".ml-metaopt/worktrees/iter-1",
+                "patch_artifacts": [], "apply_results": [], "verification_notes": [],
+                "code_artifact_uri": "code.tar.gz", "data_manifest_uri": "data.json",
+            }
+            state["remote_batches"] = [{"batch_id": "batch-20260407-0001", "queue_ref": "q-1", "status": "completed"}]
+            original_baseline = dict(state["baseline"])
+            state_path.write_text(json.dumps(state), encoding="utf-8")
+
+            # Provide raw remote results but deliberately omit analysis worker output
+            (executor_events_dir / "remote-results-batch-20260407-0001.json").write_text(
+                json.dumps({
+                    "batch_id": "batch-20260407-0001", "status": "completed",
+                    "per_dataset": {"ds_main": 0.1100, "ds_holdout": 0.1200},
+                }),
+                encoding="utf-8",
+            )
+
+            remote_output = handoffs_dir / "remote_execution.latest.json"
+            payload = self._run(
+                ["python3", str(REMOTE_SCRIPT), "--mode", "analyze_remote_results",
+                 "--load-handoff", str(load_output), "--state-path", str(state_path),
+                 "--tasks-dir", str(tasks_dir), "--worker-results-dir", str(worker_results_dir),
+                 "--executor-events-dir", str(executor_events_dir), "--output", str(remote_output)],
+                remote_output,
+            )
+
+            # Must block — not invent a new lane or fall through
+            self.assertEqual(payload["recommended_next_machine_state"], "BLOCKED_PROTOCOL")
+            final_state = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(final_state["status"], "BLOCKED_PROTOCOL")
+            self.assertEqual(final_state["machine_state"], "BLOCKED_PROTOCOL")
+            # Baseline must NOT have been mutated by the gap
+            self.assertEqual(final_state["baseline"]["aggregate"], original_baseline["aggregate"])
+            self.assertEqual(final_state["baseline"]["by_dataset"], original_baseline["by_dataset"])
+            # No launch_requests should have been emitted for invented workers
+            self.assertEqual(payload["launch_requests"], [])
+
+    def test_regression_remote_results_without_analysis_do_not_mutate_baseline(self) -> None:
+        """Drift temptation: the orchestrator sees favourable raw remote
+        results and updates the baseline numerically, skipping the analysis
+        worker's semantic judgment.
+
+        The correct behaviour is to block (BLOCKED_PROTOCOL) and leave the
+        baseline, completed_experiments, and no_improve_iterations unchanged.
+        """
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            tempdir = Path(tempdir_str)
+            campaign_path = self._write_campaign(tempdir)
+            skills_manifest = self._write_skills_manifest(tempdir)
+            state_path = tempdir / ".ml-metaopt" / "state.json"
+            handoffs_dir = tempdir / ".ml-metaopt" / "handoffs"
+            tasks_dir = tempdir / ".ml-metaopt" / "tasks"
+            worker_results_dir = tempdir / ".ml-metaopt" / "worker-results"
+            executor_events_dir = tempdir / ".ml-metaopt" / "executor-events"
+            for d in (handoffs_dir, tasks_dir, worker_results_dir, executor_events_dir):
+                d.mkdir(parents=True, exist_ok=True)
+            self._write_preflight_artifact(tempdir, campaign_path)
+
+            # Bootstrap
+            load_output = handoffs_dir / "load_campaign.latest.json"
+            self._run(
+                ["python3", str(LOAD_SCRIPT), "--campaign-path", str(campaign_path),
+                 "--state-path", str(state_path), "--output", str(load_output)],
+                load_output,
+            )
+            hydrate_output = handoffs_dir / "hydrate_state.latest.json"
+            agents_path = tempdir / "AGENTS.md"
+            self._run(
+                ["python3", str(HYDRATE_SCRIPT), "--load-handoff", str(load_output),
+                 "--state-path", str(state_path), "--agents-path", str(agents_path),
+                 "--skills-manifest", str(skills_manifest), "--output", str(hydrate_output)],
+                hydrate_output,
+            )
+
+            # Fast-forward state
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            state["machine_state"] = "ANALYZE_RESULTS"
+            state["selected_experiment"] = {
+                "proposal_id": "market-forecast-v3-p1",
+                "proposal_snapshot": {"proposal_id": "market-forecast-v3-p1", "title": "Test"},
+                "selection_rationale": "best fit", "sanity_attempts": 1,
+                "design": {"proposal_id": "market-forecast-v3-p1"},
+                "diagnosis_history": [], "analysis_summary": None,
+            }
+            state["local_changeset"] = {
+                "integration_worktree": ".ml-metaopt/worktrees/iter-1",
+                "patch_artifacts": [], "apply_results": [], "verification_notes": [],
+                "code_artifact_uri": "code.tar.gz", "data_manifest_uri": "data.json",
+            }
+            state["remote_batches"] = [{"batch_id": "batch-20260407-0001", "queue_ref": "q-1", "status": "completed"}]
+            original_baseline = dict(state["baseline"])
+            original_completed = list(state["completed_experiments"])
+            original_no_improve = state["no_improve_iterations"]
+            state_path.write_text(json.dumps(state), encoding="utf-8")
+
+            # Very favourable raw results — tempts the orchestrator to skip analysis
+            (executor_events_dir / "remote-results-batch-20260407-0001.json").write_text(
+                json.dumps({
+                    "batch_id": "batch-20260407-0001", "status": "completed",
+                    "best_aggregate_result": {"metric": "rmse", "value": 0.0500},
+                    "per_dataset": {"ds_main": 0.0480, "ds_holdout": 0.0550},
+                    "artifact_locations": {}, "logs_location": "s3://logs",
+                }),
+                encoding="utf-8",
+            )
+            # No analysis worker result file
+
+            remote_output = handoffs_dir / "remote_execution.latest.json"
+            self._run(
+                ["python3", str(REMOTE_SCRIPT), "--mode", "analyze_remote_results",
+                 "--load-handoff", str(load_output), "--state-path", str(state_path),
+                 "--tasks-dir", str(tasks_dir), "--worker-results-dir", str(worker_results_dir),
+                 "--executor-events-dir", str(executor_events_dir), "--output", str(remote_output)],
+                remote_output,
+            )
+
+            final_state = json.loads(state_path.read_text(encoding="utf-8"))
+            # Baseline must be untouched
+            self.assertEqual(final_state["baseline"]["aggregate"], original_baseline["aggregate"])
+            self.assertEqual(final_state["baseline"]["by_dataset"], original_baseline["by_dataset"])
+            # completed_experiments must be untouched
+            self.assertEqual(final_state["completed_experiments"], original_completed)
+            # no_improve_iterations must be untouched
+            self.assertEqual(final_state["no_improve_iterations"], original_no_improve)
+            # Machine state must be BLOCKED_PROTOCOL
+            self.assertEqual(final_state["machine_state"], "BLOCKED_PROTOCOL")
+
+    def test_regression_background_lane_never_emits_code_build_workers(self) -> None:
+        """Drift temptation: background ideation control decides to 'help'
+        by launching materialization or diagnosis workers.
+
+        The background lane must only ever launch ideation or maintenance
+        workers — never materialization, diagnosis, analysis, or any other
+        auxiliary-lane worker.
+        """
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            tempdir = Path(tempdir_str)
+            campaign_path = self._write_campaign(tempdir)
+            skills_manifest = self._write_skills_manifest(tempdir)
+            state_path = tempdir / ".ml-metaopt" / "state.json"
+            handoffs_dir = tempdir / ".ml-metaopt" / "handoffs"
+            tasks_dir = tempdir / ".ml-metaopt" / "tasks"
+            worker_results_dir = tempdir / ".ml-metaopt" / "worker-results"
+            slot_events_dir = tempdir / ".ml-metaopt" / "slot-events"
+            for d in (handoffs_dir, tasks_dir, worker_results_dir, slot_events_dir):
+                d.mkdir(parents=True, exist_ok=True)
+            self._write_preflight_artifact(tempdir, campaign_path)
+
+            # Bootstrap
+            load_output = handoffs_dir / "load_campaign.latest.json"
+            self._run(
+                ["python3", str(LOAD_SCRIPT), "--campaign-path", str(campaign_path),
+                 "--state-path", str(state_path), "--output", str(load_output)],
+                load_output,
+            )
+            hydrate_output = handoffs_dir / "hydrate_state.latest.json"
+            agents_path = tempdir / "AGENTS.md"
+            self._run(
+                ["python3", str(HYDRATE_SCRIPT), "--load-handoff", str(load_output),
+                 "--state-path", str(state_path), "--agents-path", str(agents_path),
+                 "--skills-manifest", str(skills_manifest), "--output", str(hydrate_output)],
+                hydrate_output,
+            )
+
+            # Plan background work — the only lane the background controller owns
+            bg_output = handoffs_dir / "plan_background_work.latest.json"
+            bg_plan = self._run(
+                ["python3", str(BACKGROUND_SCRIPT), "--mode", "plan_background_work",
+                 "--load-handoff", str(load_output), "--state-path", str(state_path),
+                 "--tasks-dir", str(tasks_dir), "--worker-results-dir", str(worker_results_dir),
+                 "--slot-events-dir", str(slot_events_dir), "--output", str(bg_output)],
+                bg_output,
+            )
+
+            # Verify background plan only emits ideation/maintenance, never code-build
+            forbidden_workers = {
+                "metaopt-materialization-worker", "metaopt-diagnosis-worker",
+                "metaopt-analysis-worker", "metaopt-selection-worker",
+                "metaopt-design-worker",
+            }
+            forbidden_modes = {
+                "materialization", "diagnosis", "analysis", "selection",
+                "design", "rollover",
+            }
+            for lr in bg_plan["launch_requests"]:
+                self.assertNotIn(
+                    lr.get("worker_ref"), forbidden_workers,
+                    f"background lane must not launch {lr.get('worker_ref')}")
+                self.assertNotIn(
+                    lr.get("mode"), forbidden_modes,
+                    f"background lane must not use mode {lr.get('mode')}")
+                self.assertEqual(lr["slot_class"], "background",
+                    "background lane must only emit background slot_class")
+                self.assertIn(lr["mode"], {"ideation", "maintenance"},
+                    f"background lane mode must be ideation or maintenance, got {lr['mode']}")
+
+            # Now gate with clean ideation results, verify same constraints
+            for req in bg_plan["launch_requests"]:
+                sid = req["slot_id"]
+                (slot_events_dir / f"{sid}.json").write_text(
+                    json.dumps({"slot_id": sid, "status": "completed", "result_file": f"{sid}.json"}),
+                    encoding="utf-8",
+                )
+                (worker_results_dir / f"{sid}.json").write_text(
+                    json.dumps({
+                        "slot_id": sid, "mode": "ideation", "status": "completed",
+                        "summary": "proposals",
+                        "proposal_candidates": [
+                            {"title": "Idea A", "rationale": "r", "expected_impact": {"direction": "improve", "magnitude": "small"}, "target_area": "features"},
+                        ],
+                    }),
+                    encoding="utf-8",
+                )
+
+            bg_gate_output = handoffs_dir / "gate_background_work.latest.json"
+            bg_gate = self._run(
+                ["python3", str(BACKGROUND_SCRIPT), "--mode", "gate_background_work",
+                 "--load-handoff", str(load_output), "--state-path", str(state_path),
+                 "--tasks-dir", str(tasks_dir), "--worker-results-dir", str(worker_results_dir),
+                 "--slot-events-dir", str(slot_events_dir), "--output", str(bg_gate_output)],
+                bg_gate_output,
+            )
+
+            # Gate must also never launch code-build workers
+            for lr in bg_gate.get("launch_requests", []):
+                self.assertNotIn(lr.get("worker_ref"), forbidden_workers)
+                self.assertNotIn(lr.get("mode"), forbidden_modes)
+
+
 if __name__ == "__main__":
     unittest.main()

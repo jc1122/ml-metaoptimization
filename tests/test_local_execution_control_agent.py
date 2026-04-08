@@ -655,6 +655,43 @@ class LocalExecutionControlAgentTests(unittest.TestCase):
             self.assertEqual(updated_state["status"], "BLOCKED_PROTOCOL")
             self.assertEqual(updated_state["machine_state"], "BLOCKED_PROTOCOL")
 
+    # ── drift regression: protocol gap blocks rather than inventing ───
+
+    def test_regression_protocol_gap_blocks_not_invents_fallback_lane(self) -> None:
+        """Drift temptation: the local execution control hits a missing
+        diagnosis artifact and instead of blocking, invents a fallback code-fix
+        lane or auto-retry.  The correct behaviour is BLOCKED_PROTOCOL with no
+        launch_requests and no executor_directives."""
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            state = self._base_state()
+            state["selected_experiment"]["sanity_attempts"] = 1
+            state["selected_experiment"]["diagnosis_history"] = [
+                {
+                    "attempt": 1, "root_cause": "guard missing",
+                    "classification": "code_error", "action": "fix",
+                    "code_guidance": "Add guard", "config_guidance": None,
+                    "diagnosed_at": "2026-04-06T00:10:00Z",
+                }
+            ]
+            original_state_json = json.dumps(state, sort_keys=True)
+
+            payload, updated_state, _ = self._run(
+                Path(tempdir_str),
+                mode="plan_local_changeset",
+                state=state,
+            )
+
+            self.assertEqual(payload["recommended_next_machine_state"], "BLOCKED_PROTOCOL")
+            # Must not emit any launch requests for invented workers
+            self.assertEqual(payload["launch_requests"], [],
+                "protocol gap must not spawn any workers")
+            # Must not emit executor directives (no ad-hoc retry)
+            self.assertEqual(payload["executor_directives"], [],
+                "protocol gap must not emit executor directives")
+            # Selected experiment state must remain intact (not cleared or modified)
+            self.assertEqual(updated_state["selected_experiment"]["sanity_attempts"], 1,
+                "sanity_attempts must not be modified on protocol gap")
+
     def test_gate_diagnosis_launch_request_has_preferred_model_claude_opus(self) -> None:
         """Diagnosis worker launch must be a legal auxiliary launch with preferred_model."""
         with tempfile.TemporaryDirectory() as tempdir_str:

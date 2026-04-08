@@ -377,6 +377,71 @@ class BackgroundControlAgentTests(unittest.TestCase):
             # Proposals must NOT have been enriched
             self.assertEqual(len(updated_state["current_proposals"]), 0)
 
+    # ── drift regression: explicit per-field lane-drift blocking ─────
+
+    def test_regression_ideation_result_with_code_patch_blocks(self) -> None:
+        """Each lane-drift field from LANE_DRIFT_FIELDS['ideation'] must individually trigger BLOCKED_PROTOCOL."""
+        self._assert_single_drift_field_blocks("code_patch", "unified diff")
+
+    def test_regression_ideation_result_with_code_patches_blocks(self) -> None:
+        self._assert_single_drift_field_blocks("code_patches", [{"path": "x.py", "diff": "---"}])
+
+    def test_regression_ideation_result_with_fix_recommendations_blocks(self) -> None:
+        self._assert_single_drift_field_blocks("fix_recommendations", [{"action": "fix"}])
+
+    def test_regression_ideation_result_with_apply_results_blocks(self) -> None:
+        self._assert_single_drift_field_blocks("apply_results", [{"status": "applied"}])
+
+    def _assert_single_drift_field_blocks(self, field: str, value: object) -> None:
+        """Helper: ideation result with a single forbidden field must BLOCKED_PROTOCOL."""
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            state = self._base_state()
+            state["active_slots"] = [
+                {
+                    "slot_id": "bg-1", "slot_class": "background", "mode": "ideation",
+                    "model_class": "general_worker", "requested_model": "Auto",
+                    "resolved_model": "Auto", "status": "running", "attempt": 1,
+                    "task_summary": "Generate proposals",
+                }
+            ]
+            leaked_result = {
+                "slot_id": "bg-1", "mode": "ideation", "status": "completed",
+                "summary": "drifted", "proposal_candidates": [{"title": "X", "rationale": "Y"}],
+                field: value,
+            }
+            payload, updated_state, _ = self._run(
+                Path(tempdir_str),
+                mode="gate_background_work",
+                state=state,
+                slot_events={"bg-1": {"slot_id": "bg-1", "status": "completed", "result_file": "bg-1.json"}},
+                worker_results={"bg-1": leaked_result},
+            )
+            self.assertEqual(
+                payload["recommended_next_machine_state"], "BLOCKED_PROTOCOL",
+                f"ideation result with {field!r} must trigger BLOCKED_PROTOCOL",
+            )
+            self.assertEqual(updated_state["status"], "BLOCKED_PROTOCOL")
+            self.assertEqual(len(updated_state["current_proposals"]), 0,
+                f"proposals must NOT be enriched when {field!r} drift detected")
+
+    def test_regression_background_plan_never_launches_auxiliary_workers(self) -> None:
+        """Background plan mode must never emit launch requests for auxiliary-lane workers."""
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            payload, _, _ = self._run(
+                Path(tempdir_str),
+                mode="plan_background_work",
+                state=self._base_state(),
+            )
+            for lr in payload["launch_requests"]:
+                self.assertEqual(lr["slot_class"], "background",
+                    "background plan must only emit background slot_class")
+                self.assertIn(lr["mode"], {"ideation", "maintenance"},
+                    f"background plan must not emit mode={lr['mode']!r}")
+                self.assertNotIn(lr.get("worker_ref"), {
+                    "metaopt-materialization-worker", "metaopt-diagnosis-worker",
+                    "metaopt-analysis-worker",
+                }, f"background plan must not launch {lr.get('worker_ref')!r}")
+
     def test_agent_profile_exists_and_declares_both_modes(self) -> None:
         self.assertTrue(AGENT_PROFILE.exists(), f"missing {AGENT_PROFILE}")
         content = AGENT_PROFILE.read_text(encoding="utf-8")

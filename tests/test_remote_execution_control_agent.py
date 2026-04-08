@@ -705,6 +705,51 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
             self.assertEqual(updated_state["status"], "BLOCKED_PROTOCOL")
             self.assertEqual(updated_state["machine_state"], "BLOCKED_PROTOCOL")
 
+    # ── drift regression: baseline immutability without analysis ──────
+
+    def test_regression_baseline_immutable_without_analysis_worker_output(self) -> None:
+        """Drift temptation: raw remote results show a big improvement, tempting
+        the orchestrator to update baseline without the analysis worker's semantic
+        judgment.  Baseline, completed_experiments, and no_improve_iterations
+        must all remain unchanged when the analysis artifact is missing."""
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            state = self._base_state()
+            state["machine_state"] = "ANALYZE_RESULTS"
+            state["remote_batches"] = [{"batch_id": "batch-20260406-0002", "queue_ref": "ray-queue-123", "status": "completed"}]
+            original_baseline = dict(state["baseline"])
+            original_completed = list(state["completed_experiments"])
+            original_no_improve = state["no_improve_iterations"]
+
+            # Very favourable raw results — would be tempting to use directly
+            payload, updated_state, _ = self._run(
+                Path(tempdir_str),
+                mode="analyze_remote_results",
+                state=state,
+                executor_events={
+                    "remote-results-batch-20260406-0002": {
+                        "batch_id": "batch-20260406-0002",
+                        "status": "completed",
+                        "best_aggregate_result": {"metric": "rmse", "value": 0.0500},
+                        "per_dataset": {"ds_main": 0.0480, "ds_holdout": 0.0550},
+                        "artifact_locations": {},
+                        "logs_location": "s3://logs",
+                    }
+                },
+                # NO analysis worker result → must block
+            )
+
+            self.assertEqual(updated_state["machine_state"], "BLOCKED_PROTOCOL")
+            self.assertEqual(updated_state["baseline"]["aggregate"], original_baseline["aggregate"],
+                "baseline.aggregate must not change without analysis worker output")
+            self.assertEqual(updated_state["baseline"]["by_dataset"], original_baseline["by_dataset"],
+                "baseline.by_dataset must not change without analysis worker output")
+            self.assertEqual(updated_state["completed_experiments"], original_completed,
+                "completed_experiments must not grow without analysis worker output")
+            self.assertEqual(updated_state["no_improve_iterations"], original_no_improve,
+                "no_improve_iterations must not change without analysis worker output")
+            # No launch requests for invented workers
+            self.assertEqual(payload["launch_requests"], [])
+
     def test_gate_analysis_launch_request_has_preferred_model_claude_opus(self) -> None:
         """Analysis worker launch must be a legal auxiliary launch with preferred_model."""
         with tempfile.TemporaryDirectory() as tempdir_str:

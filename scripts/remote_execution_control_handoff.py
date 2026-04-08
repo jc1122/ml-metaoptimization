@@ -658,6 +658,20 @@ def _analyze_remote_results(
             "repair staged remote analysis payload",
             "remote analysis payload invalid",
         )
+    missing_fields: list[str] = []
+    if "new_aggregate" not in analysis_payload:
+        missing_fields.append("new_aggregate")
+    if "delta" not in analysis_payload:
+        missing_fields.append("delta")
+    if analysis_payload["judgment"] == "improvement" and "per_dataset" not in results_payload:
+        missing_fields.append("per_dataset")
+    if missing_fields:
+        return _runtime_error(
+            output_path,
+            "ANALYZE_REMOTE_RESULTS",
+            "repair staged remote analysis/results payload",
+            f"required fields missing: {', '.join(missing_fields)}",
+        )
 
     state["selected_experiment"]["analysis_summary"] = analysis_payload
     if analysis_payload["judgment"] == "improvement" and _improvement_clears_threshold(state, analysis_payload):

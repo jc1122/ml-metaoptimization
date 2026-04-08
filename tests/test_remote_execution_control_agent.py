@@ -831,6 +831,98 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 self.assertNotIn(d["action"], blocked_actions,
                                  f"raw-cluster action {d['action']!r} found in plan_remote_batch")
 
+    # ── fail-closed: malformed analysis/results payloads ────────────
+
+    def test_analyze_missing_new_aggregate_returns_runtime_error(self) -> None:
+        """analysis_payload without new_aggregate must fail closed, not KeyError."""
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            state = self._base_state()
+            state["machine_state"] = "WAIT_FOR_REMOTE_BATCH"
+            state["remote_batches"] = [{"batch_id": "batch-20260406-0002", "queue_ref": "ray-queue-123", "status": "completed"}]
+            original_baseline = dict(state["baseline"])
+            payload, updated_state, _ = self._run(
+                Path(tempdir_str),
+                mode="analyze_remote_results",
+                state=state,
+                executor_events={
+                    "remote-results-batch-20260406-0002": {
+                        "batch_id": "batch-20260406-0002",
+                        "status": "completed",
+                        "per_dataset": {"ds_main": 0.1208, "ds_holdout": 0.1225},
+                    }
+                },
+                worker_results={
+                    "remote-analysis-batch-20260406-0002": {
+                        "judgment": "improvement",
+                        "delta": -0.0071,
+                        "learnings": [],
+                    }
+                },
+            )
+            self.assertEqual(payload["outcome"], "runtime_error")
+            self.assertIn("new_aggregate", payload["summary"])
+            self.assertEqual(updated_state["baseline"]["aggregate"], original_baseline["aggregate"],
+                "baseline must not change when analysis payload is malformed")
+
+    def test_analyze_missing_delta_on_improvement_returns_runtime_error(self) -> None:
+        """analysis_payload with improvement judgment but no delta must fail closed."""
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            state = self._base_state()
+            state["machine_state"] = "WAIT_FOR_REMOTE_BATCH"
+            state["remote_batches"] = [{"batch_id": "batch-20260406-0002", "queue_ref": "ray-queue-123", "status": "completed"}]
+            payload, updated_state, _ = self._run(
+                Path(tempdir_str),
+                mode="analyze_remote_results",
+                state=state,
+                executor_events={
+                    "remote-results-batch-20260406-0002": {
+                        "batch_id": "batch-20260406-0002",
+                        "status": "completed",
+                        "per_dataset": {"ds_main": 0.1208, "ds_holdout": 0.1225},
+                    }
+                },
+                worker_results={
+                    "remote-analysis-batch-20260406-0002": {
+                        "judgment": "improvement",
+                        "new_aggregate": 0.1213,
+                        "learnings": [],
+                    }
+                },
+            )
+            self.assertEqual(payload["outcome"], "runtime_error")
+            self.assertIn("delta", payload["summary"])
+
+    def test_analyze_missing_per_dataset_on_improvement_returns_runtime_error(self) -> None:
+        """results_payload without per_dataset when baseline update would occur must fail closed."""
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            state = self._base_state()
+            state["machine_state"] = "WAIT_FOR_REMOTE_BATCH"
+            state["remote_batches"] = [{"batch_id": "batch-20260406-0002", "queue_ref": "ray-queue-123", "status": "completed"}]
+            original_baseline = dict(state["baseline"])
+            payload, updated_state, _ = self._run(
+                Path(tempdir_str),
+                mode="analyze_remote_results",
+                state=state,
+                executor_events={
+                    "remote-results-batch-20260406-0002": {
+                        "batch_id": "batch-20260406-0002",
+                        "status": "completed",
+                    }
+                },
+                worker_results={
+                    "remote-analysis-batch-20260406-0002": {
+                        "judgment": "improvement",
+                        "new_aggregate": 0.1213,
+                        "delta": -0.0071,
+                        "learnings": [],
+                    }
+                },
+            )
+            self.assertEqual(payload["outcome"], "runtime_error")
+            self.assertIn("per_dataset", payload["summary"])
+            self.assertEqual(updated_state["baseline"]["by_dataset"], original_baseline["by_dataset"],
+                "baseline.by_dataset must not change when per_dataset is missing")
+
     def test_agent_profile_exists_and_declares_all_modes(self) -> None:
         self.assertTrue(AGENT_PROFILE.exists(), f"missing {AGENT_PROFILE}")
         content = AGENT_PROFILE.read_text(encoding="utf-8")

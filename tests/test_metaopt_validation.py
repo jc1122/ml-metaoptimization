@@ -1481,6 +1481,8 @@ class MetaoptValidationTests(unittest.TestCase):
     def test_strong_coder_in_guardrail_preferred_model_map(self) -> None:
         """_guardrail_utils.PREFERRED_MODEL_BY_CLASS must include strong_coder
         so materialization launches are enriched correctly."""
+        import sys
+        sys.path.insert(0, str(ROOT / "scripts"))
         from _guardrail_utils import PREFERRED_MODEL_BY_CLASS
         self.assertIn("strong_coder", PREFERRED_MODEL_BY_CLASS)
         self.assertEqual(PREFERRED_MODEL_BY_CLASS["strong_coder"], "claude-opus-4.6-fast")

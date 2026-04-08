@@ -26,10 +26,11 @@ VALID_MACHINE_STATES = {
     "QUIESCE_SLOTS",
     "COMPLETE",
     "BLOCKED_CONFIG",
+    "BLOCKED_PROTOCOL",
     "FAILED",
 }
-TERMINAL_MACHINE_STATES = {"COMPLETE", "BLOCKED_CONFIG", "FAILED"}
-VALID_STATE_STATUSES = {"RUNNING", "BLOCKED_CONFIG", "FAILED", "COMPLETE"}
+TERMINAL_MACHINE_STATES = {"COMPLETE", "BLOCKED_CONFIG", "BLOCKED_PROTOCOL", "FAILED"}
+VALID_STATE_STATUSES = {"RUNNING", "BLOCKED_CONFIG", "BLOCKED_PROTOCOL", "FAILED", "COMPLETE"}
 VALID_SLOT_CLASSES = {"background", "auxiliary"}
 VALID_SLOT_MODES = {
     "ideation",
@@ -247,7 +248,7 @@ def _validate_state_payload(payload: dict) -> None:
 
     selected_experiment = payload["selected_experiment"]
     if selected_experiment is None:
-        assert payload["machine_state"] in PRE_SELECTION_MACHINE_STATES | POST_SELECTION_CLEARED_MACHINE_STATES | {"BLOCKED_CONFIG"}, (
+        assert payload["machine_state"] in PRE_SELECTION_MACHINE_STATES | POST_SELECTION_CLEARED_MACHINE_STATES | {"BLOCKED_CONFIG", "BLOCKED_PROTOCOL"}, (
             "selected_experiment must be populated once SELECT_EXPERIMENT completes"
         )
     else:
@@ -271,7 +272,7 @@ def _validate_state_payload(payload: dict) -> None:
 
     local_changeset = payload["local_changeset"]
     if local_changeset is None:
-        assert payload["machine_state"] in PRE_MATERIALIZATION_MACHINE_STATES | {"BLOCKED_CONFIG"}, (
+        assert payload["machine_state"] in PRE_MATERIALIZATION_MACHINE_STATES | {"BLOCKED_CONFIG", "BLOCKED_PROTOCOL"}, (
             "local_changeset must be populated once MATERIALIZE_CHANGESET completes"
         )
     else:
@@ -603,6 +604,7 @@ class MetaoptValidationTests(unittest.TestCase):
         _validate_backend_payload("results", _read_json("tests/fixtures/backend/results-valid.json"))
         _validate_state_payload(_read_json("tests/fixtures/state/running.json"))
         _validate_state_payload(_read_json("tests/fixtures/state/complete.json"))
+        _validate_state_payload(_read_json("tests/fixtures/state/blocked-protocol.json"))
         _validate_batch_manifest(_read_json("tests/fixtures/manifest/valid.json"))
 
     def test_v3_state_fixtures_require_resume_and_changeset_metadata(self) -> None:
@@ -822,6 +824,14 @@ class MetaoptValidationTests(unittest.TestCase):
         blocked_config["selected_experiment"] = None
         blocked_config["local_changeset"] = None
         _validate_state_payload(blocked_config)
+
+        blocked_protocol = copy.deepcopy(fixture)
+        blocked_protocol["status"] = "BLOCKED_PROTOCOL"
+        blocked_protocol["machine_state"] = "BLOCKED_PROTOCOL"
+        blocked_protocol["active_slots"] = []
+        blocked_protocol["selected_experiment"] = None
+        blocked_protocol["local_changeset"] = None
+        _validate_state_payload(blocked_protocol)
 
         missing_selected_experiment = copy.deepcopy(fixture)
         missing_selected_experiment["selected_experiment"] = None

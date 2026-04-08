@@ -61,6 +61,7 @@ def _parse_args() -> argparse.Namespace:
 
 _HANDOFF_TYPE = "HYDRATE_STATE"
 _CONTROL_AGENT = "metaopt-hydrate-state"
+_TERMINAL_STATUSES = {"COMPLETE", "BLOCKED_CONFIG", "BLOCKED_PROTOCOL", "FAILED"}
 
 
 def _runtime_error(output_path: Path, summary: str, *, warnings: list[str] | None = None, state_preserved: bool = False) -> dict[str, Any]:
@@ -207,10 +208,10 @@ def _fresh_state(load_handoff: dict[str, Any], runtime_capabilities: dict[str, A
     }
 
 
-def _blocked_state(load_handoff: dict[str, Any], runtime_capabilities: dict[str, Any], next_action: str) -> dict[str, Any]:
+def _blocked_state(load_handoff: dict[str, Any], runtime_capabilities: dict[str, Any], next_action: str, *, status: str = "BLOCKED_CONFIG") -> dict[str, Any]:
     state = _fresh_state(load_handoff, runtime_capabilities)
-    state["status"] = "BLOCKED_CONFIG"
-    state["machine_state"] = "BLOCKED_CONFIG"
+    state["status"] = status
+    state["machine_state"] = status
     state["next_action"] = next_action
     state["active_slots"] = []
     return state
@@ -292,7 +293,10 @@ def build_handoff(
         }
         state.setdefault("campaign_started_at", timestamp())
         resume_mode = "existing"
-        outcome = "resumed"
+        if state["status"] in _TERMINAL_STATUSES:
+            outcome = "terminal"
+        else:
+            outcome = "resumed"
     else:
         state = _fresh_state(load_handoff, runtime_capabilities)
         resume_mode = "fresh"
@@ -335,6 +339,8 @@ def build_handoff(
             if outcome == "initialized"
             else "existing orchestrator state resumed"
             if outcome == "resumed"
+            else f"existing state is terminal ({state['status']}); hook removed"
+            if outcome == "terminal"
             else "required skill missing; wrote blocked state"
         ),
     }

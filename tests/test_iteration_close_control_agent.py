@@ -465,6 +465,68 @@ class IterationCloseControlAgentTests(unittest.TestCase):
             emit_final = directives[2]
             self.assertEqual(emit_final["report_type"], "final")
 
+    def test_quiesce_blocked_protocol_preserves_state_and_removes_hook(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            state = self._base_state()
+            state["machine_state"] = "QUIESCE_SLOTS"
+            state["selected_experiment"] = None
+            payload, updated_state, _ = self._run(
+                Path(tempdir_str),
+                mode="quiesce_slots",
+                state=state,
+                executor_events={
+                    "quiesce-slots-iter-3": {
+                        "continue_campaign": False,
+                        "blocked_protocol": True,
+                        "stop_reason": "protocol_violation",
+                        "finished_slots": [],
+                        "canceled_slots": [],
+                        "drain_duration_seconds": 5,
+                        "maintenance_apply_results": [],
+                        "summary": "protocol cannot represent next step",
+                    }
+                },
+            )
+
+            self.assertEqual(payload["outcome"], "blocked_protocol")
+            self.assertEqual(updated_state["status"], "BLOCKED_PROTOCOL")
+            self.assertEqual(updated_state["machine_state"], "BLOCKED_PROTOCOL")
+            self.assertEqual(updated_state["active_slots"], [])
+            self.assertEqual(payload["recommended_next_machine_state"], "BLOCKED_PROTOCOL")
+            directives = payload["executor_directives"]
+            self.assertEqual(
+                [directive["action"] for directive in directives],
+                ["remove_agents_hook"],
+            )
+            self.assertEqual(directives[0]["agents_path"], "AGENTS.md")
+
+    def test_quiesce_blocked_protocol_does_not_delete_state_or_emit_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            state = self._base_state()
+            state["machine_state"] = "QUIESCE_SLOTS"
+            state["selected_experiment"] = None
+            payload, _, _ = self._run(
+                Path(tempdir_str),
+                mode="quiesce_slots",
+                state=state,
+                executor_events={
+                    "quiesce-slots-iter-3": {
+                        "continue_campaign": False,
+                        "blocked_protocol": True,
+                        "stop_reason": "protocol_violation",
+                        "finished_slots": [],
+                        "canceled_slots": [],
+                        "drain_duration_seconds": 5,
+                        "maintenance_apply_results": [],
+                        "summary": "protocol cannot represent next step",
+                    }
+                },
+            )
+
+            directive_actions = [d["action"] for d in payload["executor_directives"]]
+            self.assertNotIn("delete_state_file", directive_actions)
+            self.assertNotIn("emit_final_report", directive_actions)
+
     def test_quiesce_continue_has_no_terminal_cleanup_directives(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir_str:
             state = self._base_state()

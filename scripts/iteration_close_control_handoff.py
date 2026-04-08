@@ -339,6 +339,19 @@ def _quiesce_slots(state_path: Path, executor_events_dir: Path, output_path: Pat
         outcome = "continue"
         next_state = "MAINTAIN_BACKGROUND_POOL"
         cleanup_directives: list[dict[str, str]] = []
+    elif event.get("blocked_protocol"):
+        state["status"] = "BLOCKED_PROTOCOL"
+        state["machine_state"] = "BLOCKED_PROTOCOL"
+        state["next_action"] = "protocol cannot represent the next semantic step; manual intervention required"
+        outcome = "blocked_protocol"
+        next_state = "BLOCKED_PROTOCOL"
+        cleanup_directives = [
+            {
+                "action": "remove_agents_hook",
+                "reason": "protocol blocked; orchestration hook no longer needed",
+                "agents_path": "AGENTS.md",
+            },
+        ]
     else:
         state["status"] = "COMPLETE"
         state["machine_state"] = "COMPLETE"

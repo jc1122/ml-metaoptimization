@@ -214,6 +214,17 @@ class LocalExecutionControlAgentTests(unittest.TestCase):
                 Path(tempdir_str),
                 mode="plan_local_changeset",
                 state=state,
+                worker_results={
+                    "diagnosis-1": {
+                        "root_cause": "missing guard",
+                        "classification": "code_error",
+                        "fix_recommendation": {
+                            "action": "fix",
+                            "code_guidance": "Add temporal leakage guard",
+                            "config_guidance": None,
+                        },
+                    }
+                },
             )
 
             self.assertEqual(payload["materialization_mode"], "remediation")
@@ -529,6 +540,17 @@ class LocalExecutionControlAgentTests(unittest.TestCase):
                 Path(tempdir_str),
                 mode="plan_local_changeset",
                 state=state,
+                worker_results={
+                    "diagnosis-1": {
+                        "root_cause": "missing guard",
+                        "classification": "code_error",
+                        "fix_recommendation": {
+                            "action": "fix",
+                            "code_guidance": "Add temporal leakage guard",
+                            "config_guidance": None,
+                        },
+                    }
+                },
             )
             self.assertEqual(payload["executor_directives"], [])
 
@@ -603,6 +625,62 @@ class LocalExecutionControlAgentTests(unittest.TestCase):
                 },
             )
             self.assertEqual(payload["executor_directives"], [])
+
+    # ── Task 4: fail-closed guardrails ────────────────────────────────
+
+    def test_plan_remediation_blocks_to_blocked_protocol_without_diagnosis_artifact(self) -> None:
+        """Remediation path must block with BLOCKED_PROTOCOL if the diagnosis artifact is missing."""
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            state = self._base_state()
+            state["selected_experiment"]["sanity_attempts"] = 1
+            state["selected_experiment"]["diagnosis_history"] = [
+                {
+                    "attempt": 1,
+                    "root_cause": "missing guard",
+                    "classification": "code_error",
+                    "action": "fix",
+                    "code_guidance": "Add temporal leakage guard",
+                    "config_guidance": None,
+                    "diagnosed_at": "2026-04-06T00:10:00Z",
+                }
+            ]
+            # NO diagnosis-1.json in worker_results → should block
+            payload, updated_state, _ = self._run(
+                Path(tempdir_str),
+                mode="plan_local_changeset",
+                state=state,
+            )
+
+            self.assertEqual(payload["recommended_next_machine_state"], "BLOCKED_PROTOCOL")
+            self.assertEqual(updated_state["status"], "BLOCKED_PROTOCOL")
+            self.assertEqual(updated_state["machine_state"], "BLOCKED_PROTOCOL")
+
+    def test_gate_diagnosis_launch_request_has_preferred_model_claude_opus(self) -> None:
+        """Diagnosis worker launch must be a legal auxiliary launch with preferred_model."""
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            payload, _, _ = self._run(
+                Path(tempdir_str),
+                mode="gate_local_sanity",
+                state=self._base_state(),
+                executor_events={
+                    "sanity-1": {
+                        "status": "failed",
+                        "exit_code": 1,
+                        "stdout": "",
+                        "stderr": "temporal leakage detected",
+                        "duration_seconds": 2.3,
+                    }
+                },
+            )
+
+            self.assertEqual(payload["outcome"], "run_diagnosis")
+            self.assertGreater(len(payload["launch_requests"]), 0)
+            lr = payload["launch_requests"][0]
+            self.assertEqual(lr["slot_class"], "auxiliary")
+            self.assertEqual(lr["mode"], "diagnosis")
+            self.assertEqual(lr["worker_ref"], "metaopt-diagnosis-worker")
+            self.assertEqual(lr["model_class"], "strong_reasoner")
+            self.assertEqual(lr["preferred_model"], "claude-opus-4.6-fast")
 
     def test_agent_profile_exists_and_declares_both_modes(self) -> None:
         self.assertTrue(AGENT_PROFILE.exists(), f"missing {AGENT_PROFILE}")

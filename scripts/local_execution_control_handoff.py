@@ -209,6 +209,7 @@ def _plan_local_changeset(
     load_handoff: dict[str, Any],
     state_path: Path,
     tasks_dir: Path,
+    worker_results_dir: Path,
     executor_events_dir: Path,
     output_path: Path,
 ) -> dict[str, Any]:
@@ -223,6 +224,37 @@ def _plan_local_changeset(
     if _has_apply_conflict(local_changeset_event):
         materialization_mode = "conflict_resolution"
     elif latest_diagnosis and latest_diagnosis.get("action") == "fix":
+        # Require actual diagnosis artifact before entering remediation
+        prev_attempt = attempt - 1
+        diagnosis_artifact = worker_results_dir / f"diagnosis-{prev_attempt}.json"
+        if not diagnosis_artifact.exists():
+            state["status"] = "BLOCKED_PROTOCOL"
+            state["machine_state"] = "BLOCKED_PROTOCOL"
+            state["next_action"] = (
+                "protocol violation: remediation requested but diagnosis artifact "
+                f"diagnosis-{prev_attempt}.json is missing; manual intervention required"
+            )
+            _write_json(state_path, state)
+            payload = {
+                "schema_version": 1,
+                "producer": _CONTROL_AGENT,
+                "phase": "PLAN_LOCAL_CHANGESET",
+                "outcome": "blocked_protocol",
+                "worker_kind": None,
+                "worker_ref": None,
+                "materialization_mode": None,
+                "task_file": None,
+                "result_file": None,
+                "required_worktree": None,
+                "sanity_attempts": state["selected_experiment"].get("sanity_attempts", 0),
+                "recommended_executor_phase": None,
+                "recommended_next_machine_state": "BLOCKED_PROTOCOL",
+                "recommended_next_action": state["next_action"],
+                "diagnosis_action": None,
+                "warnings": [f"diagnosis artifact diagnosis-{prev_attempt}.json not found"],
+                "summary": "remediation blocked: diagnosis artifact missing",
+            }
+            return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
         materialization_mode = "remediation"
     else:
         materialization_mode = "standard"
@@ -440,6 +472,17 @@ def _gate_local_sanity(
             "recommended_next_machine_state": "LOCAL_SANITY",
             "recommended_next_action": "launch sanity diagnosis worker",
             "diagnosis_action": None,
+            "launch_requests": [
+                {
+                    "slot_class": "auxiliary",
+                    "mode": "diagnosis",
+                    "worker_kind": "custom_agent",
+                    "worker_ref": "metaopt-diagnosis-worker",
+                    "model_class": "strong_reasoner",
+                    "task_file": str(Path(".ml-metaopt") / "tasks" / f"diagnosis-{attempt}.md"),
+                    "result_file": str(Path(".ml-metaopt") / "worker-results" / f"diagnosis-{attempt}.json"),
+                },
+            ],
             "warnings": [],
             "summary": "sanity failed and requires diagnosis before routing",
         }
@@ -512,7 +555,7 @@ def main() -> int:
         return 0
 
     if args.mode == "plan_local_changeset":
-        payload = _plan_local_changeset(load_handoff, state_path, tasks_dir, executor_events_dir, output_path)
+        payload = _plan_local_changeset(load_handoff, state_path, tasks_dir, worker_results_dir, executor_events_dir, output_path)
     else:
         payload = _gate_local_sanity(load_handoff, tasks_dir, state_path, worker_results_dir, executor_events_dir, output_path)
     print(json.dumps(payload, indent=2, sort_keys=True))

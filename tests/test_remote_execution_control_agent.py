@@ -679,6 +679,113 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
             self.assertEqual(directives[0]["batch_id"], "batch-20260406-0002")
             self.assertEqual(directives[1]["manifest_path"], ".ml-metaopt/artifacts/manifests/batch-20260406-0002.json")
 
+    # ── Task 4: fail-closed guardrails ────────────────────────────────
+
+    def test_analyze_blocks_to_blocked_protocol_without_analysis_artifact(self) -> None:
+        """Semantic result judgment must block with BLOCKED_PROTOCOL if analysis artifact is missing."""
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            state = self._base_state()
+            state["machine_state"] = "ANALYZE_RESULTS"
+            state["remote_batches"] = [{"batch_id": "batch-20260406-0002", "queue_ref": "ray-queue-123", "status": "completed"}]
+            # Provide remote results but NO analysis artifact
+            payload, updated_state, _ = self._run(
+                Path(tempdir_str),
+                mode="analyze_remote_results",
+                state=state,
+                executor_events={
+                    "remote-results-batch-20260406-0002": {
+                        "batch_id": "batch-20260406-0002",
+                        "status": "completed",
+                        "per_dataset": {"ds_main": 0.1208, "ds_holdout": 0.1225},
+                    }
+                },
+            )
+
+            self.assertEqual(payload["recommended_next_machine_state"], "BLOCKED_PROTOCOL")
+            self.assertEqual(updated_state["status"], "BLOCKED_PROTOCOL")
+            self.assertEqual(updated_state["machine_state"], "BLOCKED_PROTOCOL")
+
+    def test_gate_analysis_launch_request_has_preferred_model_claude_opus(self) -> None:
+        """Analysis worker launch must be a legal auxiliary launch with preferred_model."""
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            state = self._base_state()
+            state["machine_state"] = "WAIT_FOR_REMOTE_BATCH"
+            state["remote_batches"] = [{"batch_id": "batch-20260406-0002", "queue_ref": "ray-queue-123", "status": "completed"}]
+            payload, _, _ = self._run(
+                Path(tempdir_str),
+                mode="gate_remote_batch",
+                state=state,
+                executor_events={
+                    "remote-status-batch-20260406-0002": {
+                        "batch_id": "batch-20260406-0002",
+                        "status": "completed",
+                        "timestamps": {"queued_at": "2026-04-06T10:00:00Z"},
+                    },
+                    "remote-results-batch-20260406-0002": {
+                        "batch_id": "batch-20260406-0002",
+                        "status": "completed",
+                        "per_dataset": {"ds_main": 0.1208, "ds_holdout": 0.1225},
+                        "artifact_locations": {},
+                        "logs_location": "s3://logs",
+                    },
+                },
+            )
+
+            self.assertEqual(payload["outcome"], "run_analysis")
+            self.assertGreater(len(payload["launch_requests"]), 0)
+            lr = payload["launch_requests"][0]
+            self.assertEqual(lr["slot_class"], "auxiliary")
+            self.assertEqual(lr["mode"], "analysis")
+            self.assertEqual(lr["worker_ref"], "metaopt-analysis-worker")
+            self.assertEqual(lr["model_class"], "strong_reasoner")
+            self.assertEqual(lr["preferred_model"], "claude-opus-4.6-fast")
+
+    def test_gate_remote_diagnosis_launch_request_has_preferred_model_claude_opus(self) -> None:
+        """Remote diagnosis worker launch must be a legal auxiliary launch with preferred_model."""
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            state = self._base_state()
+            state["machine_state"] = "WAIT_FOR_REMOTE_BATCH"
+            state["remote_batches"] = [{"batch_id": "batch-20260406-0002", "queue_ref": "ray-queue-123", "status": "running"}]
+            payload, _, _ = self._run(
+                Path(tempdir_str),
+                mode="gate_remote_batch",
+                state=state,
+                executor_events={
+                    "remote-status-batch-20260406-0002": {
+                        "batch_id": "batch-20260406-0002",
+                        "status": "failed",
+                        "timestamps": {"queued_at": "2026-04-06T10:00:00Z"},
+                        "classification": "infra_error",
+                        "message": "worker exited",
+                        "returncode": 137,
+                    }
+                },
+            )
+
+            self.assertEqual(payload["outcome"], "run_remote_diagnosis")
+            self.assertGreater(len(payload["launch_requests"]), 0)
+            lr = payload["launch_requests"][0]
+            self.assertEqual(lr["slot_class"], "auxiliary")
+            self.assertEqual(lr["mode"], "diagnosis")
+            self.assertEqual(lr["worker_ref"], "metaopt-diagnosis-worker")
+            self.assertEqual(lr["model_class"], "strong_reasoner")
+            self.assertEqual(lr["preferred_model"], "claude-opus-4.6-fast")
+
+    def test_queue_only_no_raw_cluster_directives(self) -> None:
+        """Remote execution must remain queue-only; all directives must use allowed actions."""
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            batch_id = self._today_batch_id()
+            # Plan phase
+            plan_payload, _, _ = self._run(
+                Path(tempdir_str),
+                mode="plan_remote_batch",
+                state=self._base_state(),
+            )
+            blocked_actions = {"ssh_command", "raw_ssh", "shell_exec", "kubectl_exec"}
+            for d in plan_payload.get("executor_directives", []):
+                self.assertNotIn(d["action"], blocked_actions,
+                                 f"raw-cluster action {d['action']!r} found in plan_remote_batch")
+
     def test_agent_profile_exists_and_declares_all_modes(self) -> None:
         self.assertTrue(AGENT_PROFILE.exists(), f"missing {AGENT_PROFILE}")
         content = AGENT_PROFILE.read_text(encoding="utf-8")

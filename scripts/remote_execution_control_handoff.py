@@ -462,6 +462,17 @@ def _gate_remote_batch(
                 "recommended_next_action": "launch remote results analysis worker",
                 "judgment": None,
                 "delta": None,
+                "launch_requests": [
+                    {
+                        "slot_class": "auxiliary",
+                        "mode": "analysis",
+                        "worker_kind": "custom_agent",
+                        "worker_ref": "metaopt-analysis-worker",
+                        "model_class": "strong_reasoner",
+                        "task_file": str(Path(".ml-metaopt") / "tasks" / f"remote-analysis-{batch_id}.md"),
+                        "result_file": str(Path(".ml-metaopt") / "worker-results" / f"remote-analysis-{batch_id}.json"),
+                    },
+                ],
                 "warnings": [],
                 "summary": "remote results are staged and ready for semantic analysis",
             }
@@ -513,6 +524,17 @@ def _gate_remote_batch(
             "recommended_next_action": "launch remote failure diagnosis worker",
             "judgment": None,
             "delta": None,
+            "launch_requests": [
+                {
+                    "slot_class": "auxiliary",
+                    "mode": "diagnosis",
+                    "worker_kind": "custom_agent",
+                    "worker_ref": "metaopt-diagnosis-worker",
+                    "model_class": "strong_reasoner",
+                    "task_file": str(Path(".ml-metaopt") / "tasks" / f"remote-diagnosis-{batch_id}.md"),
+                    "result_file": str(Path(".ml-metaopt") / "worker-results" / f"remote-diagnosis-{batch_id}.json"),
+                },
+            ],
             "warnings": [],
             "summary": "remote batch failed and needs diagnosis before terminal routing",
         }
@@ -589,12 +611,37 @@ def _analyze_remote_results(
     results_path = executor_events_dir / f"remote-results-{batch_id}.json"
     analysis_path = worker_results_dir / f"remote-analysis-{batch_id}.json"
     if not results_path.exists() or not analysis_path.exists():
-        return _runtime_error(
-            output_path,
-            "ANALYZE_REMOTE_RESULTS",
-            "stage remote results and analysis payloads before analysis handoff",
-            "remote analysis inputs missing",
+        state["status"] = "BLOCKED_PROTOCOL"
+        state["machine_state"] = "BLOCKED_PROTOCOL"
+        missing = []
+        if not results_path.exists():
+            missing.append("remote results")
+        if not analysis_path.exists():
+            missing.append("analysis artifact")
+        state["next_action"] = (
+            f"protocol violation: semantic result judgment requires {' and '.join(missing)}; "
+            "manual intervention required"
         )
+        _write_json(state_path, state)
+        payload = {
+            "schema_version": 1,
+            "producer": _CONTROL_AGENT,
+            "phase": "ANALYZE_REMOTE_RESULTS",
+            "outcome": "blocked_protocol",
+            "batch_id": batch_id,
+            "manifest_path": None,
+            "worker_kind": None,
+            "worker_ref": None,
+            "task_file": None,
+            "recommended_executor_phase": None,
+            "recommended_next_machine_state": "BLOCKED_PROTOCOL",
+            "recommended_next_action": state["next_action"],
+            "judgment": None,
+            "delta": None,
+            "warnings": [f"missing: {', '.join(missing)}"],
+            "summary": "semantic result judgment blocked: required artifacts missing",
+        }
+        return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
     results_payload = _read_json(results_path)
     analysis_payload = _read_json(analysis_path)
     if results_payload.get("batch_id") != batch_id or results_payload.get("status") != "completed":

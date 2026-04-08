@@ -115,11 +115,12 @@ Recommended additional keys when useful:
 - `last_iteration_report`
 
 Status semantics:
-- `status` is the coarse lifecycle summary: `RUNNING`, `BLOCKED_CONFIG`, `FAILED`, or `COMPLETE`
+- `status` is the coarse lifecycle summary: `RUNNING`, `BLOCKED_CONFIG`, `BLOCKED_PROTOCOL`, `FAILED`, or `COMPLETE`
 - `machine_state` is the authoritative control-flow state from the state machine
 - allowed pairings:
   - `status = RUNNING` with any non-terminal `machine_state`
   - `status = BLOCKED_CONFIG` only with `machine_state = BLOCKED_CONFIG`
+  - `status = BLOCKED_PROTOCOL` only with `machine_state = BLOCKED_PROTOCOL`
   - `status = FAILED` only with `machine_state = FAILED`
   - `status = COMPLETE` only with `machine_state = COMPLETE`
 

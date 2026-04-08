@@ -58,7 +58,7 @@ If `status` is terminal, remove this block and follow `next_action` instead of a
 <!-- ml-metaoptimization:end -->
 ```
 
-Remove only this marked block when entering `BLOCKED_CONFIG`, `FAILED`, or `COMPLETE`.
+Remove only this marked block when entering `BLOCKED_CONFIG`, `BLOCKED_PROTOCOL`, `FAILED`, or `COMPLETE`.
 
 If `AGENTS.md` does not exist on first run, create it before appending the marked block.
 
@@ -66,6 +66,7 @@ If `AGENTS.md` does not exist on first run, create it before appending the marke
 
 - never ask the user for campaign-defining inputs
 - never let the orchestrator perform semantic coding directly
+- generic semantic fallback is forbidden: if the orchestrator encounters unsupported semantic work, it must never improvise; instead it fails closed to `BLOCKED_PROTOCOL` with recovery guidance
 - refill an empty background slot before launching lower-priority work
 - use the queue backend contract instead of raw cluster operations
 - use the aggregate metric as the authoritative campaign score
@@ -74,6 +75,8 @@ If `AGENTS.md` does not exist on first run, create it before appending the marke
 - drain or cancel active slots in `QUIESCE_SLOTS` before rollover or final cleanup
 - re-invoke this skill only after `QUIESCE_SLOTS` has persisted outputs and torn down in-flight work
 - verify required worker skill availability during `HYDRATE_STATE` before any dispatch
+- `BLOCKED_PROTOCOL` preserves state and all artifacts, removes the `AGENTS.md` hook, and stops with a descriptive `next_action` explaining recovery steps
+- `preferred_model` is a deterministic launch hint, not an excuse for semantic fallback — if the requested model is unavailable, the orchestrator must use the strongest available model in the same class and record the substitution
 
 ## Dispatch Invariants
 
@@ -151,12 +154,15 @@ digraph machine {
     "QUIESCE_SLOTS" [shape=box];
     "COMPLETE" [shape=doublecircle];
     "BLOCKED_CONFIG" [shape=doublecircle];
+    "BLOCKED_PROTOCOL" [shape=doublecircle];
     "FAILED" [shape=doublecircle];
 
     "LOAD_CAMPAIGN" -> "BLOCKED_CONFIG" [label="invalid or missing config"];
     "LOAD_CAMPAIGN" -> "HYDRATE_STATE" [label="campaign valid"];
     "HYDRATE_STATE" -> "MAINTAIN_BACKGROUND_POOL";
+    "HYDRATE_STATE" -> "BLOCKED_PROTOCOL" [label="prior state protocol violation"];
     "MAINTAIN_BACKGROUND_POOL" -> "WAIT_FOR_PROPOSAL_THRESHOLD";
+    "MAINTAIN_BACKGROUND_POOL" -> "BLOCKED_PROTOCOL" [label="lane drift detected"];
     "WAIT_FOR_PROPOSAL_THRESHOLD" -> "MAINTAIN_BACKGROUND_POOL" [label="not enough proposals"];
     "WAIT_FOR_PROPOSAL_THRESHOLD" -> "SELECT_EXPERIMENT" [label="threshold met"];
     "SELECT_EXPERIMENT" -> "DESIGN_EXPERIMENT";
@@ -164,15 +170,18 @@ digraph machine {
     "MATERIALIZE_CHANGESET" -> "LOCAL_SANITY";
     "LOCAL_SANITY" -> "LOCAL_SANITY" [label="fix and rerun (max 3 attempts)"];
     "LOCAL_SANITY" -> "FAILED" [label="attempt cap reached"];
+    "LOCAL_SANITY" -> "BLOCKED_PROTOCOL" [label="missing diagnosis artifact"];
     "LOCAL_SANITY" -> "ENQUEUE_REMOTE_BATCH" [label="pass"];
     "ENQUEUE_REMOTE_BATCH" -> "WAIT_FOR_REMOTE_BATCH";
     "WAIT_FOR_REMOTE_BATCH" -> "WAIT_FOR_REMOTE_BATCH" [label="running"];
     "WAIT_FOR_REMOTE_BATCH" -> "ANALYZE_RESULTS" [label="completed"];
     "WAIT_FOR_REMOTE_BATCH" -> "FAILED" [label="remote failure (after diagnosis)"];
     "WAIT_FOR_REMOTE_BATCH" -> "BLOCKED_CONFIG" [label="remote failure (config issue)"];
+    "ANALYZE_RESULTS" -> "BLOCKED_PROTOCOL" [label="missing analysis artifact"];
     "ANALYZE_RESULTS" -> "ROLL_ITERATION";
     "ROLL_ITERATION" -> "QUIESCE_SLOTS";
     "QUIESCE_SLOTS" -> "COMPLETE" [label="stop condition met"];
+    "QUIESCE_SLOTS" -> "BLOCKED_PROTOCOL" [label="protocol cannot proceed"];
     "QUIESCE_SLOTS" -> "MAINTAIN_BACKGROUND_POOL" [label="reinvoke and resume"];
 }
 ```
@@ -274,6 +283,7 @@ These worker targets have defined fallback behavior. If missing, record the degr
 | Skipping `DESIGN_EXPERIMENT` and jumping straight into coding | Design the experiment batch before materialization starts |
 | Allowing `LOCAL_SANITY` to spin forever | Cap remediation at 3 attempts, then transition to `FAILED` |
 | Running raw cluster commands from this skill | Use only the queue commands declared by the backend contract |
+| Improvising around unsupported semantic work | Fail closed to `BLOCKED_PROTOCOL` instead of inventing ad-hoc behavior |
 | Using mutable working tree state as the remote execution source | Package immutable artifacts and enqueue a manifest |
 | Comparing multi-dataset results without aggregation rules | Use `objective.aggregation` and `baseline.aggregate` |
 | Re-invoking while workers are still running | Drain or cancel them in `QUIESCE_SLOTS` first |

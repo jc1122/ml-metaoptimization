@@ -1409,6 +1409,90 @@ class MetaoptValidationTests(unittest.TestCase):
     # Preflight dependency documentation consistency
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # Task 5: BLOCKED_PROTOCOL, preferred_model, preconditions, queue-only
+    # ------------------------------------------------------------------
+
+    def test_blocked_protocol_documented_as_terminal_state_in_state_machine(self) -> None:
+        """state-machine.md must list BLOCKED_PROTOCOL as a terminal state with
+        cleanup semantics (preserve state, remove hook)."""
+        sm = _read_text("references/state-machine.md")
+        self.assertIn("BLOCKED_PROTOCOL", sm)
+        _require_pattern(self, sm, r"## States.*`BLOCKED_PROTOCOL`.*## ")
+        _require_pattern(self, sm, r"### Terminal States.*`BLOCKED_PROTOCOL`")
+
+    def test_blocked_protocol_in_skill_md_diagram(self) -> None:
+        """SKILL.md state-machine diagram must include BLOCKED_PROTOCOL as a
+        terminal node with transition edges from running states."""
+        skill = _read_text("SKILL.md")
+        _require_pattern(self, skill, r'"BLOCKED_PROTOCOL".*doublecircle')
+        _require_pattern(self, skill, r'-> "BLOCKED_PROTOCOL"')
+
+    def test_blocked_protocol_in_contracts_status_semantics(self) -> None:
+        """contracts.md status semantics must pair BLOCKED_PROTOCOL status
+        with BLOCKED_PROTOCOL machine_state."""
+        contracts = _read_text("references/contracts.md")
+        _require_pattern(
+            self,
+            contracts,
+            r"`status = BLOCKED_PROTOCOL` only with `machine_state = BLOCKED_PROTOCOL`",
+        )
+
+    def test_blocked_protocol_in_control_protocol(self) -> None:
+        """control-protocol.md must document which control agents can emit
+        BLOCKED_PROTOCOL and the fail-closed rule."""
+        protocol = _read_text("references/control-protocol.md")
+        self.assertIn("BLOCKED_PROTOCOL", protocol)
+        _require_pattern(self, protocol, r"fail.closed.*BLOCKED_PROTOCOL|BLOCKED_PROTOCOL.*fail.closed")
+
+    def test_semantic_fallback_forbidden_in_skill_md(self) -> None:
+        """SKILL.md must explicitly forbid generic semantic fallback."""
+        skill = _read_text("SKILL.md")
+        _require_pattern(self, skill, r"[Ss]emantic fallback.*forbidden|[Ff]orbidden.*semantic fallback|[Nn]ever.*improv.*unsupported.*semantic")
+
+    def test_preferred_model_documented_in_dispatch_guide(self) -> None:
+        """dispatch-guide.md must document preferred_model on launch requests
+        and the claude-opus-4.6-fast intent for strong_reasoner/strong_coder."""
+        guide = _read_text("references/dispatch-guide.md")
+        self.assertIn("preferred_model", guide)
+        self.assertIn("claude-opus-4.6-fast", guide)
+
+    def test_preferred_model_documented_in_control_protocol(self) -> None:
+        """control-protocol.md launch_requests must document preferred_model."""
+        protocol = _read_text("references/control-protocol.md")
+        self.assertIn("preferred_model", protocol)
+
+    def test_worker_artifact_preconditions_in_worker_lanes(self) -> None:
+        """worker-lanes.md must document that remediation requires
+        diagnosis-worker output and result judgment requires analysis-worker output."""
+        lanes = _read_text("references/worker-lanes.md")
+        _require_pattern(self, lanes, r"[Rr]emediation.*diagnosis.worker.*output|diagnosis.worker.*output.*precondition.*remediation")
+        _require_pattern(self, lanes, r"[Rr]esult judgment.*analysis.worker.*output|analysis.worker.*output.*precondition.*result judgment")
+
+    def test_queue_only_backend_contract_strengthened(self) -> None:
+        """backend-contract.md must explicitly prohibit raw SSH, Ray, and
+        cluster operations from the skill."""
+        backend = _read_text("references/backend-contract.md")
+        _require_pattern(self, backend, r"[Nn]o raw SSH|[Nn]ever.*raw.*SSH")
+        _require_pattern(self, backend, r"[Pp]rotocol breach|[Vv]iolation")
+
+    def test_blocked_protocol_in_dispatch_guide(self) -> None:
+        """dispatch-guide.md must reference BLOCKED_PROTOCOL for missing
+        artifact preconditions."""
+        guide = _read_text("references/dispatch-guide.md")
+        self.assertIn("BLOCKED_PROTOCOL", guide)
+
+    def test_blocked_protocol_in_skill_md_behavioral_guarantees(self) -> None:
+        """SKILL.md must mention BLOCKED_PROTOCOL in behavioral guarantees
+        or common mistakes."""
+        skill = _read_text("SKILL.md")
+        self.assertIn("BLOCKED_PROTOCOL", skill)
+
+    def test_blocked_protocol_hook_removal_in_state_machine(self) -> None:
+        """state-machine.md BLOCKED_PROTOCOL cleanup must remove the AGENTS.md hook."""
+        sm = _read_text("references/state-machine.md")
+        _require_pattern(self, sm, r"BLOCKED_PROTOCOL.*remove.*AGENTS\.md|BLOCKED_PROTOCOL.*hook")
+
     def test_preflight_dependency_documented_across_public_docs(self) -> None:
         """README, SKILL.md, and dependencies.md must all document the
         metaopt-preflight prerequisite and the readiness artifact path."""

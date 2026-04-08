@@ -26,7 +26,7 @@ Every control agent emits a JSON handoff object conforming to this envelope. Fie
 | `handoff_type` | string | yes | Identifies the handoff variant. Format: `<control_agent_short_name>.<phase>`, e.g. `"load_campaign.validate"`, `"background_control.plan"`, `"background_control.gate"`. |
 | `control_agent` | string | yes | The producing control agent name, e.g. `"metaopt-background-control"`. Equivalent to the legacy `producer` field. |
 | `recommended_next_machine_state` | string or null | yes | The machine state the orchestrator should transition to after applying this handoff. Null when the control agent defers the decision to a later gate phase. |
-| `launch_requests` | array | yes | Ordered list of worker launch requests for the orchestrator to execute. Empty array when no launches are needed. Each entry specifies `worker_ref`, `model_class`, `task_file`, and `result_file`. |
+| `launch_requests` | array | yes | Ordered list of worker launch requests for the orchestrator to execute. Empty array when no launches are needed. Each entry specifies `worker_ref`, `model_class`, `task_file`, `result_file`, and optionally `preferred_model`. |
 | `state_patch` | object or null | yes | A partial state object whose keys the orchestrator merges into `.ml-metaopt/state.json`. Null when no state mutation is needed. Only keys owned by this control agent may appear. |
 | `executor_directives` | array | yes | Ordered list of instructions for the orchestrator executor phase (e.g. commands to run, files to write, worktrees to create). Empty array when no executor action is needed. |
 | `summary` | string | yes | Human-readable summary of the handoff decision for logging and debugging. |
@@ -71,6 +71,38 @@ Every control agent emits a JSON handoff object conforming to this envelope. Fie
 ### Legacy Compatibility
 
 Existing handoff scripts use `producer` instead of `control_agent` and `phase`/`outcome` instead of `handoff_type`. The canonical field names above are the target schema. During migration, both forms are accepted — the orchestrator treats `producer` as equivalent to `control_agent` and constructs `handoff_type` from `producer` + `phase` when the new field is absent.
+
+### Launch Request Fields
+
+Each entry in `launch_requests` specifies:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `worker_ref` | string | yes | Worker target name (e.g. `"metaopt-analysis-worker"`) |
+| `model_class` | string | yes | Model class (`"strong_coder"`, `"strong_reasoner"`, or `"general_worker"`) |
+| `task_file` | string | yes | Path to the staged task file to pass to the worker |
+| `result_file` | string | yes | Path where the worker writes its structured result |
+| `preferred_model` | string | no | Deterministic model hint. When present, the orchestrator should use this specific model for the launch. Added automatically by `normalize_launch_requests()` when absent, based on the model class: `claude-opus-4.6-fast` for `strong_reasoner`, `claude-sonnet-4` for `general_worker`. This is a launch hint, not an excuse for semantic fallback — if the preferred model is unavailable, use the strongest available model in the same class and record the substitution. |
+| `slot_class` | string | no | Slot class for slot-based dispatch (`"background"` or `"auxiliary"`) |
+| `mode` | string | no | Slot mode for slot-based dispatch |
+
+### Fail-Closed Rule — `BLOCKED_PROTOCOL`
+
+When a control agent encounters unsupported semantic work, lane drift, missing worker artifacts, or any protocol violation it cannot resolve, it must fail closed to `BLOCKED_PROTOCOL` rather than improvising or allowing the orchestrator to attempt generic semantic fallback. The orchestrator is mechanical — it has no ability to perform semantic work — so any attempt to work around a protocol gap would produce undefined behavior.
+
+Control agents that may emit `BLOCKED_PROTOCOL`:
+- `metaopt-hydrate-state`: prior state has an unrecoverable protocol violation
+- `metaopt-background-control`: ideation result contains semantic-lane fields (lane drift)
+- `metaopt-select-design`: design result contains materialization-lane fields (lane drift)
+- `metaopt-local-execution-control`: remediation requested but diagnosis artifact is missing
+- `metaopt-remote-execution-control`: result judgment requested but analysis artifact is missing
+- `metaopt-iteration-close-control`: rollover output violates contract shape
+
+When emitting `BLOCKED_PROTOCOL`, the control agent must:
+1. Set `recommended_next_machine_state` to `"BLOCKED_PROTOCOL"`
+2. Include a descriptive `summary` explaining the violation
+3. Include `warnings` listing the specific artifacts or fields that triggered the block
+4. Set `next_action` in the `state_patch` to describe recovery steps
 
 ## Control Agents
 

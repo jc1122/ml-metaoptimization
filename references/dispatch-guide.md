@@ -16,6 +16,21 @@ Used for ideation, maintenance, synthesis, design, materialization, diagnosis, a
 ### Inline Dispatch
 Used for rollover. The orchestrator launches the subagent synchronously during a state transition. No slot entry is created in `active_slots`. The subagent returns before the orchestrator advances to the next state.
 
+### Launch Request Model Hints
+
+Every `launch_requests` entry may include a `preferred_model` field — a deterministic model hint specifying which model the orchestrator should use for the launch. The guardrail utility `normalize_launch_requests()` adds `preferred_model` automatically when absent:
+- `strong_reasoner` → `claude-opus-4.6-fast`
+- `general_worker` → `claude-sonnet-4`
+
+The `preferred_model` is a deterministic launch parameter, not an excuse for semantic fallback. If the preferred model is unavailable, the orchestrator uses the strongest available model in the same class and records the substitution in the slot metadata (`requested_model` vs `resolved_model`).
+
+### Artifact Preconditions and `BLOCKED_PROTOCOL`
+
+Certain dispatch states require worker artifacts from prior phases as preconditions. If the required artifacts are missing, the control agent must fail closed to `BLOCKED_PROTOCOL` rather than allowing the orchestrator to improvise:
+
+- **Remediation** (during `LOCAL_SANITY`): requires `diagnosis-worker` output artifact. If the diagnosis artifact is missing, `metaopt-local-execution-control` transitions to `BLOCKED_PROTOCOL`.
+- **Result judgment** (during `ANALYZE_RESULTS`): requires `analysis-worker` output artifact and remote results payload. If either is missing, `metaopt-remote-execution-control` transitions to `BLOCKED_PROTOCOL`.
+
 ## Prompt Envelope
 
 Every worker subagent prompt includes a standard envelope plus state-specific fields. Control agents write the envelope into staged task files; the orchestrator passes these task files to workers without modifying semantic content.

@@ -17,6 +17,7 @@
 - `QUIESCE_SLOTS`
 - `COMPLETE`
 - `BLOCKED_CONFIG`
+- `BLOCKED_PROTOCOL`
 - `FAILED`
 
 ## Control-Agent Dispatch Map
@@ -226,8 +227,11 @@ This state is governed by `metaopt-iteration-close-control`. The orchestrator dr
 
 - `COMPLETE`: emit the final report using the contract in `references/contracts.md` after all slots have already been drained or canceled, remove the `AGENTS.md` hook, delete `.ml-metaopt/state.json`, and stop
 - `BLOCKED_CONFIG`: remove the `AGENTS.md` hook, leave state and artifacts intact so the campaign can resume after config repair, and stop
+- `BLOCKED_PROTOCOL`: remove the `AGENTS.md` hook, preserve state and all artifacts so the operator can diagnose and recover, and stop. This state is reached when the orchestrator or a control agent encounters unsupported semantic work that cannot be represented by the protocol. Rather than improvising, the machine fails closed to `BLOCKED_PROTOCOL` with a descriptive `next_action` explaining what went wrong and how to recover.
 - `FAILED`: remove the `AGENTS.md` hook, write the terminal error, preserve state, and stop
 
-All three terminal states remove the `AGENTS.md` hook using the same operation as the identity-drift path in `HYDRATE_STATE`: strip only the `<!-- ml-metaoptimization:begin -->...<!-- ml-metaoptimization:end -->` block. The difference is that terminal-state cleanup transitions the machine to a final state (`COMPLETE`, `BLOCKED_CONFIG`, or `FAILED`), whereas the identity-drift path is a hard stop that does not advance the state machine.
+All four terminal states remove the `AGENTS.md` hook using the same operation as the identity-drift path in `HYDRATE_STATE`: strip only the `<!-- ml-metaoptimization:begin -->...<!-- ml-metaoptimization:end -->` block. The difference is that terminal-state cleanup transitions the machine to a final state (`COMPLETE`, `BLOCKED_CONFIG`, `BLOCKED_PROTOCOL`, or `FAILED`), whereas the identity-drift path is a hard stop that does not advance the state machine.
+
+`BLOCKED_PROTOCOL` vs `BLOCKED_CONFIG`: `BLOCKED_CONFIG` signals that the campaign YAML or environment configuration needs repair (user-actionable). `BLOCKED_PROTOCOL` signals that the orchestrator or a control agent detected a protocol-level violation — such as lane drift, missing worker artifacts, or unsupported semantic operations — that cannot be resolved without manual intervention. The orchestrator must never attempt to improvise around a protocol violation.
 
 When the campaign reaches a terminal state via `QUIESCE_SLOTS`, the control agent emits explicit `executor_directives` in the handoff output so the orchestrator does not need to infer cleanup intent. For `COMPLETE`, the directives are `remove_agents_hook`, `delete_state_file`, and `emit_final_report`. The orchestrator executes these directives mechanically without semantic interpretation.

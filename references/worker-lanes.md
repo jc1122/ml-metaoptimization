@@ -139,6 +139,8 @@ Output:
 - root-cause summary
 - concrete fix recommendation or patch plan
 
+Artifact precondition for downstream remediation: the diagnosis-worker output artifact is a required precondition for dispatching `metaopt-materialization-worker` in remediation mode. If the orchestrator or control agent attempts remediation without a completed diagnosis-worker output, the control agent must fail closed to `BLOCKED_PROTOCOL`. The orchestrator must never improvise remediation without structured diagnosis guidance.
+
 ## Analysis Lane
 
 **Worker target:** `metaopt-analysis-worker` (`custom_agent`)
@@ -150,6 +152,8 @@ Output:
 - improvement or regression judgment
 - updated learnings
 - proposal invalidations or carry-over candidates
+
+Artifact precondition for result judgment: the analysis-worker output artifact is a required precondition for semantic result judgment and baseline updates during `ANALYZE_RESULTS`. If the control agent attempts to judge results or update baseline without a completed analysis-worker output, it must fail closed to `BLOCKED_PROTOCOL`. The orchestrator must never perform semantic result interpretation directly.
 
 ## Rollover Lane
 

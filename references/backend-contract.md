@@ -2,7 +2,9 @@
 
 ## Purpose
 
-The orchestrator interacts with remote execution only through this contract. The backend owns cluster verification, sync, submission, retries, result collection, and utilization management.
+The orchestrator interacts with remote execution **only** through this queue-based contract. The backend owns cluster verification, sync, submission, retries, result collection, and utilization management.
+
+**Queue-only rule:** The skill must never execute raw SSH commands, Ray cluster operations, `kubectl exec`, or any direct cluster interaction. All remote execution flows through the three declared queue commands below. Any attempt to bypass this contract — whether by a control agent emitting raw-cluster executor directives or by the orchestrator constructing ad-hoc remote commands — is a protocol breach and must be rejected. If a control agent emits an executor directive with a blocked action (e.g. `ssh_command`, `raw_ssh`, `shell_exec`, `kubectl_exec`), the guardrail validators reject it before execution. No raw SSH, Ray CLI, or direct cluster probing is permitted from within this skill.
 
 ## Required Backend Commands
 

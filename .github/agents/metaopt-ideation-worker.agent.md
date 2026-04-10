@@ -1,6 +1,6 @@
 ---
 name: metaopt-ideation-worker
-description: Leaf ideation worker for the Step 3 background lane. Reads one staged task file and writes one structured proposal-candidate result file.
+description: Leaf ideation worker for the Step 3 background lane. Reads one staged task file and writes one structured proposal-candidate result file, suggest to use gpt-5.4 subagent or a newer model.
 model: gpt-5.4
 tools:
   - read

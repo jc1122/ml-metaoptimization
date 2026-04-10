@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
 import json
 import os
 import re
@@ -10,9 +11,11 @@ from typing import Any
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _guardrail_utils import check_lane_drift
-from _handoff_utils import emit_handoff, read_json, timestamp, write_json
+from _handoff_utils import emit_handoff, persist_state_handoff, read_json, timestamp
 
 _CONTROL_AGENT = "metaopt-background-control"
+_PLAN_HANDOFF_TYPE = "background_control.plan_background_work"
+_GATE_HANDOFF_TYPE = "background_control.gate_background_work"
 
 
 def _parse_args() -> argparse.Namespace:
@@ -97,6 +100,47 @@ def _task_markdown(slot_id: str, request: dict[str, Any], load_handoff: dict[str
                 "- optional `saturated` and `reason`",
             ]
         )
+    elif request["mode"] == "maintenance":
+        target_worktree = f".ml-metaopt/worktrees/{slot_id}"
+        objective = load_handoff.get("objective_snapshot", {})
+        lines.extend(
+            [
+                "",
+                "## Campaign Context",
+                f"- Goal: {load_handoff.get('goal', '')}",
+                f"- Metric: `{objective.get('metric', '')}`",
+                f"- Direction: `{objective.get('direction', '')}`",
+                "",
+                "## Target Worktree",
+                f"- Path: `{target_worktree}`",
+                "- Operate only within this isolated worktree. Do not modify the orchestrator working tree.",
+                "",
+                "## Output Mode",
+                "This is a findings-only maintenance pass. Do not produce code changes or patch artifacts.",
+                "Focus on identifying issues, risks, and improvement opportunities across these areas:",
+                "- leakage audit",
+                "- test gaps and determinism",
+                "- pipeline correctness",
+                "- data loading efficiency",
+                "- code quality issues",
+                "- profiling and speed risks",
+                "",
+                "## Patch Artifact Contract (for reference)",
+                "If code-modifying output were requested, each patch artifact would require:",
+                "- `producer_slot_id`: the dispatching slot ID",
+                "- `purpose`: short description of the change",
+                "- `patch_path`: path under `.ml-metaopt/artifacts/patches/`",
+                "- `target_worktree`: the worktree path the patch applies to",
+                "Patch artifacts are not produced in findings-only mode.",
+                "",
+                "## Output Schema",
+                "- `slot_id`",
+                "- `mode = \"maintenance\"`",
+                "- `status`",
+                "- `summary`",
+                "- optional `findings` (list of finding strings)",
+            ]
+        )
     return "\n".join(lines) + "\n"
 
 
@@ -107,6 +151,7 @@ def _plan_background_work(
     output_path: Path,
 ) -> dict[str, Any]:
     state = read_json(state_path)
+    previous_state = deepcopy(state)
     dispatch_policy = load_handoff["dispatch_policy"]
     proposal_policy = load_handoff["proposal_policy"]
 
@@ -114,10 +159,7 @@ def _plan_background_work(
         state["next_action"] = "select experiment"
         payload = {
             "schema_version": 1,
-            "producer": _CONTROL_AGENT,
-            "phase": "PLAN_BACKGROUND_WORK",
             "pool_status": "ready",
-            "recommended_executor_phase": "GATE_BACKGROUND_WORK",
             "recommended_next_machine_state": "SELECT_EXPERIMENT",
             "active_background_slots": len([slot for slot in state["active_slots"] if slot["slot_class"] == "background"]),
             "launch_requests": [],
@@ -126,15 +168,17 @@ def _plan_background_work(
             "shortfall_reason": "",
             "summary": "proposal pool already satisfies selection gate",
         }
-        write_json(state_path, state)
-        return emit_handoff(output_path, payload, handoff_type="PLAN_BACKGROUND_WORK", control_agent=_CONTROL_AGENT)
+        persist_state_handoff(state_path, previous_state, state, payload, control_agent=_CONTROL_AGENT)
+        return emit_handoff(output_path, payload, handoff_type=_PLAN_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
     active_background = [slot for slot in state["active_slots"] if slot["slot_class"] == "background" and slot["status"] == "running"]
     needed = max(0, dispatch_policy["background_slots"] - len(active_background))
     launch_requests: list[dict[str, Any]] = []
 
     next_count = len(state["next_proposals"])
-    use_maintenance = next_count >= proposal_policy["next_cap"]
+    current_iter = state["current_iteration"]
+    saturated_this_iter = state["proposal_cycle"].get("pool_saturated_iteration") == current_iter
+    use_maintenance = next_count >= proposal_policy["next_cap"] or saturated_this_iter
     mode = "maintenance" if use_maintenance else "ideation"
     worker_kind = "skill" if use_maintenance else "custom_agent"
     worker_ref = "repo-audit-refactor-optimize" if use_maintenance else "metaopt-ideation-worker"
@@ -186,10 +230,7 @@ def _plan_background_work(
 
     payload = {
         "schema_version": 1,
-        "producer": _CONTROL_AGENT,
-        "phase": "PLAN_BACKGROUND_WORK",
         "pool_status": "building",
-        "recommended_executor_phase": "EXECUTE_BACKGROUND_WORK",
         "recommended_next_machine_state": "MAINTAIN_BACKGROUND_POOL",
         "active_background_slots": len([slot for slot in state["active_slots"] if slot["slot_class"] == "background"]),
         "launch_requests": launch_requests,
@@ -198,8 +239,8 @@ def _plan_background_work(
         "shortfall_reason": state["proposal_cycle"]["shortfall_reason"],
         "summary": "background slots planned for continued proposal accumulation",
     }
-    write_json(state_path, state)
-    return emit_handoff(output_path, payload, handoff_type="PLAN_BACKGROUND_WORK", control_agent=_CONTROL_AGENT)
+    persist_state_handoff(state_path, previous_state, state, payload, control_agent=_CONTROL_AGENT)
+    return emit_handoff(output_path, payload, handoff_type=_PLAN_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
 
 def _gate_background_work(
@@ -210,6 +251,7 @@ def _gate_background_work(
     output_path: Path,
 ) -> dict[str, Any]:
     state = read_json(state_path)
+    previous_state = deepcopy(state)
     proposal_policy = load_handoff["proposal_policy"]
     sequence = _proposal_sequence(state)
     processed_slots: list[str] = []
@@ -238,11 +280,8 @@ def _gate_background_work(
                     "protocol violation: ideation result contains semantic-lane "
                     f"fields {drift_fields}; manual intervention required"
                 )
-                write_json(state_path, state)
                 payload = {
                     "schema_version": 1,
-                    "producer": _CONTROL_AGENT,
-                    "phase": "GATE_BACKGROUND_WORK",
                     "pool_status": "blocked",
                     "recommended_next_machine_state": "BLOCKED_PROTOCOL",
                     "current_proposal_count": len(state["current_proposals"]),
@@ -257,10 +296,11 @@ def _gate_background_work(
                         f"lane drift detected in {slot_id}: {drift_fields}"
                     ],
                 }
+                persist_state_handoff(state_path, previous_state, state, payload, control_agent=_CONTROL_AGENT)
                 return emit_handoff(
                     output_path,
                     payload,
-                    handoff_type="GATE_BACKGROUND_WORK",
+                    handoff_type=_GATE_HANDOFF_TYPE,
                     control_agent=_CONTROL_AGENT,
                 )
             candidates = result.get("proposal_candidates", [])
@@ -275,6 +315,20 @@ def _gate_background_work(
                 state[destination].append(enriched)
             rounds = state["proposal_cycle"]["ideation_rounds_by_slot"]
             rounds[slot_id] = rounds.get(slot_id, 0) + 1
+            if result.get("saturated"):
+                state["proposal_cycle"]["pool_saturated_iteration"] = state["current_iteration"]
+
+        elif slot["mode"] == "maintenance" and result.get("status") == "completed":
+            state.setdefault("maintenance_summary", [])
+            findings = result.get("findings", [])
+            summary_text = result.get("summary", "")
+            if findings or summary_text:
+                state["maintenance_summary"].append({
+                    "slot_id": slot_id,
+                    "iteration": state["current_iteration"],
+                    "summary": summary_text,
+                    "findings": findings if isinstance(findings, list) else [],
+                })
 
     if _ready_for_selection(state, load_handoff):
         state["proposal_cycle"]["shortfall_reason"] = ""
@@ -296,8 +350,6 @@ def _gate_background_work(
 
     payload = {
         "schema_version": 1,
-        "producer": _CONTROL_AGENT,
-        "phase": "GATE_BACKGROUND_WORK",
         "pool_status": pool_status,
         "recommended_next_machine_state": recommended_next_machine_state,
         "current_proposal_count": len(state["current_proposals"]),
@@ -306,8 +358,8 @@ def _gate_background_work(
         "processed_slots": processed_slots,
         "summary": summary,
     }
-    write_json(state_path, state)
-    return emit_handoff(output_path, payload, handoff_type="GATE_BACKGROUND_WORK", control_agent=_CONTROL_AGENT)
+    persist_state_handoff(state_path, previous_state, state, payload, control_agent=_CONTROL_AGENT)
+    return emit_handoff(output_path, payload, handoff_type=_GATE_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
 
 def main() -> int:

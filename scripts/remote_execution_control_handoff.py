@@ -1,16 +1,26 @@
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
 import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from _handoff_utils import emit_handoff, read_json, timestamp, write_json
+from _handoff_utils import (
+    emit_handoff,
+    load_campaign_handoff_is_ready,
+    persist_state_handoff,
+    read_json,
+    timestamp,
+    write_json,
+)
 
-_HANDOFF_TYPE = "REMOTE_EXECUTION_CONTROL"
 _CONTROL_AGENT = "metaopt-remote-execution-control"
+_PLAN_HANDOFF_TYPE = "remote_execution.plan_remote_batch"
+_GATE_HANDOFF_TYPE = "remote_execution.gate_remote_batch"
+_ANALYZE_HANDOFF_TYPE = "remote_execution.analyze_remote_results"
 
 
 def _parse_args() -> argparse.Namespace:
@@ -39,30 +49,27 @@ def _timestamp() -> str:
 
 def _runtime_error(
     output_path: Path,
-    phase: str | None,
-    action: str,
+    handoff_type: str,
+    recovery_action: str,
     summary: str,
     warnings: list[str] | None = None,
 ) -> dict[str, Any]:
     payload = {
         "schema_version": 1,
-        "producer": _CONTROL_AGENT,
-        "phase": phase,
-        "outcome": "runtime_error",
         "batch_id": None,
         "manifest_path": None,
         "worker_kind": None,
         "worker_ref": None,
         "task_file": None,
-        "recommended_executor_phase": None,
         "recommended_next_machine_state": None,
-        "recommended_next_action": action,
+        "recovery_action": recovery_action,
         "judgment": None,
         "delta": None,
+        "state_patch": None,
         "warnings": warnings or [],
         "summary": summary,
     }
-    return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
+    return emit_handoff(output_path, payload, handoff_type=handoff_type, control_agent=_CONTROL_AGENT)
 
 
 def _load_inputs(load_handoff_path: Path, state_path: Path) -> tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None]:
@@ -70,7 +77,7 @@ def _load_inputs(load_handoff_path: Path, state_path: Path) -> tuple[dict[str, A
         load_handoff = _read_json(load_handoff_path)
     except Exception as exc:
         return None, None, {"action": "repair or replace load_campaign.latest.json", "summary": "load handoff unreadable", "warnings": [str(exc)]}
-    if not isinstance(load_handoff, dict) or load_handoff.get("outcome") != "ok":
+    if not load_campaign_handoff_is_ready(load_handoff):
         return None, None, {"action": "repair or replace load_campaign.latest.json", "summary": "load handoff invalid", "warnings": []}
 
     try:
@@ -122,7 +129,7 @@ def _active_batch_id(state: dict[str, Any]) -> str | None:
     return remote_batches[-1].get("batch_id")
 
 
-def _analysis_task_markdown(batch_id: str, state: dict[str, Any]) -> str:
+def _analysis_task_markdown(batch_id: str, state: dict[str, Any], results_payload: dict[str, Any]) -> str:
     proposal_id = state["selected_experiment"]["proposal_id"]
     objective = state["objective_snapshot"]
     baseline = state["baseline"]
@@ -159,6 +166,11 @@ def _analysis_task_markdown(batch_id: str, state: dict[str, Any]) -> str:
             "",
             "## Result Context",
             f"- Remote Batch Record: `{json.dumps(remote_batch, sort_keys=True)}`",
+            "",
+            "## Batch Results",
+            f"```json",
+            f"{json.dumps(results_payload, indent=2, sort_keys=True)}",
+            f"```",
             "Execute only this assigned scope. Do not make control-plane decisions.",
             "Do not launch subagents, call backend commands, or mutate `.ml-metaopt/state.json`.",
             "Use the staged backend results plus current baseline to produce structured analysis JSON.",
@@ -174,7 +186,17 @@ def _analysis_task_markdown(batch_id: str, state: dict[str, Any]) -> str:
     ) + "\n"
 
 
-def _diagnosis_task_markdown(batch_id: str, failure_context: dict[str, Any]) -> str:
+def _diagnosis_task_markdown(
+    batch_id: str,
+    failure_context: dict[str, Any],
+    state: dict[str, Any],
+    load_handoff: dict[str, Any],
+) -> str:
+    design = (state.get("selected_experiment") or {}).get("design", {})
+    local_changeset = state.get("local_changeset", {})
+    diagnosis_history = (state.get("selected_experiment") or {}).get("diagnosis_history", [])
+    sanity_config = load_handoff.get("sanity", {})
+    attempt_number = (state.get("selected_experiment") or {}).get("sanity_attempts", 0)
     return "\n".join(
         [
             f"# Remote Diagnosis Task: {batch_id}",
@@ -185,11 +207,22 @@ def _diagnosis_task_markdown(batch_id: str, failure_context: dict[str, Any]) -> 
             "- Model Class: `strong_reasoner`",
             f"- Result File: `.ml-metaopt/worker-results/remote-diagnosis-{batch_id}.json`",
             "",
-            "Execute only this assigned scope. Do not make control-plane decisions.",
-            "Do not launch subagents, patch code, or mutate `.ml-metaopt/state.json`.",
+            "## Failure Context",
+            "- Failure Type: `remote_batch`",
             f"- Failure Classification: `{failure_context.get('classification', '')}`",
             f"- Failure Message: `{failure_context.get('message', '')}`",
             f"- Return Code: `{failure_context.get('returncode', '')}`",
+            "",
+            "## Experiment Context",
+            f"- Experiment Design: `{json.dumps(design, sort_keys=True)}`",
+            f"- Local Changeset Summary: `{json.dumps(local_changeset, sort_keys=True)}`",
+            f"- Sanity Config: `{json.dumps(sanity_config, sort_keys=True)}`",
+            f"- Previous Diagnoses: `{json.dumps(diagnosis_history, sort_keys=True)}`",
+            f"- Attempt Number: `{attempt_number}`",
+            "- Max Attempts: `3`",
+            "",
+            "Execute only this assigned scope. Do not make control-plane decisions.",
+            "Do not launch subagents, patch code, or mutate `.ml-metaopt/state.json`.",
             "",
             "Expected JSON fields:",
             "- `root_cause`",
@@ -212,10 +245,11 @@ def _improvement_clears_threshold(state: dict[str, Any], analysis_result: dict[s
 
 def _plan_remote_batch(load_handoff: dict[str, Any], state_path: Path, output_path: Path) -> dict[str, Any]:
     state = _read_json(state_path)
+    previous_state = deepcopy(state)
     if state.get("local_changeset") is None:
         return _runtime_error(
             output_path,
-            "PLAN_REMOTE_BATCH",
+            _PLAN_HANDOFF_TYPE,
             "repair local_changeset before enqueue",
             "local_changeset missing",
         )
@@ -225,7 +259,6 @@ def _plan_remote_batch(load_handoff: dict[str, Any], state_path: Path, output_pa
         batch_id = _next_batch_id(state)
         manifest_path = str(Path(".ml-metaopt") / "artifacts" / "manifests" / f"{batch_id}.json")
         state["pending_remote_batch"] = {"batch_id": batch_id, "manifest_path": manifest_path}
-        _write_json(state_path, state)
     else:
         batch_id = pending_batch["batch_id"]
         manifest_path = pending_batch["manifest_path"]
@@ -233,16 +266,11 @@ def _plan_remote_batch(load_handoff: dict[str, Any], state_path: Path, output_pa
     enqueue_command = load_handoff["remote_queue"]["enqueue_command"]
     payload = {
         "schema_version": 1,
-        "producer": _CONTROL_AGENT,
-        "phase": "PLAN_REMOTE_BATCH",
-        "outcome": "planned",
         "batch_id": batch_id,
         "manifest_path": manifest_path,
         "task_file": None,
         "enqueue_command": enqueue_command,
-        "recommended_executor_phase": "EXECUTE_REMOTE_ENQUEUE",
         "recommended_next_machine_state": "ENQUEUE_REMOTE_BATCH",
-        "recommended_next_action": "write manifest and enqueue batch",
         "judgment": None,
         "delta": None,
         "executor_directives": [
@@ -263,7 +291,8 @@ def _plan_remote_batch(load_handoff: dict[str, Any], state_path: Path, output_pa
         "warnings": [],
         "summary": "remote batch is ready for manifest write and enqueue",
     }
-    return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
+    persist_state_handoff(state_path, previous_state, state, payload, control_agent=_CONTROL_AGENT)
+    return emit_handoff(output_path, payload, handoff_type=_PLAN_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
 
 def _validate_enqueue_ack(payload: dict[str, Any], batch_id: str) -> bool:
@@ -284,6 +313,7 @@ def _gate_remote_batch(
     output_path: Path,
 ) -> dict[str, Any]:
     state = _read_json(state_path)
+    previous_state = deepcopy(state)
     if state["machine_state"] == "ENQUEUE_REMOTE_BATCH":
         pending_batch = _pending_batch(state)
         batch_id = pending_batch["batch_id"] if pending_batch is not None else _next_batch_id(state)
@@ -291,7 +321,7 @@ def _gate_remote_batch(
         if not enqueue_path.exists():
             return _runtime_error(
                 output_path,
-                "GATE_REMOTE_BATCH",
+                _GATE_HANDOFF_TYPE,
                 "stage enqueue backend response before gating",
                 "enqueue acknowledgement missing",
             )
@@ -299,7 +329,7 @@ def _gate_remote_batch(
         if not _validate_enqueue_ack(enqueue_payload, batch_id):
             return _runtime_error(
                 output_path,
-                "GATE_REMOTE_BATCH",
+                _GATE_HANDOFF_TYPE,
                 "repair staged enqueue backend response",
                 "enqueue acknowledgement invalid",
             )
@@ -310,23 +340,17 @@ def _gate_remote_batch(
                 "status": "queued",
             }
         )
-        state.pop("pending_remote_batch", None)
+        state["pending_remote_batch"] = None
         state["machine_state"] = "WAIT_FOR_REMOTE_BATCH"
         state["next_action"] = "poll remote batch status"
-        _write_json(state_path, state)
         payload = {
             "schema_version": 1,
-            "producer": _CONTROL_AGENT,
-            "phase": "GATE_REMOTE_BATCH",
-            "outcome": "waiting",
             "batch_id": batch_id,
             "manifest_path": None,
             "worker_kind": None,
             "worker_ref": None,
             "task_file": None,
-            "recommended_executor_phase": None,
             "recommended_next_machine_state": "WAIT_FOR_REMOTE_BATCH",
-            "recommended_next_action": "poll remote batch status",
             "judgment": None,
             "delta": None,
             "executor_directives": [
@@ -340,13 +364,14 @@ def _gate_remote_batch(
             "warnings": [],
             "summary": "enqueue acknowledged and batch is now tracked remotely",
         }
-        return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
+        persist_state_handoff(state_path, previous_state, state, payload, control_agent=_CONTROL_AGENT)
+        return emit_handoff(output_path, payload, handoff_type=_GATE_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
     batch_id = _active_batch_id(state)
     if not batch_id:
         return _runtime_error(
             output_path,
-            "GATE_REMOTE_BATCH",
+            _GATE_HANDOFF_TYPE,
             "repair remote_batches before gating",
             "no active remote batch found",
         )
@@ -355,7 +380,7 @@ def _gate_remote_batch(
     if not status_path.exists():
         return _runtime_error(
             output_path,
-            "GATE_REMOTE_BATCH",
+            _GATE_HANDOFF_TYPE,
             "run status_command for active batch",
             "remote status payload missing",
         )
@@ -363,7 +388,7 @@ def _gate_remote_batch(
     if status_payload.get("batch_id") != batch_id or status_payload.get("status") not in {"queued", "running", "completed", "failed"}:
         return _runtime_error(
             output_path,
-            "GATE_REMOTE_BATCH",
+            _GATE_HANDOFF_TYPE,
             "repair staged remote status payload",
             "remote status payload invalid",
         )
@@ -376,20 +401,14 @@ def _gate_remote_batch(
     if status_payload["status"] in {"queued", "running"}:
         state["machine_state"] = "WAIT_FOR_REMOTE_BATCH"
         state["next_action"] = "poll remote batch status"
-        _write_json(state_path, state)
         payload = {
             "schema_version": 1,
-            "producer": _CONTROL_AGENT,
-            "phase": "GATE_REMOTE_BATCH",
-            "outcome": "waiting",
             "batch_id": batch_id,
             "manifest_path": None,
             "worker_kind": None,
             "worker_ref": None,
             "task_file": None,
-            "recommended_executor_phase": None,
             "recommended_next_machine_state": "WAIT_FOR_REMOTE_BATCH",
-            "recommended_next_action": "poll remote batch status",
             "judgment": None,
             "delta": None,
             "executor_directives": [
@@ -403,27 +422,22 @@ def _gate_remote_batch(
             "warnings": [],
             "summary": "remote batch is still in flight",
         }
-        return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
+        persist_state_handoff(state_path, previous_state, state, payload, control_agent=_CONTROL_AGENT)
+        return emit_handoff(output_path, payload, handoff_type=_GATE_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
     if status_payload["status"] == "completed":
         results_path = executor_events_dir / f"remote-results-{batch_id}.json"
         if not results_path.exists():
             state["machine_state"] = "WAIT_FOR_REMOTE_BATCH"
             state["next_action"] = "fetch remote batch results"
-            _write_json(state_path, state)
             payload = {
                 "schema_version": 1,
-                "producer": _CONTROL_AGENT,
-                "phase": "GATE_REMOTE_BATCH",
-                "outcome": "fetch_results",
                 "batch_id": batch_id,
                 "manifest_path": None,
                 "worker_kind": None,
                 "worker_ref": None,
                 "task_file": None,
-                "recommended_executor_phase": "FETCH_REMOTE_RESULTS",
                 "recommended_next_machine_state": "WAIT_FOR_REMOTE_BATCH",
-                "recommended_next_action": "run results_command for active batch",
                 "judgment": None,
                 "delta": None,
                 "executor_directives": [
@@ -437,29 +451,25 @@ def _gate_remote_batch(
                 "warnings": [],
                 "summary": "remote batch completed and results must be fetched",
             }
-            return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
+            persist_state_handoff(state_path, previous_state, state, payload, control_agent=_CONTROL_AGENT)
+            return emit_handoff(output_path, payload, handoff_type=_GATE_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
         analysis_result_path = worker_results_dir / f"remote-analysis-{batch_id}.json"
         if not analysis_result_path.exists():
             task_path = tasks_dir / f"remote-analysis-{batch_id}.md"
             task_path.parent.mkdir(parents=True, exist_ok=True)
-            task_path.write_text(_analysis_task_markdown(batch_id, state), encoding="utf-8")
+            results_payload_content = _read_json(results_path)
+            task_path.write_text(_analysis_task_markdown(batch_id, state, results_payload_content), encoding="utf-8")
             state["machine_state"] = "WAIT_FOR_REMOTE_BATCH"
             state["next_action"] = "run remote results analysis"
-            _write_json(state_path, state)
             payload = {
                 "schema_version": 1,
-                "producer": _CONTROL_AGENT,
-                "phase": "GATE_REMOTE_BATCH",
-                "outcome": "run_analysis",
                 "batch_id": batch_id,
                 "manifest_path": None,
                 "worker_kind": "custom_agent",
                 "worker_ref": "metaopt-analysis-worker",
                 "task_file": str(Path(".ml-metaopt") / "tasks" / f"remote-analysis-{batch_id}.md"),
-                "recommended_executor_phase": "RUN_REMOTE_ANALYSIS",
                 "recommended_next_machine_state": "WAIT_FOR_REMOTE_BATCH",
-                "recommended_next_action": "launch remote results analysis worker",
                 "judgment": None,
                 "delta": None,
                 "launch_requests": [
@@ -476,52 +486,42 @@ def _gate_remote_batch(
                 "warnings": [],
                 "summary": "remote results are staged and ready for semantic analysis",
             }
-            return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
+            persist_state_handoff(state_path, previous_state, state, payload, control_agent=_CONTROL_AGENT)
+            return emit_handoff(output_path, payload, handoff_type=_GATE_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
         state["machine_state"] = "ANALYZE_RESULTS"
         state["next_action"] = "analyze remote results"
-        _write_json(state_path, state)
         payload = {
             "schema_version": 1,
-            "producer": _CONTROL_AGENT,
-            "phase": "GATE_REMOTE_BATCH",
-            "outcome": "analyze_results",
             "batch_id": batch_id,
             "manifest_path": None,
             "worker_kind": None,
             "worker_ref": None,
             "task_file": None,
-            "recommended_executor_phase": None,
             "recommended_next_machine_state": "ANALYZE_RESULTS",
-            "recommended_next_action": "analyze remote results",
             "judgment": None,
             "delta": None,
             "warnings": [],
             "summary": "remote results and analysis artifacts are both available",
         }
-        return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
+        persist_state_handoff(state_path, previous_state, state, payload, control_agent=_CONTROL_AGENT)
+        return emit_handoff(output_path, payload, handoff_type=_GATE_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
     diagnosis_path = worker_results_dir / f"remote-diagnosis-{batch_id}.json"
     if not diagnosis_path.exists():
         task_path = tasks_dir / f"remote-diagnosis-{batch_id}.md"
         task_path.parent.mkdir(parents=True, exist_ok=True)
-        task_path.write_text(_diagnosis_task_markdown(batch_id, status_payload), encoding="utf-8")
+        task_path.write_text(_diagnosis_task_markdown(batch_id, status_payload, state, load_handoff), encoding="utf-8")
         state["machine_state"] = "WAIT_FOR_REMOTE_BATCH"
         state["next_action"] = "run remote failure diagnosis"
-        _write_json(state_path, state)
         payload = {
             "schema_version": 1,
-            "producer": _CONTROL_AGENT,
-            "phase": "GATE_REMOTE_BATCH",
-            "outcome": "run_remote_diagnosis",
             "batch_id": batch_id,
             "manifest_path": None,
             "worker_kind": "custom_agent",
             "worker_ref": "metaopt-diagnosis-worker",
             "task_file": str(Path(".ml-metaopt") / "tasks" / f"remote-diagnosis-{batch_id}.md"),
-            "recommended_executor_phase": "RUN_REMOTE_DIAGNOSIS",
             "recommended_next_machine_state": "WAIT_FOR_REMOTE_BATCH",
-            "recommended_next_action": "launch remote failure diagnosis worker",
             "judgment": None,
             "delta": None,
             "launch_requests": [
@@ -538,7 +538,8 @@ def _gate_remote_batch(
             "warnings": [],
             "summary": "remote batch failed and needs diagnosis before terminal routing",
         }
-        return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
+        persist_state_handoff(state_path, previous_state, state, payload, control_agent=_CONTROL_AGENT)
+        return emit_handoff(output_path, payload, handoff_type=_GATE_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
     diagnosis_payload = _read_json(diagnosis_path)
     recommendation = diagnosis_payload.get("fix_recommendation", {})
@@ -562,35 +563,28 @@ def _gate_remote_batch(
         state["status"] = "BLOCKED_CONFIG"
         state["machine_state"] = "BLOCKED_CONFIG"
         state["next_action"] = recommendation.get("config_guidance") or "repair remote execution configuration"
-        outcome = "blocked_config"
         next_state = "BLOCKED_CONFIG"
     else:
         state["status"] = "FAILED"
         state["machine_state"] = "FAILED"
         state["next_action"] = diagnosis_payload.get("root_cause") or "stop after remote execution failure"
-        outcome = "failed"
         next_state = "FAILED"
 
-    _write_json(state_path, state)
     payload = {
         "schema_version": 1,
-        "producer": _CONTROL_AGENT,
-        "phase": "GATE_REMOTE_BATCH",
-        "outcome": outcome,
         "batch_id": batch_id,
         "manifest_path": None,
         "worker_kind": None,
         "worker_ref": None,
         "task_file": None,
-        "recommended_executor_phase": None,
         "recommended_next_machine_state": next_state,
-        "recommended_next_action": state["next_action"],
         "judgment": None,
         "delta": None,
         "warnings": [],
         "summary": "remote failure diagnosis produced a terminal routing decision",
     }
-    return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
+    persist_state_handoff(state_path, previous_state, state, payload, control_agent=_CONTROL_AGENT)
+    return emit_handoff(output_path, payload, handoff_type=_GATE_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
 
 def _analyze_remote_results(
@@ -600,11 +594,12 @@ def _analyze_remote_results(
     output_path: Path,
 ) -> dict[str, Any]:
     state = _read_json(state_path)
+    previous_state = deepcopy(state)
     batch_id = _active_batch_id(state)
     if not batch_id:
         return _runtime_error(
             output_path,
-            "ANALYZE_REMOTE_RESULTS",
+            _ANALYZE_HANDOFF_TYPE,
             "repair remote_batches before analysis",
             "no completed remote batch found",
         )
@@ -622,39 +617,34 @@ def _analyze_remote_results(
             f"protocol violation: semantic result judgment requires {' and '.join(missing)}; "
             "manual intervention required"
         )
-        _write_json(state_path, state)
         payload = {
             "schema_version": 1,
-            "producer": _CONTROL_AGENT,
-            "phase": "ANALYZE_REMOTE_RESULTS",
-            "outcome": "blocked_protocol",
             "batch_id": batch_id,
             "manifest_path": None,
             "worker_kind": None,
             "worker_ref": None,
             "task_file": None,
-            "recommended_executor_phase": None,
             "recommended_next_machine_state": "BLOCKED_PROTOCOL",
-            "recommended_next_action": state["next_action"],
             "judgment": None,
             "delta": None,
             "warnings": [f"missing: {', '.join(missing)}"],
             "summary": "semantic result judgment blocked: required artifacts missing",
         }
-        return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
+        persist_state_handoff(state_path, previous_state, state, payload, control_agent=_CONTROL_AGENT)
+        return emit_handoff(output_path, payload, handoff_type=_ANALYZE_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
     results_payload = _read_json(results_path)
     analysis_payload = _read_json(analysis_path)
     if results_payload.get("batch_id") != batch_id or results_payload.get("status") != "completed":
         return _runtime_error(
             output_path,
-            "ANALYZE_REMOTE_RESULTS",
+            _ANALYZE_HANDOFF_TYPE,
             "repair staged remote results payload",
             "remote results payload invalid",
         )
     if analysis_payload.get("judgment") not in {"improvement", "regression", "neutral"}:
         return _runtime_error(
             output_path,
-            "ANALYZE_REMOTE_RESULTS",
+            _ANALYZE_HANDOFF_TYPE,
             "repair staged remote analysis payload",
             "remote analysis payload invalid",
         )
@@ -668,7 +658,7 @@ def _analyze_remote_results(
     if missing_fields:
         return _runtime_error(
             output_path,
-            "ANALYZE_REMOTE_RESULTS",
+            _ANALYZE_HANDOFF_TYPE,
             "repair staged remote analysis/results payload",
             f"required fields missing: {', '.join(missing_fields)}",
         )
@@ -695,34 +685,39 @@ def _analyze_remote_results(
     )
     state["machine_state"] = "ROLL_ITERATION"
     state["next_action"] = "roll iteration"
-    _write_json(state_path, state)
 
     payload = {
         "schema_version": 1,
-        "producer": _CONTROL_AGENT,
-        "phase": "ANALYZE_REMOTE_RESULTS",
-        "outcome": "analyzed",
         "batch_id": batch_id,
         "manifest_path": None,
         "worker_kind": None,
         "worker_ref": None,
         "task_file": None,
-        "recommended_executor_phase": None,
         "recommended_next_machine_state": "ROLL_ITERATION",
-        "recommended_next_action": "roll iteration",
         "judgment": analysis_payload["judgment"],
         "delta": analysis_payload["delta"],
         "warnings": [],
         "summary": "remote results analysis updated campaign state and baseline accounting",
     }
-    return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
+    persist_state_handoff(state_path, previous_state, state, payload, control_agent=_CONTROL_AGENT)
+    return emit_handoff(output_path, payload, handoff_type=_ANALYZE_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
 
 def main() -> int:
     args = _parse_args()
     load_handoff, _, error = _load_inputs(Path(args.load_handoff), Path(args.state_path))
     if error is not None:
-        payload = _runtime_error(Path(args.output), None, error["action"], error["summary"], error["warnings"])
+        payload = _runtime_error(
+            Path(args.output),
+            {
+                "plan_remote_batch": _PLAN_HANDOFF_TYPE,
+                "gate_remote_batch": _GATE_HANDOFF_TYPE,
+                "analyze_remote_results": _ANALYZE_HANDOFF_TYPE,
+            }[args.mode],
+            error["action"],
+            error["summary"],
+            error["warnings"],
+        )
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
 

@@ -19,10 +19,10 @@ class IterationCloseControlAgentTests(unittest.TestCase):
         handoff.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "schema_version": 1,
-            "producer": "metaopt-load-campaign",
-            "phase": "LOAD_CAMPAIGN",
-            "outcome": "ok",
+            "handoff_type": "load_campaign.validate",
+            "control_agent": "metaopt-load-campaign",
             "campaign_id": "market-forecast-v3",
+            "campaign_valid": True,
             "campaign_identity_hash": "sha256:f50928628873800b25a5dfb41f2fd6c93acfc210424953f53a5005e09379fa4c",
             "runtime_config_hash": "sha256:6f59ca57fb3da56f815d7fb03f8be7335fa9d14344c49154308e9e65990e9ac6",
             "proposal_policy": {
@@ -37,6 +37,8 @@ class IterationCloseControlAgentTests(unittest.TestCase):
                 "target_metric": 0.1200,
                 "max_wallclock_hours": 72,
             },
+            "recommended_next_machine_state": "HYDRATE_STATE",
+            "state_patch": None,
             "warnings": [],
             "summary": "ok",
         }
@@ -238,8 +240,7 @@ class IterationCloseControlAgentTests(unittest.TestCase):
                 state=self._base_state(),
             )
 
-            self.assertEqual(payload["phase"], "PLAN_ROLL_ITERATION")
-            self.assertEqual(payload["outcome"], "planned")
+            self.assertEqual(payload["handoff_type"], "iteration_close.plan_roll_iteration")
             self.assertEqual(payload["worker_kind"], "custom_agent")
             self.assertEqual(payload["worker_ref"], "metaopt-rollover-worker")
             self.assertEqual(payload["recommended_next_machine_state"], "ROLL_ITERATION")
@@ -281,8 +282,8 @@ class IterationCloseControlAgentTests(unittest.TestCase):
                 },
             )
 
-            self.assertEqual(payload["outcome"], "rollover_complete")
             self.assertTrue(payload["continue_campaign"])
+            self.assertEqual(payload["recommended_next_machine_state"], "QUIESCE_SLOTS")
             self.assertEqual(updated_state["machine_state"], "QUIESCE_SLOTS")
             self.assertIsNone(updated_state["selected_experiment"])
             self.assertEqual(updated_state["current_iteration"], 4)
@@ -314,7 +315,7 @@ class IterationCloseControlAgentTests(unittest.TestCase):
             )
 
             merged = updated_state["current_proposals"][0]
-            self.assertEqual(payload["outcome"], "rollover_complete")
+            self.assertEqual(payload["recommended_next_machine_state"], "QUIESCE_SLOTS")
             self.assertEqual(merged["source_slot_id"], "rollover")
             self.assertEqual(merged["creation_iteration"], 4)
             self.assertTrue(merged["proposal_id"].startswith("market-forecast-v3-p"))
@@ -371,7 +372,7 @@ class IterationCloseControlAgentTests(unittest.TestCase):
                 },
             )
 
-            self.assertEqual(payload["outcome"], "continue")
+            self.assertEqual(payload["recommended_next_machine_state"], "MAINTAIN_BACKGROUND_POOL")
             self.assertEqual(updated_state["machine_state"], "MAINTAIN_BACKGROUND_POOL")
             self.assertEqual(updated_state["status"], "RUNNING")
             self.assertEqual(updated_state["active_slots"], [])
@@ -399,7 +400,7 @@ class IterationCloseControlAgentTests(unittest.TestCase):
                 },
             )
 
-            self.assertEqual(payload["outcome"], "complete")
+            self.assertEqual(payload["recommended_next_machine_state"], "COMPLETE")
             self.assertEqual(updated_state["status"], "COMPLETE")
             self.assertEqual(updated_state["machine_state"], "COMPLETE")
 
@@ -452,7 +453,6 @@ class IterationCloseControlAgentTests(unittest.TestCase):
                 },
             )
 
-            self.assertEqual(payload["outcome"], "complete")
             directives = payload["executor_directives"]
             self.assertEqual(
                 [directive["action"] for directive in directives],
@@ -488,7 +488,6 @@ class IterationCloseControlAgentTests(unittest.TestCase):
                 },
             )
 
-            self.assertEqual(payload["outcome"], "blocked_protocol")
             self.assertEqual(updated_state["status"], "BLOCKED_PROTOCOL")
             self.assertEqual(updated_state["machine_state"], "BLOCKED_PROTOCOL")
             self.assertEqual(updated_state["active_slots"], [])
@@ -588,7 +587,8 @@ class IterationCloseControlAgentTests(unittest.TestCase):
             )
 
             # Must be runtime_error — not a synthetic advance
-            self.assertEqual(payload["outcome"], "runtime_error")
+            self.assertEqual(payload["summary"], "rollover worker result missing")
+            self.assertIsNone(payload["recommended_next_machine_state"])
             # Iteration must NOT have been incremented
             self.assertEqual(updated_state["current_iteration"], original_iteration,
                 "iteration must not advance without rollover worker output")
@@ -619,7 +619,6 @@ class IterationCloseControlAgentTests(unittest.TestCase):
                 },
             )
 
-            self.assertEqual(payload["outcome"], "blocked_protocol")
             self.assertEqual(payload["recommended_next_machine_state"], "BLOCKED_PROTOCOL")
             self.assertEqual(updated_state["status"], "BLOCKED_PROTOCOL")
             self.assertEqual(updated_state["machine_state"], "BLOCKED_PROTOCOL")
@@ -651,7 +650,6 @@ class IterationCloseControlAgentTests(unittest.TestCase):
                 },
             )
 
-            self.assertEqual(payload["outcome"], "blocked_protocol")
             self.assertEqual(payload["recommended_next_machine_state"], "BLOCKED_PROTOCOL")
             self.assertEqual(updated_state["status"], "BLOCKED_PROTOCOL")
             self.assertEqual(updated_state["machine_state"], "BLOCKED_PROTOCOL")
@@ -682,7 +680,6 @@ class IterationCloseControlAgentTests(unittest.TestCase):
                 },
             )
 
-            self.assertEqual(payload["outcome"], "continue")
             self.assertEqual(payload["executor_directives"], [])
 
     # ── executor_directives authoritativeness tests ─────────────────────
@@ -787,14 +784,21 @@ class IterationCloseControlAgentTests(unittest.TestCase):
                 mode="plan_roll_iteration",
                 state=state,
             )
-            self.assertEqual(payload["outcome"], "runtime_error")
+            self.assertEqual(payload["summary"], "analysis summary missing")
+            self.assertIsNone(payload["recommended_next_machine_state"])
             self.assertEqual(payload["executor_directives"], [])
 
-    def _assert_envelope_keys(self, payload: dict, *, handoff_type: str = "ITERATION_CLOSE_CONTROL", control_agent: str = "metaopt-iteration-close-control") -> None:
+    def _assert_envelope_keys(
+        self,
+        payload: dict,
+        *,
+        handoff_type: str,
+        control_agent: str = "metaopt-iteration-close-control",
+    ) -> None:
         self.assertEqual(payload["handoff_type"], handoff_type)
         self.assertEqual(payload["control_agent"], control_agent)
         self.assertIsInstance(payload["launch_requests"], list)
-        self.assertIsInstance(payload["state_patch"], dict)
+        self.assertTrue(payload["state_patch"] is None or isinstance(payload["state_patch"], dict))
         self.assertIsInstance(payload["executor_directives"], list)
         self.assertIn("summary", payload)
         self.assertIn("warnings", payload)
@@ -807,7 +811,7 @@ class IterationCloseControlAgentTests(unittest.TestCase):
                 mode="plan_roll_iteration",
                 state=self._base_state(),
             )
-            self._assert_envelope_keys(payload)
+            self._assert_envelope_keys(payload, handoff_type="iteration_close.plan_roll_iteration")
 
     def test_quiesce_slots_envelope_keys(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir_str:
@@ -830,7 +834,7 @@ class IterationCloseControlAgentTests(unittest.TestCase):
                     }
                 },
             )
-            self._assert_envelope_keys(payload)
+            self._assert_envelope_keys(payload, handoff_type="iteration_close.quiesce_slots")
 
     def test_agent_profile_exists_and_declares_all_modes(self) -> None:
         self.assertTrue(AGENT_PROFILE.exists(), f"missing {AGENT_PROFILE}")
@@ -849,6 +853,39 @@ class IterationCloseControlAgentTests(unittest.TestCase):
         self.assertIn("model: gpt-5.4", content)
         self.assertIn("Do not launch subagents.", content)
         self.assertIn("Do not mutate `.ml-metaopt/state.json`.", content)
+
+    def test_plan_roll_iteration_emits_launch_request_for_rollover_worker(self) -> None:
+        """plan_roll_iteration must include the rollover worker in launch_requests.
+
+        The orchestrator dispatches workers mechanically via launch_requests per
+        the control-protocol contract.  Body fields such as worker_ref and task_file
+        are informational only.  Without a launch_requests entry the orchestrator
+        has no protocol-compliant signal to launch the rollover worker, so the gate
+        phase would have no worker output to consume.
+
+        Rollover uses inline dispatch (no slot entry), so the launch_requests entry
+        must not carry slot_class or mode.
+        """
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            payload, _, _ = self._run(
+                Path(tempdir_str),
+                mode="plan_roll_iteration",
+                state=self._base_state(),
+            )
+            self.assertGreater(
+                len(payload["launch_requests"]),
+                0,
+                "plan_roll_iteration must include rollover worker in launch_requests",
+            )
+            lr = payload["launch_requests"][0]
+            self.assertEqual(lr["worker_ref"], "metaopt-rollover-worker")
+            self.assertEqual(lr["model_class"], "strong_reasoner")
+            self.assertEqual(lr["preferred_model"], "claude-opus-4.6-fast")
+            # Inline dispatch: no slot_class or mode
+            self.assertNotIn("slot_class", lr,
+                "rollover is inline dispatch and must not carry slot_class")
+            self.assertNotIn("mode", lr,
+                "rollover is inline dispatch and must not carry mode")
 
 
 if __name__ == "__main__":

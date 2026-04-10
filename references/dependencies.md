@@ -56,7 +56,7 @@ The orchestrator dispatches these named worker targets during the campaign. Each
 
 Required worker targets:
 - `metaopt-ideation-worker` — background ideation lane custom agent
-- `metaopt-selection-worker` — auxiliary synthesis lane
+- `metaopt-selection-worker` — auxiliary selection lane
 - `metaopt-design-worker` — auxiliary design lane
 - `metaopt-materialization-worker` — auxiliary materialization lane custom agent
 - `metaopt-diagnosis-worker` — auxiliary diagnosis lane custom agent

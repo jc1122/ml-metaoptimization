@@ -63,12 +63,11 @@ class LoadCampaignHandoffTests(unittest.TestCase):
 
             payload = self._run_tool(tempdir, campaign_text=campaign, state_text=state)
 
-            self.assertEqual(payload["phase"], "LOAD_CAMPAIGN")
-            self.assertEqual(payload["outcome"], "ok")
+            self.assertEqual(payload["handoff_type"], "load_campaign.validate")
             self.assertTrue(payload["campaign_valid"])
             self.assertEqual(payload["campaign_id"], "market-forecast-v3")
             self.assertEqual(payload["recommended_next_machine_state"], "HYDRATE_STATE")
-            self.assertEqual(payload["recommended_next_action"], "hydrate or initialize orchestrator state")
+            self.assertIsNone(payload["recovery_action"])
             self.assertEqual(payload["goal"], "Improve out-of-sample forecast quality without temporal leakage.")
             self.assertIsInstance(payload["stop_conditions"], dict)
             self.assertIsInstance(payload["datasets"], list)
@@ -127,10 +126,10 @@ class LoadCampaignHandoffTests(unittest.TestCase):
 
             payload = self._run_tool(tempdir, campaign_text=invalid_campaign)
 
-            self.assertEqual(payload["outcome"], "blocked_config")
+            self.assertEqual(payload["handoff_type"], "load_campaign.validate")
             self.assertFalse(payload["campaign_valid"])
             self.assertEqual(payload["recommended_next_machine_state"], "BLOCKED_CONFIG")
-            self.assertEqual(payload["recommended_next_action"], "repair ml_metaopt_campaign.yaml")
+            self.assertEqual(payload["recovery_action"], "repair ml_metaopt_campaign.yaml")
             self.assertGreaterEqual(len(payload["validation_issues"]), 3)
             self.assertIn("state file not found", payload["warnings"])
             joined_issues = " ".join(payload["validation_issues"])
@@ -145,9 +144,10 @@ class LoadCampaignHandoffTests(unittest.TestCase):
 
             payload = self._run_tool(tempdir, campaign_text=campaign, state_text=state)
 
-            self.assertEqual(payload["outcome"], "ok")
+            self.assertEqual(payload["handoff_type"], "load_campaign.validate")
             self.assertEqual(payload["state_peek"]["identity_relation"], "mismatch")
             self.assertEqual(payload["recommended_next_machine_state"], "HYDRATE_STATE")
+            self.assertIsNone(payload["recovery_action"])
             self.assertIn("state identity mismatch detected", payload["warnings"])
 
     def test_valid_handoff_contains_control_protocol_envelope_keys(self) -> None:
@@ -160,10 +160,10 @@ class LoadCampaignHandoffTests(unittest.TestCase):
             self._make_preflight_artifact(tempdir)
             payload = self._run_tool(tempdir, campaign_text=campaign, state_text=state)
 
-            self.assertEqual(payload["handoff_type"], "LOAD_CAMPAIGN")
+            self.assertEqual(payload["handoff_type"], "load_campaign.validate")
             self.assertEqual(payload["control_agent"], "metaopt-load-campaign")
             self.assertEqual(payload["launch_requests"], [])
-            self.assertEqual(payload["state_patch"], {})
+            self.assertIsNone(payload["state_patch"])
             self.assertEqual(payload["executor_directives"], [])
             self.assertIn("summary", payload)
             self.assertIn("warnings", payload)
@@ -174,10 +174,10 @@ class LoadCampaignHandoffTests(unittest.TestCase):
             invalid_campaign = "version: 2\ncampaign_id: bad\n"
             payload = self._run_tool(tempdir, campaign_text=invalid_campaign)
 
-            self.assertEqual(payload["handoff_type"], "LOAD_CAMPAIGN")
+            self.assertEqual(payload["handoff_type"], "load_campaign.validate")
             self.assertEqual(payload["control_agent"], "metaopt-load-campaign")
             self.assertEqual(payload["launch_requests"], [])
-            self.assertEqual(payload["state_patch"], {})
+            self.assertIsNone(payload["state_patch"])
             self.assertEqual(payload["executor_directives"], [])
 
     def test_agent_profile_exists_and_is_programmatic_only(self) -> None:
@@ -238,7 +238,7 @@ class LoadCampaignHandoffTests(unittest.TestCase):
 
             payload = self._run_tool(tempdir, campaign_text=campaign, state_text=state)
 
-            self.assertEqual(payload["outcome"], "ok")
+            self.assertEqual(payload["handoff_type"], "load_campaign.validate")
             self.assertEqual(payload["recommended_next_machine_state"], "HYDRATE_STATE")
             self.assertTrue(payload["campaign_valid"])
             # Advisory preflight_readiness peek must be present and inspectable
@@ -255,9 +255,9 @@ class LoadCampaignHandoffTests(unittest.TestCase):
 
             payload = self._run_tool(tempdir, campaign_text=campaign)
 
-            self.assertEqual(payload["outcome"], "blocked_config")
+            self.assertEqual(payload["handoff_type"], "load_campaign.validate")
             self.assertEqual(payload["recommended_next_machine_state"], "BLOCKED_CONFIG")
-            self.assertIn("metaopt-preflight", payload["recommended_next_action"])
+            self.assertIn("metaopt-preflight", payload["recovery_action"])
             pr = payload["preflight_readiness"]
             self.assertFalse(pr["exists"])
             self.assertFalse(pr["binding_fresh"])
@@ -276,9 +276,9 @@ class LoadCampaignHandoffTests(unittest.TestCase):
 
             payload = self._run_tool(tempdir, campaign_text=campaign)
 
-            self.assertEqual(payload["outcome"], "blocked_config")
+            self.assertEqual(payload["handoff_type"], "load_campaign.validate")
             self.assertEqual(payload["recommended_next_machine_state"], "BLOCKED_CONFIG")
-            self.assertIn("metaopt-preflight", payload["recommended_next_action"])
+            self.assertIn("metaopt-preflight", payload["recovery_action"])
             pr = payload["preflight_readiness"]
             self.assertTrue(pr["exists"])
             self.assertFalse(pr["binding_fresh"])
@@ -293,9 +293,9 @@ class LoadCampaignHandoffTests(unittest.TestCase):
 
             payload = self._run_tool(tempdir, campaign_text=campaign)
 
-            self.assertEqual(payload["outcome"], "blocked_config")
+            self.assertEqual(payload["handoff_type"], "load_campaign.validate")
             self.assertEqual(payload["recommended_next_machine_state"], "BLOCKED_CONFIG")
-            self.assertIn("metaopt-preflight", payload["recommended_next_action"])
+            self.assertIn("metaopt-preflight", payload["recovery_action"])
             pr = payload["preflight_readiness"]
             self.assertTrue(pr["exists"])
             self.assertFalse(pr["binding_fresh"])
@@ -322,10 +322,10 @@ class LoadCampaignHandoffTests(unittest.TestCase):
 
             payload = self._run_tool(tempdir, campaign_text=campaign)
 
-            self.assertEqual(payload["outcome"], "blocked_config")
+            self.assertEqual(payload["handoff_type"], "load_campaign.validate")
             self.assertEqual(payload["recommended_next_machine_state"], "BLOCKED_CONFIG")
             # Should surface the artifact's next_action, not a generic rerun message
-            self.assertIn("fix backend connectivity", payload["recommended_next_action"])
+            self.assertIn("fix backend connectivity", payload["recovery_action"])
             pr = payload["preflight_readiness"]
             self.assertTrue(pr["exists"])
             self.assertTrue(pr["binding_fresh"])
@@ -341,7 +341,7 @@ class LoadCampaignHandoffTests(unittest.TestCase):
 
             payload = self._run_tool(tempdir, campaign_text=campaign)
 
-            self.assertEqual(payload["outcome"], "blocked_config")
+            self.assertEqual(payload["handoff_type"], "load_campaign.validate")
             self.assertEqual(payload["recommended_next_machine_state"], "BLOCKED_CONFIG")
             pr = payload["preflight_readiness"]
             self.assertTrue(pr["exists"])
@@ -357,7 +357,7 @@ class LoadCampaignHandoffTests(unittest.TestCase):
 
             payload = self._run_tool(tempdir, campaign_text=invalid_campaign)
 
-            self.assertEqual(payload["outcome"], "blocked_config")
+            self.assertEqual(payload["handoff_type"], "load_campaign.validate")
             pr = payload["preflight_readiness"]
             self.assertEqual(pr["status"], "not_evaluated")
             self.assertTrue(
@@ -375,10 +375,10 @@ class LoadCampaignHandoffTests(unittest.TestCase):
 
             payload = self._run_tool(tempdir, campaign_text=invalid_campaign)
 
-            self.assertEqual(payload["outcome"], "blocked_config")
+            self.assertEqual(payload["handoff_type"], "load_campaign.validate")
             self.assertFalse(payload["campaign_valid"])
             self.assertEqual(payload["recommended_next_machine_state"], "BLOCKED_CONFIG")
-            self.assertEqual(payload["recommended_next_action"], "repair ml_metaopt_campaign.yaml")
+            self.assertEqual(payload["recovery_action"], "repair ml_metaopt_campaign.yaml")
             # preflight_readiness should still be present but show not_evaluated or similar
             pr = payload["preflight_readiness"]
             self.assertEqual(pr["status"], "not_evaluated")

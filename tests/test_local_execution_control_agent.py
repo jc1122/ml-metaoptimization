@@ -20,10 +20,10 @@ class LocalExecutionControlAgentTests(unittest.TestCase):
         handoff.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "schema_version": 1,
-            "producer": "metaopt-load-campaign",
-            "phase": "LOAD_CAMPAIGN",
-            "outcome": "ok",
+            "handoff_type": "load_campaign.validate",
+            "control_agent": "metaopt-load-campaign",
             "campaign_id": "market-forecast-v3",
+            "campaign_valid": True,
             "campaign_identity_hash": "sha256:f50928628873800b25a5dfb41f2fd6c93acfc210424953f53a5005e09379fa4c",
             "runtime_config_hash": "sha256:6f59ca57fb3da56f815d7fb03f8be7335fa9d14344c49154308e9e65990e9ac6",
             "artifacts": {
@@ -41,6 +41,8 @@ class LocalExecutionControlAgentTests(unittest.TestCase):
                 "require_zero_temporal_leakage": True,
                 "require_config_load": True,
             },
+            "recommended_next_machine_state": "HYDRATE_STATE",
+            "state_patch": None,
             "warnings": [],
             "summary": "ok",
         }
@@ -181,7 +183,7 @@ class LocalExecutionControlAgentTests(unittest.TestCase):
                 state=self._base_state(),
             )
 
-            self.assertEqual(payload["phase"], "PLAN_LOCAL_CHANGESET")
+            self.assertEqual(payload["handoff_type"], "local_execution.plan_local_changeset")
             self.assertEqual(payload["worker_kind"], "custom_agent")
             self.assertEqual(payload["worker_ref"], "metaopt-materialization-worker")
             self.assertEqual(payload["materialization_mode"], "standard")
@@ -308,7 +310,6 @@ class LocalExecutionControlAgentTests(unittest.TestCase):
                 },
             )
 
-            self.assertEqual(payload["outcome"], "enqueue_remote_batch")
             self.assertEqual(payload["recommended_next_machine_state"], "ENQUEUE_REMOTE_BATCH")
             self.assertEqual(updated_state["machine_state"], "ENQUEUE_REMOTE_BATCH")
             self.assertEqual(updated_state["next_action"], "enqueue remote batch")
@@ -332,7 +333,7 @@ class LocalExecutionControlAgentTests(unittest.TestCase):
                 },
             )
 
-            self.assertEqual(payload["outcome"], "run_diagnosis")
+            self.assertEqual(payload["handoff_type"], "local_execution.gate_local_sanity")
             self.assertEqual(payload["worker_kind"], "custom_agent")
             self.assertEqual(payload["worker_ref"], "metaopt-diagnosis-worker")
             self.assertEqual(payload["task_file"], ".ml-metaopt/tasks/diagnosis-1.md")
@@ -373,7 +374,7 @@ class LocalExecutionControlAgentTests(unittest.TestCase):
                 },
             )
 
-            self.assertEqual(payload["outcome"], "rematerialize")
+            self.assertEqual(payload["recommended_next_machine_state"], "MATERIALIZE_CHANGESET")
             self.assertEqual(updated_state["machine_state"], "MATERIALIZE_CHANGESET")
             self.assertEqual(updated_state["selected_experiment"]["sanity_attempts"], 1)
             self.assertEqual(updated_state["selected_experiment"]["diagnosis_history"][0]["action"], "fix")
@@ -406,7 +407,7 @@ class LocalExecutionControlAgentTests(unittest.TestCase):
                 },
             )
 
-            self.assertEqual(payload["outcome"], "blocked_config")
+            self.assertEqual(payload["recommended_next_machine_state"], "BLOCKED_CONFIG")
             self.assertEqual(updated_state["status"], "BLOCKED_CONFIG")
             self.assertEqual(updated_state["machine_state"], "BLOCKED_CONFIG")
 
@@ -429,15 +430,21 @@ class LocalExecutionControlAgentTests(unittest.TestCase):
                 },
             )
 
-            self.assertEqual(payload["outcome"], "failed")
+            self.assertEqual(payload["recommended_next_machine_state"], "FAILED")
             self.assertEqual(updated_state["status"], "FAILED")
             self.assertEqual(updated_state["machine_state"], "FAILED")
 
-    def _assert_envelope_keys(self, payload: dict, *, handoff_type: str = "LOCAL_EXECUTION_CONTROL", control_agent: str = "metaopt-local-execution-control") -> None:
+    def _assert_envelope_keys(
+        self,
+        payload: dict,
+        *,
+        handoff_type: str,
+        control_agent: str = "metaopt-local-execution-control",
+    ) -> None:
         self.assertEqual(payload["handoff_type"], handoff_type)
         self.assertEqual(payload["control_agent"], control_agent)
         self.assertIsInstance(payload["launch_requests"], list)
-        self.assertIsInstance(payload["state_patch"], dict)
+        self.assertTrue(payload["state_patch"] is None or isinstance(payload["state_patch"], dict))
         self.assertIsInstance(payload["executor_directives"], list)
         self.assertIn("summary", payload)
         self.assertIn("warnings", payload)
@@ -450,7 +457,7 @@ class LocalExecutionControlAgentTests(unittest.TestCase):
                 mode="plan_local_changeset",
                 state=self._base_state(),
             )
-            self._assert_envelope_keys(payload)
+            self._assert_envelope_keys(payload, handoff_type="local_execution.plan_local_changeset")
 
     def test_gate_sanity_pass_envelope_keys(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir_str:
@@ -481,7 +488,40 @@ class LocalExecutionControlAgentTests(unittest.TestCase):
                     },
                 },
             )
-            self._assert_envelope_keys(payload)
+            self._assert_envelope_keys(payload, handoff_type="local_execution.gate_local_sanity")
+
+    def test_gate_sanity_pass_emits_local_changeset_state_patch(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            payload, _, _ = self._run(
+                Path(tempdir_str),
+                mode="gate_local_sanity",
+                state=self._base_state(),
+                worker_results={
+                    "materialization-1": {
+                        "status": "completed",
+                        "patch_artifacts": [],
+                        "verification_notes": ["ok"],
+                    }
+                },
+                executor_events={
+                    "local_changeset-1": {
+                        "integration_worktree": ".ml-metaopt/worktrees/iter-1-materialization",
+                        "apply_results": [],
+                        "code_artifact_uri": "code.tar.gz",
+                        "data_manifest_uri": "data.json",
+                    },
+                    "sanity-1": {
+                        "status": "passed",
+                        "exit_code": 0,
+                        "stdout": "ok",
+                        "stderr": "",
+                        "duration_seconds": 1,
+                    },
+                },
+            )
+
+            self.assertIn("local_changeset", payload["state_patch"])
+            self.assertEqual(payload["state_patch"]["next_action"], "enqueue remote batch")
 
     # ── executor_directives tests ──────────────────────────────────────
 
@@ -710,7 +750,6 @@ class LocalExecutionControlAgentTests(unittest.TestCase):
                 },
             )
 
-            self.assertEqual(payload["outcome"], "run_diagnosis")
             self.assertGreater(len(payload["launch_requests"]), 0)
             lr = payload["launch_requests"][0]
             self.assertEqual(lr["slot_class"], "auxiliary")
@@ -743,6 +782,81 @@ class LocalExecutionControlAgentTests(unittest.TestCase):
         self.assertIn("model: gpt-5.4", content)
         self.assertIn("Do not launch subagents.", content)
         self.assertIn("Do not mutate `.ml-metaopt/state.json`.", content)
+
+    def test_plan_mode_emits_launch_request_for_materialization_worker(self) -> None:
+        """plan_local_changeset must include the materialization worker in launch_requests.
+
+        The orchestrator dispatches workers mechanically via launch_requests per
+        the control-protocol contract.  Body fields such as worker_ref and task_file
+        are informational only.  Without a launch_requests entry the orchestrator
+        has no protocol-compliant signal to launch the materialization worker and
+        would skip dispatch, leaving no worker result for the gate phase.
+        """
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            payload, _, _ = self._run(
+                Path(tempdir_str),
+                mode="plan_local_changeset",
+                state=self._base_state(),
+            )
+            self.assertGreater(
+                len(payload["launch_requests"]),
+                0,
+                "plan_local_changeset must include materialization worker in launch_requests",
+            )
+            lr = payload["launch_requests"][0]
+            self.assertEqual(lr["worker_ref"], "metaopt-materialization-worker")
+            self.assertEqual(lr["slot_class"], "auxiliary")
+            self.assertEqual(lr["mode"], "materialization")
+            self.assertEqual(lr["model_class"], "strong_coder")
+            self.assertEqual(lr["preferred_model"], "claude-opus-4.6-fast")
+
+    def test_plan_mode_remediation_emits_launch_request_for_materialization_worker(self) -> None:
+        """plan_local_changeset in remediation mode must also include the materialization
+        worker in launch_requests — the protocol mechanism must be consistent across modes.
+        """
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            state = self._base_state()
+            state["selected_experiment"]["sanity_attempts"] = 1
+            state["selected_experiment"]["diagnosis_history"] = [
+                {
+                    "attempt": 1,
+                    "root_cause": "missing null check",
+                    "classification": "code_error",
+                    "action": "fix",
+                    "code_guidance": "Add guard before indexing",
+                    "config_guidance": None,
+                    "diagnosed_at": "2026-04-06T00:10:00Z",
+                }
+            ]
+            # Write a diagnosis artifact so remediation mode activates
+            tempdir = Path(tempdir_str)
+            worker_results_dir = tempdir / ".ml-metaopt" / "worker-results"
+            worker_results_dir.mkdir(parents=True, exist_ok=True)
+            (worker_results_dir / "diagnosis-1.json").write_text(
+                json.dumps({
+                    "root_cause": "missing null check",
+                    "classification": "code_error",
+                    "fix_recommendation": {"action": "fix", "code_guidance": "Add guard"},
+                    "confidence": "high",
+                }),
+                encoding="utf-8",
+            )
+
+            payload, _, _ = self._run(
+                tempdir,
+                mode="plan_local_changeset",
+                state=state,
+            )
+            self.assertGreater(
+                len(payload["launch_requests"]),
+                0,
+                "plan_local_changeset (remediation) must include materialization worker in launch_requests",
+            )
+            lr = payload["launch_requests"][0]
+            self.assertEqual(lr["worker_ref"], "metaopt-materialization-worker")
+            self.assertEqual(lr["slot_class"], "auxiliary")
+            self.assertEqual(lr["mode"], "materialization")
+            self.assertEqual(lr["model_class"], "strong_coder")
 
 
 if __name__ == "__main__":

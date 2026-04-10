@@ -341,17 +341,39 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
             out = Path(td) / "h.json"
             payload = emit_handoff(
                 out,
-                {"executor_directives": [{"action": "run_sanity", "reason": "r"}]},
+                {
+                    "state_patch": None,
+                    "executor_directives": [
+                        {
+                            "action": "run_sanity",
+                            "reason": "r",
+                            "worktree": ".ml-metaopt/worktrees/integration",
+                            "command": "pytest -q",
+                            "max_duration_seconds": 600,
+                        }
+                    ]
+                },
                 handoff_type="TEST",
                 control_agent="test-agent",
             )
-            self.assertEqual(payload["executor_directives"], [{"action": "run_sanity", "reason": "r"}])
+            self.assertEqual(
+                payload["executor_directives"],
+                [
+                    {
+                        "action": "run_sanity",
+                        "reason": "r",
+                        "worktree": ".ml-metaopt/worktrees/integration",
+                        "command": "pytest -q",
+                        "max_duration_seconds": 600,
+                    }
+                ],
+            )
 
     def test_emit_handoff_defaults_to_empty_directives(self) -> None:
         from _handoff_utils import emit_handoff
         with tempfile.TemporaryDirectory() as td:
             out = Path(td) / "h.json"
-            payload = emit_handoff(out, {}, handoff_type="TEST", control_agent="test-agent")
+            payload = emit_handoff(out, {"state_patch": None}, handoff_type="TEST", control_agent="test-agent")
             self.assertEqual(payload["executor_directives"], [])
 
     def test_emit_handoff_rejects_bad_directives(self) -> None:
@@ -361,7 +383,7 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
             with self.assertRaises((TypeError, ValueError)):
                 emit_handoff(
                     out,
-                    {"executor_directives": [{"action": "a"}]},
+                    {"state_patch": None, "executor_directives": [{"action": "a"}]},
                     handoff_type="TEST",
                     control_agent="test-agent",
                 )
@@ -401,7 +423,7 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
                 ],
                 load_output,
             )
-            self.assertEqual(load_payload["outcome"], "ok")
+            self.assertEqual(load_payload["recommended_next_machine_state"], "HYDRATE_STATE")
             self._assert_envelope(load_payload, "metaopt-load-campaign", "load_campaign")
 
             hydrate_output = handoffs_dir / "hydrate_state.latest.json"
@@ -422,7 +444,7 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
                 ],
                 hydrate_output,
             )
-            self.assertEqual(hydrate_payload["outcome"], "initialized")
+            self.assertEqual(hydrate_payload["resume_mode"], "fresh")
             self._assert_envelope(hydrate_payload, "metaopt-hydrate-state", "hydrate_state")
             state = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual(state["machine_state"], "MAINTAIN_BACKGROUND_POOL")
@@ -449,7 +471,7 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
                 ],
                 bg_plan_output,
             )
-            self.assertEqual(bg_plan["phase"], "PLAN_BACKGROUND_WORK")
+            self.assertEqual(bg_plan["handoff_type"], "background_control.plan_background_work")
             self.assertEqual(len(bg_plan["launch_requests"]), 2)
             self._assert_envelope(bg_plan, "metaopt-background-control", "plan_background_work")
 
@@ -511,7 +533,7 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
             self.assertEqual(bg_gate["recommended_next_machine_state"], "SELECT_EXPERIMENT")
             self._assert_envelope(bg_gate, "metaopt-background-control", "gate_background_work")
             state = json.loads(state_path.read_text(encoding="utf-8"))
-            self.assertEqual(state["machine_state"], "MAINTAIN_BACKGROUND_POOL")
+            self.assertEqual(state["machine_state"], "SELECT_EXPERIMENT")
             self.assertEqual(state["next_action"], "select experiment")
             self.assertGreaterEqual(len(state["current_proposals"]), 3)
 
@@ -637,6 +659,15 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
             )
             self.assertEqual(local_plan["worker_ref"], "metaopt-materialization-worker")
             self._assert_envelope(local_plan, "metaopt-local-execution-control", "plan_local_changeset")
+            # The orchestrator dispatches via launch_requests — verify it is populated
+            self.assertGreater(
+                len(local_plan["launch_requests"]),
+                0,
+                "plan_local_changeset must carry materialization worker in launch_requests",
+            )
+            self.assertEqual(local_plan["launch_requests"][0]["worker_ref"], "metaopt-materialization-worker")
+            self.assertEqual(local_plan["launch_requests"][0]["slot_class"], "auxiliary")
+            self.assertEqual(local_plan["launch_requests"][0]["mode"], "materialization")
             # ── local plan must carry authoritative executor directives ──
             local_plan_directives = local_plan["executor_directives"]
             self.assertEqual(
@@ -952,6 +983,16 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
             )
             self.assertEqual(roll_plan["worker_ref"], "metaopt-rollover-worker")
             self._assert_envelope(roll_plan, "metaopt-iteration-close-control", "plan_roll_iteration")
+            # The orchestrator dispatches via launch_requests — verify it is populated
+            self.assertGreater(
+                len(roll_plan["launch_requests"]),
+                0,
+                "plan_roll_iteration must carry rollover worker in launch_requests",
+            )
+            self.assertEqual(roll_plan["launch_requests"][0]["worker_ref"], "metaopt-rollover-worker")
+            # Rollover is inline dispatch — must not carry slot_class or mode
+            self.assertNotIn("slot_class", roll_plan["launch_requests"][0])
+            self.assertNotIn("mode", roll_plan["launch_requests"][0])
             (worker_results_dir / "rollover-iter-1.json").write_text(
                 json.dumps(
                     {

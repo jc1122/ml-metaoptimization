@@ -18,27 +18,26 @@ AGENTS_HOOK = textwrap.dedent(
     `.ml-metaopt/state.json` exists. Inspect its `status`.
     If `status` is `RUNNING`, invoke the `ml-metaoptimization` skill immediately,
     resume from `machine_state`, and do not ask the user for campaign inputs.
-    If `status` is terminal, remove this block and follow `next_action` instead of auto-resuming.
+    If `status` is terminal, remove this block, stop auto-resuming, and surface `next_action` to the operator without executing from it.
     <!-- ml-metaoptimization:end -->
     """
 )
 
 
 class HydrateStateHandoffTests(unittest.TestCase):
-    def _write_step1_handoff(self, tempdir: Path, *, outcome: str = "ok") -> Path:
+    def _write_step1_handoff(self, tempdir: Path, *, campaign_valid: bool = True) -> Path:
         handoff_path = tempdir / ".ml-metaopt" / "handoffs" / "load_campaign.latest.json"
         handoff_path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "schema_version": 1,
-            "producer": "metaopt-load-campaign",
-            "phase": "LOAD_CAMPAIGN",
-            "outcome": outcome,
+            "handoff_type": "load_campaign.validate",
+            "control_agent": "metaopt-load-campaign",
             "campaign_path": str(tempdir / "ml_metaopt_campaign.yaml"),
             "campaign_exists": True,
-            "campaign_valid": outcome == "ok",
-            "campaign_id": "market-forecast-v3" if outcome == "ok" else None,
-            "campaign_identity_hash": "sha256:f50928628873800b25a5dfb41f2fd6c93acfc210424953f53a5005e09379fa4c" if outcome == "ok" else None,
-            "runtime_config_hash": "sha256:6f59ca57fb3da56f815d7fb03f8be7335fa9d14344c49154308e9e65990e9ac6" if outcome == "ok" else None,
+            "campaign_valid": campaign_valid,
+            "campaign_id": "market-forecast-v3" if campaign_valid else None,
+            "campaign_identity_hash": "sha256:f50928628873800b25a5dfb41f2fd6c93acfc210424953f53a5005e09379fa4c" if campaign_valid else None,
+            "runtime_config_hash": "sha256:6f59ca57fb3da56f815d7fb03f8be7335fa9d14344c49154308e9e65990e9ac6" if campaign_valid else None,
             "objective_snapshot": {
                 "metric": "rmse",
                 "direction": "minimize",
@@ -48,13 +47,13 @@ class HydrateStateHandoffTests(unittest.TestCase):
                 },
                 "improvement_threshold": 0.0005,
             }
-            if outcome == "ok"
+            if campaign_valid
             else None,
             "baseline_snapshot": {
                 "aggregate": 0.1284,
                 "by_dataset": {"ds_main": 0.1269, "ds_holdout": 0.1320},
             }
-            if outcome == "ok"
+            if campaign_valid
             else None,
             "proposal_policy": {
                 "current_target": 8,
@@ -62,10 +61,10 @@ class HydrateStateHandoffTests(unittest.TestCase):
                 "next_cap": 200,
                 "distinctness_rule": "non_overlapping",
             }
-            if outcome == "ok"
+            if campaign_valid
             else None,
-            "dispatch_policy": {"background_slots": 8, "auxiliary_slots": 2} if outcome == "ok" else None,
-            "validation_issues": [] if outcome == "ok" else ["campaign invalid"],
+            "dispatch_policy": {"background_slots": 8, "auxiliary_slots": 2} if campaign_valid else None,
+            "validation_issues": [] if campaign_valid else ["campaign invalid"],
             "warnings": [],
             "state_peek": {
                 "path": str(tempdir / ".ml-metaopt" / "state.json"),
@@ -74,9 +73,10 @@ class HydrateStateHandoffTests(unittest.TestCase):
                 "identity_relation": "missing",
                 "campaign_identity_hash": None,
             },
-            "recommended_next_machine_state": "HYDRATE_STATE" if outcome == "ok" else "BLOCKED_CONFIG",
-            "recommended_next_action": "hydrate or initialize orchestrator state" if outcome == "ok" else "repair ml_metaopt_campaign.yaml",
-            "summary": "campaign validated; hand off to HYDRATE_STATE" if outcome == "ok" else "campaign invalid",
+            "recommended_next_machine_state": "HYDRATE_STATE" if campaign_valid else "BLOCKED_CONFIG",
+            "recovery_action": None if campaign_valid else "repair ml_metaopt_campaign.yaml",
+            "state_patch": None,
+            "summary": "campaign validated; hand off to HYDRATE_STATE" if campaign_valid else "campaign invalid",
         }
         handoff_path.write_text(json.dumps(payload), encoding="utf-8")
         return handoff_path
@@ -199,14 +199,14 @@ class HydrateStateHandoffTests(unittest.TestCase):
         self,
         tempdir: Path,
         *,
-        handoff_outcome: str = "ok",
+        campaign_valid: bool = True,
         missing_required: bool = False,
         missing_degradable: bool = False,
         state_payload: dict | str | None = None,
         agents_text: str | None = None,
         full_manifest: bool = False,
     ) -> tuple[dict, Path, Path]:
-        handoff_path = self._write_step1_handoff(tempdir, outcome=handoff_outcome)
+        handoff_path = self._write_step1_handoff(tempdir, campaign_valid=campaign_valid)
         if full_manifest:
             skills_manifest = self._write_full_skills_manifest(tempdir)
         else:
@@ -264,7 +264,8 @@ class HydrateStateHandoffTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tempdir_str:
             payload, state_path, agents_path = self._run_tool(Path(tempdir_str))
 
-            self.assertEqual(payload["outcome"], "initialized")
+            self.assertEqual(payload["resume_mode"], "fresh")
+            self.assertEqual(payload["effective_status"], "RUNNING")
             self.assertEqual(payload["effective_machine_state"], "MAINTAIN_BACKGROUND_POOL")
             self.assertTrue(payload["state_written"])
             self.assertEqual(payload["agents_hook_action"], "created")
@@ -327,7 +328,7 @@ class HydrateStateHandoffTests(unittest.TestCase):
                 agents_text="# Notes\n",
             )
 
-            self.assertEqual(payload["outcome"], "resumed")
+            self.assertEqual(payload["effective_status"], "RUNNING")
             self.assertEqual(payload["resume_mode"], "existing")
             self.assertEqual(payload["effective_machine_state"], "WAIT_FOR_PROPOSAL_THRESHOLD")
             self.assertEqual(payload["agents_hook_action"], "updated")
@@ -341,7 +342,8 @@ class HydrateStateHandoffTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tempdir_str:
             payload, state_path, _ = self._run_tool(Path(tempdir_str), full_manifest=True)
 
-            self.assertEqual(payload["outcome"], "initialized")
+            self.assertEqual(payload["resume_mode"], "fresh")
+            self.assertEqual(payload["effective_status"], "RUNNING")
             capabilities = payload["runtime_capabilities"]
             self.assertEqual(
                 capabilities["available_skills"],
@@ -394,11 +396,11 @@ class HydrateStateHandoffTests(unittest.TestCase):
                 agents_text=AGENTS_HOOK + "\nOther notes\n",
             )
 
-            self.assertEqual(payload["outcome"], "blocked_config")
+            self.assertEqual(payload["effective_status"], "BLOCKED_CONFIG")
             self.assertFalse(payload["state_written"])
             self.assertTrue(payload["state_preserved"])
             self.assertEqual(payload["agents_hook_action"], "removed")
-            self.assertEqual(payload["recommended_next_action"], "archive or remove the stale state before starting a new campaign")
+            self.assertEqual(payload["recovery_action"], "archive or remove the stale state before starting a new campaign")
             self.assertEqual(json.dumps(json.loads(state_path.read_text(encoding="utf-8")), sort_keys=True), original)
             self.assertNotIn("ml-metaoptimization:begin", agents_path.read_text(encoding="utf-8"))
 
@@ -410,7 +412,8 @@ class HydrateStateHandoffTests(unittest.TestCase):
                 agents_text=AGENTS_HOOK,
             )
 
-            self.assertEqual(payload["outcome"], "blocked_config")
+            self.assertEqual(payload["resume_mode"], "fresh")
+            self.assertEqual(payload["effective_status"], "BLOCKED_CONFIG")
             self.assertEqual(payload["effective_machine_state"], "BLOCKED_CONFIG")
             self.assertTrue(payload["state_written"])
             self.assertEqual(payload["agents_hook_action"], "removed")
@@ -422,6 +425,77 @@ class HydrateStateHandoffTests(unittest.TestCase):
             self.assertEqual(state["runtime_capabilities"]["missing_skills"], ["metaopt-ideation-worker"])
             self.assertNotIn("ml-metaoptimization:begin", agents_path.read_text(encoding="utf-8"))
 
+    def test_missing_required_skill_on_resumed_state_preserves_campaign_data(self) -> None:
+        """Regression: a RUNNING existing state with campaign data must not be wiped when a required skill is missing."""
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            existing_state = {
+                "version": 3,
+                "campaign_id": "market-forecast-v3",
+                "campaign_identity_hash": "sha256:f50928628873800b25a5dfb41f2fd6c93acfc210424953f53a5005e09379fa4c",
+                "runtime_config_hash": "sha256:6f59ca57fb3da56f815d7fb03f8be7335fa9d14344c49154308e9e65990e9ac6",
+                "status": "RUNNING",
+                "machine_state": "MAINTAIN_BACKGROUND_POOL",
+                "current_iteration": 5,
+                "next_action": "maintain background slot pool",
+                "objective_snapshot": {
+                    "metric": "rmse",
+                    "direction": "minimize",
+                    "aggregation": {"method": "weighted_mean", "weights": {"ds_main": 0.7, "ds_holdout": 0.3}},
+                    "improvement_threshold": 0.0005,
+                },
+                "proposal_cycle": {
+                    "cycle_id": "iter-5-cycle-1",
+                    "current_pool_frozen": False,
+                    "ideation_rounds_by_slot": {},
+                    "shortfall_reason": "",
+                },
+                "active_slots": [{"slot_id": "bg-1", "slot_class": "background", "mode": "ideation",
+                                   "model_class": "general_worker", "requested_model": "Auto",
+                                   "resolved_model": "Auto", "status": "running", "attempt": 1,
+                                   "task_summary": "Generate proposals"}],
+                "current_proposals": [{"proposal_id": "market-forecast-v3-p12", "title": "Try feature X"}],
+                "next_proposals": [],
+                "selected_experiment": None,
+                "local_changeset": None,
+                "remote_batches": [],
+                "baseline": {"aggregate": 0.1221, "by_dataset": {"ds_main": 0.1210, "ds_holdout": 0.1244}},
+                "completed_experiments": [{"batch_id": "batch-20260410-0001", "proposal_id": "market-forecast-v3-p5",
+                                            "aggregate": 0.1240, "judgment": "neutral"}],
+                "key_learnings": ["feature X showed no improvement in iteration 4"],
+                "no_improve_iterations": 2,
+                "runtime_capabilities": {
+                    "verified_at": "2026-04-09T00:00:00Z",
+                    "available_skills": [],
+                    "missing_skills": [],
+                    "degraded_lanes": [],
+                },
+            }
+            payload, state_path, agents_path = self._run_tool(
+                Path(tempdir_str),
+                state_payload=existing_state,
+                missing_required=True,
+                agents_text=AGENTS_HOOK,
+            )
+
+            self.assertEqual(payload["resume_mode"], "existing")
+            self.assertEqual(payload["effective_status"], "BLOCKED_CONFIG")
+            self.assertEqual(payload["effective_machine_state"], "BLOCKED_CONFIG")
+            self.assertTrue(payload["state_written"])
+            self.assertEqual(payload["agents_hook_action"], "removed")
+
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(state["status"], "BLOCKED_CONFIG")
+            self.assertEqual(state["machine_state"], "BLOCKED_CONFIG")
+            self.assertEqual(state["next_action"], "install missing skill: metaopt-ideation-worker")
+            self.assertEqual(state["active_slots"], [])
+            # All campaign progress must be preserved.
+            self.assertEqual(state["current_iteration"], 5)
+            self.assertEqual(state["key_learnings"], ["feature X showed no improvement in iteration 4"])
+            self.assertEqual(state["completed_experiments"][0]["batch_id"], "batch-20260410-0001")
+            self.assertEqual(state["current_proposals"][0]["proposal_id"], "market-forecast-v3-p12")
+            self.assertEqual(state["baseline"]["aggregate"], 0.1221)
+            self.assertNotIn("ml-metaoptimization:begin", agents_path.read_text(encoding="utf-8"))
+
     def test_missing_degradable_skill_continues_with_degraded_lane(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir_str:
             payload, state_path, _ = self._run_tool(
@@ -429,7 +503,8 @@ class HydrateStateHandoffTests(unittest.TestCase):
                 missing_degradable=True,
             )
 
-            self.assertEqual(payload["outcome"], "initialized")
+            self.assertEqual(payload["resume_mode"], "fresh")
+            self.assertEqual(payload["effective_status"], "RUNNING")
             state = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual(state["status"], "RUNNING")
             self.assertEqual(state["runtime_capabilities"]["missing_skills"], ["repo-audit-refactor-optimize"])
@@ -481,10 +556,9 @@ class HydrateStateHandoffTests(unittest.TestCase):
                 agents_text=AGENTS_HOOK,
             )
 
-            self.assertEqual(payload["outcome"], "terminal")
+            self.assertEqual(payload["resume_mode"], "existing")
             self.assertEqual(payload["effective_status"], "BLOCKED_PROTOCOL")
             self.assertEqual(payload["effective_machine_state"], "BLOCKED_PROTOCOL")
-            self.assertEqual(payload["resume_mode"], "existing")
             self.assertTrue(payload["state_written"])
             self.assertEqual(payload["agents_hook_action"], "removed")
             self.assertIn("BLOCKED_PROTOCOL", payload["summary"])
@@ -544,10 +618,9 @@ class HydrateStateHandoffTests(unittest.TestCase):
             )
 
             # Must report terminal, not blocked_config
-            self.assertEqual(payload["outcome"], "terminal")
+            self.assertEqual(payload["resume_mode"], "existing")
             self.assertEqual(payload["effective_status"], "BLOCKED_PROTOCOL")
             self.assertEqual(payload["effective_machine_state"], "BLOCKED_PROTOCOL")
-            self.assertEqual(payload["resume_mode"], "existing")
             self.assertTrue(payload["state_written"])
             self.assertEqual(payload["agents_hook_action"], "removed")
 
@@ -559,13 +632,16 @@ class HydrateStateHandoffTests(unittest.TestCase):
             self.assertIn("protocol violation", state["next_action"])
             self.assertEqual(state["key_learnings"], ["important finding from earlier iterations"])
             self.assertNotIn("ml-metaoptimization:begin", agents_path.read_text(encoding="utf-8"))
+
+    def test_invalid_load_handoff_returns_runtime_error_without_state_write(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir_str:
             payload, state_path, agents_path = self._run_tool(
                 Path(tempdir_str),
-                handoff_outcome="blocked_config",
+                campaign_valid=False,
             )
 
-            self.assertEqual(payload["outcome"], "runtime_error")
+            self.assertEqual(payload["summary"], "load handoff invalid")
+            self.assertEqual(payload["recovery_action"], "repair or regenerate load_campaign.latest.json")
             self.assertFalse(payload["state_written"])
             self.assertFalse(state_path.exists())
             self.assertFalse(agents_path.exists())
@@ -577,7 +653,8 @@ class HydrateStateHandoffTests(unittest.TestCase):
                 state_payload="{not-json",
             )
 
-            self.assertEqual(payload["outcome"], "runtime_error")
+            self.assertEqual(payload["summary"], "existing state unreadable")
+            self.assertEqual(payload["recovery_action"], "repair or replace .ml-metaopt/state.json")
             self.assertFalse(payload["state_written"])
             self.assertTrue(state_path.exists())
             self.assertEqual(state_path.read_text(encoding="utf-8"), "{not-json")
@@ -586,22 +663,25 @@ class HydrateStateHandoffTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tempdir_str:
             payload, _, _ = self._run_tool(Path(tempdir_str))
 
-            self.assertEqual(payload["handoff_type"], "HYDRATE_STATE")
+            self.assertEqual(payload["handoff_type"], "hydrate_state.hydrate")
             self.assertEqual(payload["control_agent"], "metaopt-hydrate-state")
             self.assertEqual(payload["launch_requests"], [])
-            self.assertEqual(payload["state_patch"], {})
+            self.assertIsInstance(payload["state_patch"], dict)
+            self.assertEqual(payload["state_patch"]["campaign_id"], "market-forecast-v3")
+            self.assertEqual(payload["state_patch"]["current_iteration"], 1)
+            self.assertEqual(payload["state_patch"]["next_action"], "maintain background slot pool")
             self.assertEqual(payload["executor_directives"], [])
             self.assertIn("summary", payload)
             self.assertIn("warnings", payload)
 
     def test_runtime_error_contains_control_protocol_envelope_keys(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir_str:
-            payload, _, _ = self._run_tool(Path(tempdir_str), handoff_outcome="blocked_config")
+            payload, _, _ = self._run_tool(Path(tempdir_str), campaign_valid=False)
 
-            self.assertEqual(payload["handoff_type"], "HYDRATE_STATE")
+            self.assertEqual(payload["handoff_type"], "hydrate_state.hydrate")
             self.assertEqual(payload["control_agent"], "metaopt-hydrate-state")
             self.assertEqual(payload["launch_requests"], [])
-            self.assertEqual(payload["state_patch"], {})
+            self.assertIsNone(payload["state_patch"])
             self.assertEqual(payload["executor_directives"], [])
 
     def test_identity_mismatch_contains_control_protocol_envelope_keys(self) -> None:
@@ -631,17 +711,17 @@ class HydrateStateHandoffTests(unittest.TestCase):
             }
             payload, _, _ = self._run_tool(Path(tempdir_str), state_payload=stale_state)
 
-            self.assertEqual(payload["handoff_type"], "HYDRATE_STATE")
+            self.assertEqual(payload["handoff_type"], "hydrate_state.hydrate")
             self.assertEqual(payload["control_agent"], "metaopt-hydrate-state")
             self.assertEqual(payload["launch_requests"], [])
-            self.assertEqual(payload["state_patch"], {})
+            self.assertIsNone(payload["state_patch"])
             self.assertEqual(payload["executor_directives"], [])
 
     def test_fresh_init_sets_campaign_started_at(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir_str:
             payload, state_path, _ = self._run_tool(Path(tempdir_str))
 
-            self.assertEqual(payload["outcome"], "initialized")
+            self.assertEqual(payload["resume_mode"], "fresh")
             state = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertIn("campaign_started_at", state)
             self.assertRegex(state["campaign_started_at"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
@@ -692,7 +772,7 @@ class HydrateStateHandoffTests(unittest.TestCase):
                 state_payload=existing_state,
             )
 
-            self.assertEqual(payload["outcome"], "resumed")
+            self.assertEqual(payload["resume_mode"], "existing")
             resumed = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual(resumed["campaign_started_at"], "2026-04-01T10:00:00Z")
 
@@ -741,7 +821,7 @@ class HydrateStateHandoffTests(unittest.TestCase):
                 state_payload=existing_state,
             )
 
-            self.assertEqual(payload["outcome"], "resumed")
+            self.assertEqual(payload["resume_mode"], "existing")
             resumed = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertIn("campaign_started_at", resumed)
             self.assertRegex(resumed["campaign_started_at"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")

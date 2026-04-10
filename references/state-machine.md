@@ -36,10 +36,11 @@ Every delegated phase is governed by a mandatory control agent. The orchestrator
 
 ## Event Priority
 
-1. Persist completed slot output
-2. Refill an empty background slot
-3. Process remote batch status changes
-4. Evaluate transition guards
+Within each reinvocation, the orchestrator processes events in this order before invoking the governing control agent:
+
+1. Stage raw outputs of any completed slots
+2. Invoke the governing control agent (plan or gate phase as appropriate) and apply the resulting handoff
+3. During `QUIESCE_SLOTS`, execute only drain and cancel directives from the handoff — do not launch new workers
 
 ## Executor Directives
 
@@ -49,7 +50,11 @@ Every delegated phase is governed by a mandatory control agent. The orchestrator
 
 ## Transition Semantics
 
+> **Reading these sections:** The bullets below describe the *behaviour* the system must produce in each state. For states labelled "governed by `<control-agent>`", the detailed semantic bullets are the control agent's responsibility — the orchestrator executes them mechanically from the control agent's `executor_directives`, `launch_requests`, and `state_patch`. The orchestrator must not apply these rules autonomously. See `references/control-protocol.md` for the handoff protocol.
+
 ### `LOAD_CAMPAIGN`
+
+This state is governed by `metaopt-load-campaign`. The control agent validates the campaign YAML, evaluates the preflight readiness artifact, and emits a single-phase handoff (`validate`). The orchestrator applies the handoff mechanically. See `references/control-protocol.md`.
 
 - Read `ml_metaopt_campaign.yaml`
 - Validate required fields and schema shape
@@ -65,6 +70,8 @@ Every delegated phase is governed by a mandatory control agent. The orchestrator
 - The handoff includes a `preflight_readiness` advisory payload describing the observed artifact status for inspectability
 
 ### `HYDRATE_STATE`
+
+This state is governed by `metaopt-hydrate-state`. The control agent initializes or resumes state, manages the `AGENTS.md` hook, verifies worker target availability, and emits a single-phase handoff (`hydrate`). The orchestrator applies the `state_patch` and transitions. See `references/control-protocol.md`.
 
 - If `.ml-metaopt/state.json` exists and `campaign_identity_hash` matches the campaign identity, resume from `machine_state`
 - If `.ml-metaopt/state.json` exists and there is a campaign identity hash mismatch, transition to `BLOCKED_CONFIG`, preserve the stale state in place, set `next_action = "archive or remove the stale state before starting a new campaign"`, remove the `AGENTS.md` hook, and stop. (This removal calls the same operation as terminal-state cleanup — it strips only the `<!-- ml-metaoptimization:begin -->...<!-- ml-metaoptimization:end -->` block — but here it is a hard stop with no state-machine transition to a final state.)

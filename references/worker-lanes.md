@@ -11,7 +11,7 @@ Background slots:
 - `maintenance`
 
 Auxiliary slots:
-- `synthesis`
+- `selection`
 - `design`
 - `materialization`
 - `diagnosis`
@@ -19,12 +19,15 @@ Auxiliary slots:
 
 ## Model Classes
 
-Model names in the campaign spec and SKILL.md are examples — use the strongest available model in the same class if a listed name is unavailable or superseded:
+Model resolution is deterministic:
 - `strong_coder`: code changes, debugging, conflict resolution
-- `strong_reasoner`: synthesis, experiment design, diagnosis, result analysis
+- `strong_reasoner`: selection, experiment design, diagnosis, result analysis
 - `general_worker`: ideation and findings-only maintenance work
 
-Always use the strongest available model in the same class and record the substitution in state.
+Fallback order:
+- `strong_coder`: `claude-opus-4.6-fast`, then `gpt-5.4`
+- `strong_reasoner`: `claude-opus-4.6-fast`, then `gpt-5.4`
+- `general_worker`: `claude-sonnet-4`, then `gpt-5.4`
 
 ## Ideation Lane
 
@@ -74,9 +77,9 @@ Execution rules:
 - if patch application conflicts or requires a non-trivial merge, dispatch `metaopt-materialization-worker` in conflict-resolution mode with the conflicting patches, the base worktree state, and the experiment design context
 
 Metaoptimization bridge requirements:
-- The orchestrator must include the patch artifact contract (format, metadata fields, and integration path) in the maintenance worker's subagent prompt, because `repo-audit-refactor-optimize` does not natively encode these requirements
-- Maintenance workers must be told to emit one unified diff patch artifact with `producer_slot_id`, `purpose`, `patch_path`, and `target_worktree` metadata when producing code-modifying output
-- If the maintenance worker does not produce a patch artifact in the expected format, the orchestrator must treat the output as findings-only and record the format mismatch in `key_learnings`
+- `metaopt-background-control` must embed the patch artifact contract (format, metadata fields, and integration path) in the staged maintenance task file it writes, because `repo-audit-refactor-optimize` does not natively encode these requirements
+- The staged task file must instruct the maintenance worker to emit one unified diff patch artifact with `producer_slot_id`, `purpose`, `patch_path`, and `target_worktree` metadata when producing code-modifying output
+- If the maintenance worker does not produce a patch artifact in the expected format, the `metaopt-background-control` gate phase must treat the output as findings-only and record the format mismatch in `key_learnings`
 
 Patch artifact contract:
 - code-modifying maintenance and materialization workers must emit one unified diff patch artifact
@@ -86,7 +89,7 @@ Compatibility rule:
 - only bypass `repo-audit-refactor-optimize` when the worker task is explicitly incompatible with that skill or with the repository state
 - when bypassing, fall back to findings-only maintenance and record the incompatibility reason in output and state
 
-## Synthesis Lane
+## Selection Lane
 
 **Worker target:** `metaopt-selection-worker` (`custom_agent`)
 
@@ -159,7 +162,7 @@ Artifact precondition for result judgment: the analysis-worker output artifact i
 
 **Worker target:** `metaopt-rollover-worker` (`custom_agent`)
 
-**Dispatch type:** Inline — the orchestrator dispatches this worker synchronously during `ROLL_ITERATION`. Unlike other lanes, rollover does not consume an `active_slots` entry. The subagent returns before the orchestrator advances to `QUIESCE_SLOTS`.
+**Dispatch type:** Inline — `metaopt-iteration-close-control` emits a `launch_requests` entry for the rollover worker without `slot_class` or `mode` (the absence of `slot_class` signals inline dispatch). The orchestrator launches the worker synchronously, no `active_slots` entry is created, and the subagent returns before the orchestrator advances to `QUIESCE_SLOTS`. Because rollover is inline, `mode = "rollover"` is not a valid auxiliary slot mode and is rejected by the guardrail.
 
 Purpose:
 - filter, merge, and discard proposals from `next_proposals` to produce a clean `current_proposals` pool for the next iteration

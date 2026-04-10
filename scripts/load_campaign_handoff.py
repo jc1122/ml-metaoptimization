@@ -13,6 +13,7 @@ import yaml
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _handoff_utils import emit_handoff
 
+_HANDOFF_TYPE = "load_campaign.validate"
 
 REQUIRED_TOP_LEVEL_FIELDS = (
     "version",
@@ -340,37 +341,29 @@ def build_handoff(campaign_path: Path, state_path: Path, output_path: Path) -> d
 
     # Decide outcome: campaign validation blocks first, then preflight gates.
     if not campaign_valid:
-        outcome = "blocked_config"
         next_state = "BLOCKED_CONFIG"
-        next_action = "repair ml_metaopt_campaign.yaml"
-        summary = "campaign invalid; block configuration until repaired"
+        recovery_action = "repair ml_metaopt_campaign.yaml"
+        summary = "campaign invalid; repair ml_metaopt_campaign.yaml before retrying"
     elif preflight["status"] == "fresh_ready":
-        outcome = "ok"
         next_state = "HYDRATE_STATE"
-        next_action = "hydrate or initialize orchestrator state"
+        recovery_action = None
         summary = "campaign validated; hand off to HYDRATE_STATE"
     elif preflight["status"] == "fresh_failed":
-        outcome = "blocked_config"
         next_state = "BLOCKED_CONFIG"
-        next_action = preflight["artifact_next_action"] or "resolve preflight failures and re-run metaopt-preflight"
-        summary = "campaign valid but preflight failed; resolve failures before proceeding"
+        recovery_action = preflight["artifact_next_action"] or "resolve preflight failures and re-run metaopt-preflight"
+        summary = f"campaign valid but preflight failed; {recovery_action}"
     elif preflight["status"] == "missing":
-        outcome = "blocked_config"
         next_state = "BLOCKED_CONFIG"
-        next_action = "run metaopt-preflight to verify environment readiness"
-        summary = "campaign valid but preflight readiness artifact missing"
+        recovery_action = "run metaopt-preflight to verify environment readiness"
+        summary = "campaign valid but preflight readiness artifact missing; run metaopt-preflight to proceed"
     else:
         # stale or unreadable
-        outcome = "blocked_config"
         next_state = "BLOCKED_CONFIG"
-        next_action = "re-run metaopt-preflight (campaign configuration has changed or artifact is invalid)"
+        recovery_action = "re-run metaopt-preflight (campaign configuration has changed or artifact is invalid)"
         summary = "campaign valid but preflight readiness artifact is stale; re-run metaopt-preflight"
 
     handoff = {
         "schema_version": 1,
-        "producer": "metaopt-load-campaign",
-        "phase": "LOAD_CAMPAIGN",
-        "outcome": outcome,
         "campaign_path": str(campaign_path),
         "campaign_exists": campaign_path.exists(),
         "campaign_valid": campaign_valid,
@@ -393,14 +386,15 @@ def build_handoff(campaign_path: Path, state_path: Path, output_path: Path) -> d
         "state_peek": state_peek,
         "preflight_readiness": preflight,
         "recommended_next_machine_state": next_state,
-        "recommended_next_action": next_action,
+        "recovery_action": recovery_action,
+        "state_patch": None,
         "summary": summary,
     }
 
     return emit_handoff(
         output_path,
         handoff,
-        handoff_type="LOAD_CAMPAIGN",
+        handoff_type=_HANDOFF_TYPE,
         control_agent="metaopt-load-campaign",
     )
 

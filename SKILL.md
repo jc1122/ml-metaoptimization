@@ -19,13 +19,12 @@ The campaign is fully file-driven. The orchestrator never asks the user for camp
 
 Target runtime: GitHub Copilot agent with subagent dispatch and access to multiple models.
 
-Named models below refer to Copilot-exposed models.
-The specific model names are examples — use the strongest available model in the same class if a listed name is unavailable or superseded:
-- `strong_coder`: prefer a strong coding model (e.g. `Opus 4.6 fast`); use for code changes, debugging, and conflict resolution
-- `strong_reasoner`: prefer a strong reasoning model (e.g. `Opus 4.6 fast`), fallback to a capable general model (e.g. `GPT-5.4`); use for synthesis, experiment design, diagnosis, and analysis
-- `general_worker`: prefer a capable general model (e.g. `GPT-5.4`), fallback to any stronger available model; use for ideation and read-only maintenance work
+Named models below refer to Copilot-exposed models. Model selection is deterministic, not discretionary:
+- `strong_coder`: resolution order `claude-opus-4.6-fast`, then `gpt-5.4`
+- `strong_reasoner`: resolution order `claude-opus-4.6-fast`, then `gpt-5.4`
+- `general_worker`: resolution order `claude-sonnet-4`, then `gpt-5.4`
 
-Always use the strongest available model in the same class and record the substitution in state.
+Record the requested model and resolved model in state metadata when the first choice is unavailable.
 
 ## Required Files
 
@@ -33,6 +32,8 @@ Always use the strongest available model in the same class and record the substi
 {project_root}/
   ml_metaopt_campaign.yaml
   AGENTS.md
+  agents/
+    worker-skills.json         # static runtime manifest; maps worker targets to probe paths for availability verification
   .ml-metaopt/
     preflight-readiness.json   # emitted by metaopt-preflight; required before LOAD_CAMPAIGN proceeds
     state.json
@@ -54,7 +55,7 @@ Append this block to `AGENTS.md` on initialization if it is not already present:
 `.ml-metaopt/state.json` exists. Inspect its `status`.
 If `status` is `RUNNING`, invoke the `ml-metaoptimization` skill immediately,
 resume from `machine_state`, and do not ask the user for campaign inputs.
-If `status` is terminal, remove this block and follow `next_action` instead of auto-resuming.
+If `status` is terminal, remove this block, stop auto-resuming, and surface `next_action` to the operator without executing from it.
 <!-- ml-metaoptimization:end -->
 ```
 
@@ -68,7 +69,7 @@ If `AGENTS.md` does not exist on first run, create it before appending the marke
 - never let the orchestrator perform semantic coding directly
 - the orchestrator must not edit project files directly; it may only apply worker-produced patches mechanically or write protocol-owned artifacts/manifests/state files
 - generic semantic fallback is forbidden: if the orchestrator encounters unsupported semantic work, it must never improvise; instead it fails closed to `BLOCKED_PROTOCOL` with recovery guidance
-- refill an empty background slot before launching lower-priority work
+- background slots are filled before auxiliary work is launched — `metaopt-background-control` enforces this through its `launch_requests`; the orchestrator must not fill slots autonomously outside of a control-agent handoff
 - use the queue backend contract instead of raw cluster operations
 - use the aggregate metric as the authoritative campaign score
 - bound `LOCAL_SANITY` remediation to at most three attempts per experiment
@@ -76,17 +77,17 @@ If `AGENTS.md` does not exist on first run, create it before appending the marke
 - drain or cancel active slots in `QUIESCE_SLOTS` before rollover or final cleanup
 - re-invoke this skill only after `QUIESCE_SLOTS` has persisted outputs and torn down in-flight work
 - verify required worker skill availability during `HYDRATE_STATE` before any dispatch
-- `BLOCKED_PROTOCOL` preserves state and all artifacts, removes the `AGENTS.md` hook, and stops with a descriptive `next_action` explaining recovery steps
-- `preferred_model` is a deterministic launch hint, not an excuse for semantic fallback — if the requested model is unavailable, the orchestrator must use the strongest available model in the same class and record the substitution
+- `BLOCKED_PROTOCOL` preserves state and all artifacts, removes the `AGENTS.md` hook, and stops with a descriptive `next_action` for the operator
+- `preferred_model` is a deterministic launch hint derived from the class resolution order; if the requested model is unavailable, the orchestrator must take the next configured fallback and record the substitution
 
 ## Dispatch Invariants
 
-- Maintain exactly `dispatch_policy.background_slots` active background slots during all running states except `QUIESCE_SLOTS`
-- Allow at most `dispatch_policy.auxiliary_slots` auxiliary slots at a time
-- Background slots may run either `ideation` or `maintenance`
-- Auxiliary slots may run `synthesis`, `design`, `materialization`, `diagnosis`, or `analysis`
-- When `next_proposals` reaches `proposal_policy.next_cap`, background slots switch to maintenance-only mode until the next iteration begins
-- If default maintenance is incompatible, fall back to findings-only maintenance and record the reason in state
+These are system-level constraints the orchestrator validates after applying each control-agent handoff. Slot management decisions — how many slots to fill, which mode to use, when to switch from ideation to maintenance — are made by `metaopt-background-control` and expressed in its `launch_requests`. The orchestrator enforces the following hard limits and rejects any handoff whose `launch_requests` would violate them (failing closed to `BLOCKED_PROTOCOL`):
+
+- No more than `dispatch_policy.background_slots` active background slots during running states (except `QUIESCE_SLOTS`)
+- No more than `dispatch_policy.auxiliary_slots` active auxiliary slots at a time
+- Background slots may only run `ideation` or `maintenance`
+- Auxiliary slots may only run `selection`, `design`, `materialization`, `diagnosis`, or `analysis`
 
 **Subagent failure policy:**
 - Relaunch once
@@ -95,14 +96,14 @@ If `AGENTS.md` does not exist on first run, create it before appending the marke
 
 ## Required References
 
-Load these files during execution:
+These files define the contract surface. Follow persisted state and canonical handoff output first; use these references to validate behavior, not to invent behavior from prose:
 
 - `references/dependencies.md` before validating campaign inputs
 - `references/contracts.md` before reading or writing state, manifests, or results
-- `references/control-protocol.md` before interpreting or emitting control-agent handoffs
+- `references/control-protocol.md` before applying control-agent handoffs
 - `references/state-machine.md` before executing transitions or resuming from state
 - `references/worker-lanes.md` before dispatching any background or auxiliary worker
-- `references/dispatch-guide.md` before constructing any worker subagent prompt
+- `references/dispatch-guide.md` before dispatching any background or auxiliary worker
 - `references/backend-contract.md` before any remote queue action
 
 Use `ml_metaopt_campaign.example.yaml` as the canonical campaign example rather than restating field-by-field examples inline.
@@ -110,6 +111,7 @@ Use `ml_metaopt_campaign.example.yaml` as the canonical campaign example rather 
 ## Orchestrator Actions
 
 The orchestrator may:
+- invoke the governing control agent for the current machine state as a subagent (see Control Agent Dispatch table below), read the resulting handoff from `.ml-metaopt/handoffs/`, and apply it mechanically per `references/control-protocol.md`
 - read and validate campaign/state files
 - update `.ml-metaopt/state.json`
 - append/remove the marked `AGENTS.md` hook
@@ -121,15 +123,29 @@ The orchestrator may:
 - ingest machine-readable results
 - emit iteration reports
 
-The orchestrator must delegate:
+The orchestrator must delegate all semantic decisions. Leaf workers are dispatched exclusively from `launch_requests` in control-agent handoffs — the orchestrator never constructs worker task files or prompt envelopes directly:
 - proposal generation (via `metaopt-ideation-worker`)
-- ranking or synthesizing proposals (via `metaopt-selection-worker`)
+- ranking and selecting proposals (via `metaopt-selection-worker`)
 - experiment design (via `metaopt-design-worker`)
 - semantic code changes (via `metaopt-materialization-worker`)
 - debugging failing code or infra behavior (via `metaopt-diagnosis-worker`)
 - result analysis (via `metaopt-analysis-worker`)
 - iteration proposal filtering (via `metaopt-rollover-worker`)
 - conflict resolution for non-trivial merges (via `metaopt-materialization-worker` in conflict-resolution mode)
+
+## Control Agent Dispatch
+
+Each machine state is governed by exactly one control agent. The orchestrator invokes the governing control agent as a subagent, reads the handoff it writes to `.ml-metaopt/handoffs/`, and applies it. See `references/control-protocol.md` for the full phase definitions and handoff envelope contract.
+
+| Machine State(s) | Governing Control Agent | Modes |
+|-----------------|------------------------|-------|
+| `LOAD_CAMPAIGN` | `metaopt-load-campaign` | `validate` |
+| `HYDRATE_STATE` | `metaopt-hydrate-state` | `hydrate` |
+| `MAINTAIN_BACKGROUND_POOL`, `WAIT_FOR_PROPOSAL_THRESHOLD` | `metaopt-background-control` | `plan_background_work` → `gate_background_work` |
+| `SELECT_EXPERIMENT`, `DESIGN_EXPERIMENT` | `metaopt-select-design` | `plan_select_experiment` → `gate_select_and_plan_design` → `finalize_select_design` |
+| `MATERIALIZE_CHANGESET`, `LOCAL_SANITY` | `metaopt-local-execution-control` | `plan_local_changeset` → `gate_local_sanity` |
+| `ENQUEUE_REMOTE_BATCH`, `WAIT_FOR_REMOTE_BATCH`, `ANALYZE_RESULTS` | `metaopt-remote-execution-control` | `plan_remote_batch` → `gate_remote_batch` → `analyze_remote_results` |
+| `ROLL_ITERATION`, `QUIESCE_SLOTS` | `metaopt-iteration-close-control` | `plan_roll_iteration` → `gate_roll_iteration` → `quiesce_slots` |
 
 ## Quick Flow
 
@@ -190,21 +206,19 @@ digraph machine {
 }
 ```
 
-Event priority:
-1. Persist completed slot output
-2. Refill an empty background slot
-3. Process remote batch status changes
-4. Evaluate transition guards
-5. During `QUIESCE_SLOTS`, stop launching new work and only harvest, drain, or cancel active slots
+Event priority (within each reinvocation):
+1. Stage raw outputs of any completed slots before invoking the governing control agent
+2. Invoke the governing control agent (plan or gate phase as appropriate) and apply the resulting handoff
+3. During `QUIESCE_SLOTS`, execute only drain and cancel directives from the handoff — do not launch new workers
 
 ## Worker Policy
 
 Background ideation workers generate and refine proposals.
 
-Background maintenance workers must invoke `repo-audit-refactor-optimize` by default. Only bypass that subskill when the lane is explicitly incompatible with the repository or current task. In that case, fall back to findings-only maintenance and record the incompatibility reason in `key_learnings` or task output.
+`metaopt-background-control` dispatches background maintenance workers and must target `repo-audit-refactor-optimize` by default. The control agent bypasses that subskill only when the lane is explicitly incompatible with the repository or current task and falls back to findings-only maintenance, recording the incompatibility reason in the staged task file and the resulting state output.
 
 Auxiliary workers handle:
-- synthesis
+- selection
 - experiment design
 - changeset materialization
 - diagnosis
@@ -214,12 +228,12 @@ See `references/worker-lanes.md` for lane contracts, compatibility rules, and re
 
 ## Worker Targets
 
-The orchestrator delegates semantic work to these leaf worker targets:
+Leaf workers are dispatched by the governing control agent via `launch_requests` in its handoff envelope. The orchestrator launches these workers from pre-staged task files written by the control agent — it does not construct worker task files or prompt envelopes directly.
 
 | Lane | Skill | Model Class |
 |------|-------|-------------|
 | ideation | `metaopt-ideation-worker` | `general_worker` |
-| synthesis/selection | `metaopt-selection-worker` | `strong_reasoner` |
+| selection | `metaopt-selection-worker` | `strong_reasoner` |
 | design | `metaopt-design-worker` | `strong_reasoner` |
 | materialization | `metaopt-materialization-worker` | `strong_coder` |
 | diagnosis | `metaopt-diagnosis-worker` | `strong_reasoner` |
@@ -227,15 +241,15 @@ The orchestrator delegates semantic work to these leaf worker targets:
 | rollover | `metaopt-rollover-worker` | `strong_reasoner` |
 | maintenance | `repo-audit-refactor-optimize` | `general_worker` or `strong_coder` |
 
-Each worker target has its own execution contract. The orchestrator provides structured input via subagent prompts and consumes structured output.
+Each worker target has its own execution contract. The orchestrator consumes structured output from the result file path specified in the `launch_requests` entry.
 
 Worker-target contracts reference `references/worker-lanes.md` and `references/contracts.md` in this repository as the authoritative source.
 
 ## Skill Availability
 
-This section documents worker-target availability while preserving the legacy heading used by existing validation and downstream readers.
+This section documents worker-target availability recorded during hydration.
 
-The orchestrator verifies required worker targets during `HYDRATE_STATE`, before any dispatch occurs. Record the verification result in `state.runtime_capabilities`:
+`metaopt-hydrate-state` verifies required worker targets as part of its hydrate phase, before any dispatch occurs. The result is recorded in `state.runtime_capabilities` via `state_patch`:
 
 ```json
 {
@@ -272,7 +286,7 @@ These worker targets have defined fallback behavior. If missing, record the degr
 
 ### Verification Timing
 
-- Run the full check once during `HYDRATE_STATE` on session start
+- `metaopt-hydrate-state` runs the full check once during its hydrate phase on session start
 - If a previously-available worker target becomes unavailable mid-session, the dispatch will fail — treat as a subagent failure and apply the subagent failure policy
 - Do not re-check on every dispatch; the `HYDRATE_STATE` snapshot is authoritative for the session
 
@@ -281,8 +295,8 @@ These worker targets have defined fallback behavior. If missing, record the degr
 | Mistake | Fix |
 |---------|-----|
 | Asking the user for campaign inputs | Read `ml_metaopt_campaign.yaml`; if invalid, transition to `BLOCKED_CONFIG` |
-| Letting a background slot sit empty | Refill it before launching lower-priority work |
-| Treating all 8 slots as ideation-only forever | Background slots may switch to maintenance as proposal pools saturate |
+| Filling background slots without a control-agent handoff | Background slot launches must come from `metaopt-background-control` `launch_requests` — never fill slots autonomously |
+| Treating all slots as ideation-only forever | `metaopt-background-control` switches slots to maintenance when proposal pools saturate; the orchestrator executes its `launch_requests` |
 | Writing new ideas into `current_proposals` after selection starts | Write them into `next_proposals` only |
 | Skipping `DESIGN_EXPERIMENT` and jumping straight into coding | Design the experiment batch before materialization starts |
 | Allowing `LOCAL_SANITY` to spin forever | Cap remediation at 3 attempts, then transition to `FAILED` |

@@ -1,14 +1,23 @@
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
 import json
 from pathlib import Path
 from typing import Any
 
-from _handoff_utils import emit_handoff, read_json, timestamp, write_json
+from _handoff_utils import (
+    emit_handoff,
+    load_campaign_handoff_is_ready,
+    persist_state_handoff,
+    read_json,
+    timestamp,
+    write_json,
+)
 
-_HANDOFF_TYPE = "LOCAL_EXECUTION_CONTROL"
 _CONTROL_AGENT = "metaopt-local-execution-control"
+_PLAN_HANDOFF_TYPE = "local_execution.plan_local_changeset"
+_GATE_HANDOFF_TYPE = "local_execution.gate_local_sanity"
 
 
 def _parse_args() -> argparse.Namespace:
@@ -35,12 +44,15 @@ def _timestamp() -> str:
     return timestamp()
 
 
-def _runtime_error(output_path: Path, action: str, summary: str, warnings: list[str] | None = None) -> dict[str, Any]:
+def _runtime_error(
+    output_path: Path,
+    handoff_type: str,
+    recovery_action: str,
+    summary: str,
+    warnings: list[str] | None = None,
+) -> dict[str, Any]:
     payload = {
         "schema_version": 1,
-        "producer": _CONTROL_AGENT,
-        "phase": None,
-        "outcome": "runtime_error",
         "worker_kind": None,
         "worker_ref": None,
         "materialization_mode": None,
@@ -48,14 +60,14 @@ def _runtime_error(output_path: Path, action: str, summary: str, warnings: list[
         "result_file": None,
         "required_worktree": None,
         "sanity_attempts": None,
-        "recommended_executor_phase": None,
         "recommended_next_machine_state": None,
-        "recommended_next_action": action,
+        "recovery_action": recovery_action,
         "diagnosis_action": None,
+        "state_patch": None,
         "warnings": warnings or [],
         "summary": summary,
     }
-    return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
+    return emit_handoff(output_path, payload, handoff_type=handoff_type, control_agent=_CONTROL_AGENT)
 
 
 def _load_inputs(load_handoff_path: Path, state_path: Path) -> tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None]:
@@ -63,7 +75,7 @@ def _load_inputs(load_handoff_path: Path, state_path: Path) -> tuple[dict[str, A
         load_handoff = _read_json(load_handoff_path)
     except Exception as exc:
         return None, None, {"action": "repair or replace load_campaign.latest.json", "summary": "load handoff unreadable", "warnings": [str(exc)]}
-    if not isinstance(load_handoff, dict) or load_handoff.get("outcome") != "ok":
+    if not load_campaign_handoff_is_ready(load_handoff):
         return None, None, {"action": "repair or replace load_campaign.latest.json", "summary": "load handoff invalid", "warnings": []}
 
     try:
@@ -214,8 +226,14 @@ def _plan_local_changeset(
     output_path: Path,
 ) -> dict[str, Any]:
     state = _read_json(state_path)
+    previous_state = deepcopy(state)
     if state.get("selected_experiment") is None or state["selected_experiment"].get("design") is None:
-        return _runtime_error(output_path, "repair selected_experiment design before materialization", "selected experiment design missing")
+        return _runtime_error(
+            output_path,
+            _PLAN_HANDOFF_TYPE,
+            "repair selected_experiment design before materialization",
+            "selected experiment design missing",
+        )
 
     attempt = _attempt_number(state)
     diagnosis_history = state["selected_experiment"].get("diagnosis_history", [])
@@ -234,12 +252,8 @@ def _plan_local_changeset(
                 "protocol violation: remediation requested but diagnosis artifact "
                 f"diagnosis-{prev_attempt}.json is missing; manual intervention required"
             )
-            _write_json(state_path, state)
             payload = {
                 "schema_version": 1,
-                "producer": _CONTROL_AGENT,
-                "phase": "PLAN_LOCAL_CHANGESET",
-                "outcome": "blocked_protocol",
                 "worker_kind": None,
                 "worker_ref": None,
                 "materialization_mode": None,
@@ -247,14 +261,13 @@ def _plan_local_changeset(
                 "result_file": None,
                 "required_worktree": None,
                 "sanity_attempts": state["selected_experiment"].get("sanity_attempts", 0),
-                "recommended_executor_phase": None,
                 "recommended_next_machine_state": "BLOCKED_PROTOCOL",
-                "recommended_next_action": state["next_action"],
                 "diagnosis_action": None,
                 "warnings": [f"diagnosis artifact diagnosis-{prev_attempt}.json not found"],
                 "summary": "remediation blocked: diagnosis artifact missing",
             }
-            return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
+            persist_state_handoff(state_path, previous_state, state, payload, control_agent=_CONTROL_AGENT)
+            return emit_handoff(output_path, payload, handoff_type=_PLAN_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
         materialization_mode = "remediation"
     else:
         materialization_mode = "standard"
@@ -279,7 +292,6 @@ def _plan_local_changeset(
 
     state["machine_state"] = "MATERIALIZE_CHANGESET"
     state["next_action"] = "execute local changeset plan"
-    _write_json(state_path, state)
 
     # Standard materialization emits explicit executor directives for the
     # mechanical steps that follow worker completion.  Remediation and
@@ -320,27 +332,35 @@ def _plan_local_changeset(
     else:
         executor_directives = []
 
+    task_file_path = str(Path(".ml-metaopt") / "tasks" / task_name)
+    result_file_path = str(Path(".ml-metaopt") / "worker-results" / f"materialization-{attempt}.json")
     payload = {
         "schema_version": 1,
-        "producer": _CONTROL_AGENT,
-        "phase": "PLAN_LOCAL_CHANGESET",
-        "outcome": "planned",
         "worker_kind": "custom_agent",
         "worker_ref": "metaopt-materialization-worker",
         "materialization_mode": materialization_mode,
-        "task_file": str(Path(".ml-metaopt") / "tasks" / task_name),
-        "result_file": str(Path(".ml-metaopt") / "worker-results" / f"materialization-{attempt}.json"),
+        "task_file": task_file_path,
+        "result_file": result_file_path,
         "required_worktree": required_worktree,
         "sanity_attempts": state["selected_experiment"].get("sanity_attempts", 0),
-        "recommended_executor_phase": "EXECUTE_LOCAL_CHANGESET",
         "recommended_next_machine_state": "MATERIALIZE_CHANGESET",
-        "recommended_next_action": "launch materialization worker and run sanity",
         "diagnosis_action": None,
+        "launch_requests": [
+            {
+                "slot_class": "auxiliary",
+                "mode": "materialization",
+                "worker_ref": "metaopt-materialization-worker",
+                "model_class": "strong_coder",
+                "task_file": task_file_path,
+                "result_file": result_file_path,
+            },
+        ],
         "executor_directives": executor_directives,
         "warnings": [],
         "summary": f"planned {materialization_mode} local materialization task",
     }
-    return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
+    persist_state_handoff(state_path, previous_state, state, payload, control_agent=_CONTROL_AGENT)
+    return emit_handoff(output_path, payload, handoff_type=_PLAN_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
 
 def _build_local_changeset(materialization_result: dict[str, Any], local_changeset_event: dict[str, Any]) -> dict[str, Any]:
@@ -381,31 +401,43 @@ def _gate_local_sanity(
     output_path: Path,
 ) -> dict[str, Any]:
     state = _read_json(state_path)
+    previous_state = deepcopy(state)
     if state.get("selected_experiment") is None:
-        return _runtime_error(output_path, "repair selected_experiment before local sanity", "selected experiment missing")
+        return _runtime_error(
+            output_path,
+            _GATE_HANDOFF_TYPE,
+            "repair selected_experiment before local sanity",
+            "selected experiment missing",
+        )
 
     attempt = _attempt_number(state)
     sanity_event_path = executor_events_dir / f"sanity-{attempt}.json"
     if not sanity_event_path.exists():
-        return _runtime_error(output_path, "run sanity.command and stage raw output", "sanity event missing")
+        return _runtime_error(
+            output_path,
+            _GATE_HANDOFF_TYPE,
+            "run sanity.command and stage raw output",
+            "sanity event missing",
+        )
     sanity_event = _read_json(sanity_event_path)
 
     if sanity_event.get("status") == "passed":
         materialization_result_path = worker_results_dir / f"materialization-{attempt}.json"
         local_changeset_event_path = executor_events_dir / f"local_changeset-{attempt}.json"
         if not materialization_result_path.exists() or not local_changeset_event_path.exists():
-            return _runtime_error(output_path, "stage materialization and local changeset outputs before gating sanity", "materialization outputs missing")
+            return _runtime_error(
+                output_path,
+                _GATE_HANDOFF_TYPE,
+                "stage materialization and local changeset outputs before gating sanity",
+                "materialization outputs missing",
+            )
         materialization_result = _read_json(materialization_result_path)
         local_changeset_event = _read_json(local_changeset_event_path)
         state["local_changeset"] = _build_local_changeset(materialization_result, local_changeset_event)
         state["machine_state"] = "ENQUEUE_REMOTE_BATCH"
         state["next_action"] = "enqueue remote batch"
-        _write_json(state_path, state)
         payload = {
             "schema_version": 1,
-            "producer": _CONTROL_AGENT,
-            "phase": "GATE_LOCAL_SANITY",
-            "outcome": "enqueue_remote_batch",
             "worker_kind": None,
             "worker_ref": None,
             "materialization_mode": None,
@@ -413,25 +445,20 @@ def _gate_local_sanity(
             "result_file": None,
             "required_worktree": state["local_changeset"].get("integration_worktree"),
             "sanity_attempts": state["selected_experiment"].get("sanity_attempts", 0),
-            "recommended_executor_phase": None,
             "recommended_next_machine_state": "ENQUEUE_REMOTE_BATCH",
-            "recommended_next_action": "enqueue remote batch",
             "diagnosis_action": None,
             "warnings": [],
             "summary": "local changeset passed sanity and is ready for remote enqueue",
         }
-        return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
+        persist_state_handoff(state_path, previous_state, state, payload, control_agent=_CONTROL_AGENT)
+        return emit_handoff(output_path, payload, handoff_type=_GATE_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
     if state["selected_experiment"].get("sanity_attempts", 0) >= 3:
         state["status"] = "FAILED"
         state["machine_state"] = "FAILED"
         state["next_action"] = "stop after repeated local sanity failures"
-        _write_json(state_path, state)
         payload = {
             "schema_version": 1,
-            "producer": _CONTROL_AGENT,
-            "phase": "GATE_LOCAL_SANITY",
-            "outcome": "failed",
             "worker_kind": None,
             "worker_ref": None,
             "materialization_mode": None,
@@ -439,14 +466,13 @@ def _gate_local_sanity(
             "result_file": str(Path(".ml-metaopt") / "worker-results" / f"diagnosis-{attempt}.json"),
             "required_worktree": None,
             "sanity_attempts": state["selected_experiment"]["sanity_attempts"],
-            "recommended_executor_phase": None,
             "recommended_next_machine_state": "FAILED",
-            "recommended_next_action": "stop after repeated local sanity failures",
             "diagnosis_action": None,
             "warnings": [],
             "summary": "sanity remediation attempt cap reached",
         }
-        return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
+        persist_state_handoff(state_path, previous_state, state, payload, control_agent=_CONTROL_AGENT)
+        return emit_handoff(output_path, payload, handoff_type=_GATE_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
     diagnosis_result_path = worker_results_dir / f"diagnosis-{attempt}.json"
     if not diagnosis_result_path.exists():
@@ -455,12 +481,8 @@ def _gate_local_sanity(
         task_path.write_text(_diagnosis_task_markdown(state, load_handoff, attempt, sanity_event), encoding="utf-8")
         state["machine_state"] = "LOCAL_SANITY"
         state["next_action"] = "run sanity diagnosis"
-        _write_json(state_path, state)
         payload = {
             "schema_version": 1,
-            "producer": _CONTROL_AGENT,
-            "phase": "GATE_LOCAL_SANITY",
-            "outcome": "run_diagnosis",
             "worker_kind": "custom_agent",
             "worker_ref": "metaopt-diagnosis-worker",
             "materialization_mode": None,
@@ -468,9 +490,7 @@ def _gate_local_sanity(
             "result_file": str(Path(".ml-metaopt") / "worker-results" / f"diagnosis-{attempt}.json"),
             "required_worktree": None,
             "sanity_attempts": state["selected_experiment"].get("sanity_attempts", 0),
-            "recommended_executor_phase": "RUN_DIAGNOSIS",
             "recommended_next_machine_state": "LOCAL_SANITY",
-            "recommended_next_action": "launch sanity diagnosis worker",
             "diagnosis_action": None,
             "launch_requests": [
                 {
@@ -486,7 +506,8 @@ def _gate_local_sanity(
             "warnings": [],
             "summary": "sanity failed and requires diagnosis before routing",
         }
-        return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
+        persist_state_handoff(state_path, previous_state, state, payload, control_agent=_CONTROL_AGENT)
+        return emit_handoff(output_path, payload, handoff_type=_GATE_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
     diagnosis_result = _read_json(diagnosis_result_path)
     action = _append_diagnosis(state, diagnosis_result, attempt)
@@ -495,33 +516,23 @@ def _gate_local_sanity(
     if action == "fix":
         state["machine_state"] = "MATERIALIZE_CHANGESET"
         state["next_action"] = "materialize remediation changeset"
-        outcome = "rematerialize"
         next_state = "MATERIALIZE_CHANGESET"
-        next_action = "materialize remediation changeset"
         summary = "diagnosis requested a remediation materialization pass"
     elif action == "adjust_config":
         state["status"] = "BLOCKED_CONFIG"
         state["machine_state"] = "BLOCKED_CONFIG"
         state["next_action"] = recommendation.get("config_guidance") or "repair campaign configuration"
-        outcome = "blocked_config"
         next_state = "BLOCKED_CONFIG"
-        next_action = state["next_action"]
         summary = "diagnosis identified a configuration issue that blocks local execution"
     else:
         state["status"] = "FAILED"
         state["machine_state"] = "FAILED"
         state["next_action"] = diagnosis_result.get("root_cause") or "stop after local execution failure"
-        outcome = "failed"
         next_state = "FAILED"
-        next_action = state["next_action"]
         summary = "diagnosis marked the selected experiment as unrecoverable"
 
-    _write_json(state_path, state)
     payload = {
         "schema_version": 1,
-        "producer": _CONTROL_AGENT,
-        "phase": "GATE_LOCAL_SANITY",
-        "outcome": outcome,
         "worker_kind": None,
         "worker_ref": None,
         "materialization_mode": None,
@@ -529,14 +540,13 @@ def _gate_local_sanity(
         "result_file": str(Path(".ml-metaopt") / "worker-results" / f"diagnosis-{attempt}.json"),
         "required_worktree": None,
         "sanity_attempts": state["selected_experiment"]["sanity_attempts"],
-        "recommended_executor_phase": None,
         "recommended_next_machine_state": next_state,
-        "recommended_next_action": next_action,
         "diagnosis_action": action,
         "warnings": [],
         "summary": summary,
     }
-    return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
+    persist_state_handoff(state_path, previous_state, state, payload, control_agent=_CONTROL_AGENT)
+    return emit_handoff(output_path, payload, handoff_type=_GATE_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
 
 def main() -> int:
@@ -550,7 +560,13 @@ def main() -> int:
 
     load_handoff, state, error = _load_inputs(load_handoff_path, state_path)
     if error is not None:
-        payload = _runtime_error(output_path, error["action"], error["summary"], error["warnings"])
+        payload = _runtime_error(
+            output_path,
+            _PLAN_HANDOFF_TYPE if args.mode == "plan_local_changeset" else _GATE_HANDOFF_TYPE,
+            error["action"],
+            error["summary"],
+            error["warnings"],
+        )
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
 

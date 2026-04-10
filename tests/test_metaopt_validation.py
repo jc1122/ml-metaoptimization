@@ -35,7 +35,7 @@ VALID_SLOT_CLASSES = {"background", "auxiliary"}
 VALID_SLOT_MODES = {
     "ideation",
     "maintenance",
-    "synthesis",
+    "selection",
     "design",
     "materialization",
     "diagnosis",
@@ -1116,7 +1116,7 @@ class MetaoptValidationTests(unittest.TestCase):
     def test_delegation_list_includes_all_worker_skills(self) -> None:
         """SKILL.md delegation list must reference the ideation worker and rollover."""
         skill_md = _read_text("SKILL.md")
-        delegation_section = skill_md.split("The orchestrator must delegate:")[1].split("## Quick Flow")[0]
+        delegation_section = skill_md.split("The orchestrator must delegate all semantic decisions.")[1].split("## Quick Flow")[0]
         self.assertIn("metaopt-ideation-worker", delegation_section)
         self.assertIn("metaopt-rollover-worker", delegation_section)
 
@@ -1128,7 +1128,7 @@ class MetaoptValidationTests(unittest.TestCase):
         _require_pattern(self, contracts, r"source_slot_id.*non-empty string")
         _require_pattern(self, contracts, r"creation_iteration.*positive integer")
         _require_pattern(self, contracts, r"created_at.*ISO 8601")
-        _require_pattern(self, contracts, r"Workers never generate `proposal_id`")
+        _require_pattern(self, contracts, r"[Ll]eaf workers never generate `proposal_id`")
 
     def test_selected_experiment_expanded_shape(self) -> None:
         """selected_experiment must document all lifecycle fields from SELECT through ANALYZE."""
@@ -1138,7 +1138,7 @@ class MetaoptValidationTests(unittest.TestCase):
         _require_pattern(self, contracts, r"design.*object or `null`.*authoritative input for MATERIALIZE")
         _require_pattern(self, contracts, r"diagnosis_history.*array.*ordered list")
         _require_pattern(self, contracts, r"analysis_summary.*object or `null`.*structured analysis")
-        _require_pattern(self, contracts, r"clear `selected_experiment`.*ROLL_ITERATION")
+        _require_pattern(self, contracts, r"clears `selected_experiment`.*ROLL_ITERATION")
 
     def test_dispatch_guide_has_prompt_envelope(self) -> None:
         """dispatch-guide.md must define the normalized prompt envelope."""
@@ -1316,8 +1316,8 @@ class MetaoptValidationTests(unittest.TestCase):
         """contracts.md must list campaign_started_at as a required state-file key."""
         contracts = _read_text("references/contracts.md")
         self.assertIn("campaign_started_at", contracts)
-        # Must appear in the required keys section, not the recommended section
-        required_section_end = contracts.index("Recommended additional keys")
+        # Must appear in the required keys section, not the optional section
+        required_section_end = contracts.index("Optional keys written by specific control agents")
         first_occurrence = contracts.index("campaign_started_at")
         self.assertLess(first_occurrence, required_section_end,
                         "campaign_started_at must be in the required keys section")

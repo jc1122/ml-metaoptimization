@@ -1,16 +1,26 @@
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
 import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from _handoff_utils import emit_handoff, read_json, timestamp, write_json
+from _handoff_utils import (
+    emit_handoff,
+    load_campaign_handoff_is_ready,
+    persist_state_handoff,
+    read_json,
+    timestamp,
+    write_json,
+)
 
-_HANDOFF_TYPE = "ITERATION_CLOSE_CONTROL"
 _CONTROL_AGENT = "metaopt-iteration-close-control"
+_PLAN_HANDOFF_TYPE = "iteration_close.plan_roll_iteration"
+_GATE_HANDOFF_TYPE = "iteration_close.gate_roll_iteration"
+_QUIESCE_HANDOFF_TYPE = "iteration_close.quiesce_slots"
 
 
 def _parse_args() -> argparse.Namespace:
@@ -37,26 +47,29 @@ def _timestamp() -> str:
     return timestamp()
 
 
-def _runtime_error(output_path: Path, phase: str | None, action: str, summary: str, warnings: list[str] | None = None) -> dict[str, Any]:
+def _runtime_error(
+    output_path: Path,
+    handoff_type: str,
+    recovery_action: str,
+    summary: str,
+    warnings: list[str] | None = None,
+) -> dict[str, Any]:
     payload = {
         "schema_version": 1,
-        "producer": _CONTROL_AGENT,
-        "phase": phase,
-        "outcome": "runtime_error",
         "worker_kind": None,
         "worker_ref": None,
         "task_file": None,
         "result_file": None,
         "continue_campaign": None,
         "stop_reason": "",
-        "recommended_executor_phase": None,
         "recommended_next_machine_state": None,
-        "recommended_next_action": action,
+        "recovery_action": recovery_action,
         "iteration_report": None,
+        "state_patch": None,
         "warnings": warnings or [],
         "summary": summary,
     }
-    return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
+    return emit_handoff(output_path, payload, handoff_type=handoff_type, control_agent=_CONTROL_AGENT)
 
 
 def _blocked_protocol(
@@ -64,30 +77,25 @@ def _blocked_protocol(
     state_path: Path,
     state: dict[str, Any],
     *,
-    phase: str,
+    handoff_type: str,
     summary: str,
     warnings: list[str],
     next_action: str,
 ) -> dict[str, Any]:
+    previous_state = deepcopy(state)
     state["status"] = "BLOCKED_PROTOCOL"
     state["machine_state"] = "BLOCKED_PROTOCOL"
     state["next_action"] = next_action
-    _write_json(state_path, state)
 
     payload = {
         "schema_version": 1,
-        "producer": _CONTROL_AGENT,
-        "phase": phase,
-        "outcome": "blocked_protocol",
         "worker_kind": None,
         "worker_ref": None,
         "task_file": None,
         "result_file": None,
         "continue_campaign": False,
         "stop_reason": "protocol_violation",
-        "recommended_executor_phase": None,
         "recommended_next_machine_state": "BLOCKED_PROTOCOL",
-        "recommended_next_action": next_action,
         "iteration_report": state.get("last_iteration_report"),
         "executor_directives": [
             {
@@ -99,7 +107,8 @@ def _blocked_protocol(
         "warnings": warnings,
         "summary": summary,
     }
-    return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
+    persist_state_handoff(state_path, previous_state, state, payload, control_agent=_CONTROL_AGENT)
+    return emit_handoff(output_path, payload, handoff_type=handoff_type, control_agent=_CONTROL_AGENT)
 
 
 def _load_inputs(load_handoff_path: Path, state_path: Path) -> tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None]:
@@ -107,7 +116,7 @@ def _load_inputs(load_handoff_path: Path, state_path: Path) -> tuple[dict[str, A
         load_handoff = _read_json(load_handoff_path)
     except Exception as exc:
         return None, None, {"action": "repair or replace load_campaign.latest.json", "summary": "load handoff unreadable", "warnings": [str(exc)]}
-    if not isinstance(load_handoff, dict) or load_handoff.get("outcome") != "ok":
+    if not load_campaign_handoff_is_ready(load_handoff):
         return None, None, {"action": "repair or replace load_campaign.latest.json", "summary": "load handoff invalid", "warnings": []}
 
     try:
@@ -291,6 +300,11 @@ def _iteration_report(
     metric = state["objective_snapshot"]["metric"]
     per_dataset = " ".join(f"{key}={value}" for key, value in state["baseline"]["by_dataset"].items())
     learnings = "; ".join(analysis_summary.get("learnings", [])) or "none"
+    maintenance_entries = state.get("maintenance_summary") or []
+    maintenance_text = (
+        "; ".join(entry.get("summary", "") for entry in maintenance_entries if entry.get("summary"))
+        or "none"
+    )
     return "\n".join(
         [
             f"=== Iteration {completed_iteration} Report ===",
@@ -300,7 +314,7 @@ def _iteration_report(
             f"Per-dataset scores:     {per_dataset}",
             f"Key learnings:          {learnings}",
             f"Carry-over proposals:   {len(state['current_proposals'])}",
-            f"Maintenance work done:  {state.get('maintenance_summary', '') or 'none'}",
+            f"Maintenance work done:  {maintenance_text}",
             f"Next action:            {state['next_action']}",
         ]
     )
@@ -328,9 +342,15 @@ def _stop_reason(state: dict[str, Any], stop_conditions: dict[str, Any]) -> str:
 
 def _plan_roll_iteration(load_handoff: dict[str, Any], state_path: Path, tasks_dir: Path, output_path: Path) -> dict[str, Any]:
     state = _read_json(state_path)
+    previous_state = deepcopy(state)
     selected = state.get("selected_experiment")
     if not isinstance(selected, dict) or not isinstance(selected.get("analysis_summary"), dict):
-        return _runtime_error(output_path, "PLAN_ROLL_ITERATION", "stage selected experiment analysis before rollover", "analysis summary missing")
+        return _runtime_error(
+            output_path,
+            _PLAN_HANDOFF_TYPE,
+            "stage selected experiment analysis before rollover",
+            "analysis summary missing",
+        )
 
     iteration = state["current_iteration"]
     task_path = tasks_dir / f"rollover-iter-{iteration}.md"
@@ -338,36 +358,47 @@ def _plan_roll_iteration(load_handoff: dict[str, Any], state_path: Path, tasks_d
     task_path.write_text(_rollover_task_markdown(iteration, state, load_handoff), encoding="utf-8")
     state["machine_state"] = "ROLL_ITERATION"
     state["next_action"] = "run proposal rollover"
-    _write_json(state_path, state)
 
+    rollover_task_file = str(Path(".ml-metaopt") / "tasks" / f"rollover-iter-{iteration}.md")
+    rollover_result_file = str(Path(".ml-metaopt") / "worker-results" / f"rollover-iter-{iteration}.json")
     payload = {
         "schema_version": 1,
-        "producer": _CONTROL_AGENT,
-        "phase": "PLAN_ROLL_ITERATION",
-        "outcome": "planned",
         "worker_kind": "custom_agent",
         "worker_ref": "metaopt-rollover-worker",
-        "task_file": str(Path(".ml-metaopt") / "tasks" / f"rollover-iter-{iteration}.md"),
-        "result_file": str(Path(".ml-metaopt") / "worker-results" / f"rollover-iter-{iteration}.json"),
+        "task_file": rollover_task_file,
+        "result_file": rollover_result_file,
         "continue_campaign": None,
         "stop_reason": "",
-        "recommended_executor_phase": "RUN_ROLLOVER",
         "recommended_next_machine_state": "ROLL_ITERATION",
-        "recommended_next_action": "launch rollover worker",
         "iteration_report": None,
+        "launch_requests": [
+            {
+                "worker_ref": "metaopt-rollover-worker",
+                "model_class": "strong_reasoner",
+                "task_file": rollover_task_file,
+                "result_file": rollover_result_file,
+            },
+        ],
         "executor_directives": [],
         "warnings": [],
         "summary": "iteration rollover worker is ready to run",
     }
-    return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
+    persist_state_handoff(state_path, previous_state, state, payload, control_agent=_CONTROL_AGENT)
+    return emit_handoff(output_path, payload, handoff_type=_PLAN_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
 
 def _gate_roll_iteration(load_handoff: dict[str, Any], state_path: Path, worker_results_dir: Path, output_path: Path) -> dict[str, Any]:
     state = _read_json(state_path)
+    previous_state = deepcopy(state)
     iteration = state["current_iteration"]
     result_path = worker_results_dir / f"rollover-iter-{iteration}.json"
     if not result_path.exists():
-        return _runtime_error(output_path, "GATE_ROLL_ITERATION", "stage rollover worker output before gating", "rollover worker result missing")
+        return _runtime_error(
+            output_path,
+            _GATE_HANDOFF_TYPE,
+            "stage rollover worker output before gating",
+            "rollover worker result missing",
+        )
 
     rollover_result = _read_json(result_path)
     rollover_warnings = _validate_rollover_result(rollover_result)
@@ -376,7 +407,7 @@ def _gate_roll_iteration(load_handoff: dict[str, Any], state_path: Path, worker_
             output_path,
             state_path,
             state,
-            phase="GATE_ROLL_ITERATION",
+            handoff_type=_GATE_HANDOFF_TYPE,
             summary="rollover worker output violates the iteration-close contract shape",
             warnings=rollover_warnings,
             next_action="repair rollover worker output and resume from the preserved state",
@@ -427,22 +458,16 @@ def _gate_roll_iteration(load_handoff: dict[str, Any], state_path: Path, worker_
         for slot in state.get("active_slots", [])
         if isinstance(slot, dict) and isinstance(slot.get("slot_id"), str) and slot["slot_id"]
     ]
-    _write_json(state_path, state)
 
     payload = {
         "schema_version": 1,
-        "producer": _CONTROL_AGENT,
-        "phase": "GATE_ROLL_ITERATION",
-        "outcome": "rollover_complete",
         "worker_kind": None,
         "worker_ref": None,
         "task_file": None,
         "result_file": str(Path(".ml-metaopt") / "worker-results" / f"rollover-iter-{iteration}.json"),
         "continue_campaign": continue_campaign,
         "stop_reason": stop_reason,
-        "recommended_executor_phase": "QUIESCE_SLOTS",
         "recommended_next_machine_state": "QUIESCE_SLOTS",
-        "recommended_next_action": "drain or cancel active slots",
         "iteration_report": state["last_iteration_report"],
         "executor_directives": [
             {
@@ -455,6 +480,9 @@ def _gate_roll_iteration(load_handoff: dict[str, Any], state_path: Path, worker_
                 "action": "drain_slots",
                 "reason": "drain active background slots before next iteration or shutdown",
                 "drain_window_seconds": 60,
+                "quiesce_event_path": str(
+                    Path(".ml-metaopt") / "executor-events" / f"quiesce-slots-iter-{next_iteration if not stop_reason else iteration}.json"
+                ),
             },
             {
                 "action": "cancel_slots",
@@ -465,15 +493,22 @@ def _gate_roll_iteration(load_handoff: dict[str, Any], state_path: Path, worker_
         "warnings": [],
         "summary": "rollover semantics applied and quiesce preparation is complete",
     }
-    return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
+    persist_state_handoff(state_path, previous_state, state, payload, control_agent=_CONTROL_AGENT)
+    return emit_handoff(output_path, payload, handoff_type=_GATE_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
 
 def _quiesce_slots(state_path: Path, executor_events_dir: Path, output_path: Path) -> dict[str, Any]:
     state = _read_json(state_path)
+    previous_state = deepcopy(state)
     iteration = state["current_iteration"]
     event_path = executor_events_dir / f"quiesce-slots-iter-{iteration}.json"
     if not event_path.exists():
-        return _runtime_error(output_path, "QUIESCE_SLOTS", "stage quiesce executor output before gating", "quiesce event missing")
+        return _runtime_error(
+            output_path,
+            _QUIESCE_HANDOFF_TYPE,
+            "stage quiesce executor output before gating",
+            "quiesce event missing",
+        )
     event = _read_json(event_path)
     event_warnings = _validate_quiesce_event(event)
     if event_warnings:
@@ -481,7 +516,7 @@ def _quiesce_slots(state_path: Path, executor_events_dir: Path, output_path: Pat
             output_path,
             state_path,
             state,
-            phase="QUIESCE_SLOTS",
+            handoff_type=_QUIESCE_HANDOFF_TYPE,
             summary="quiesce executor output violates the iteration-close contract shape",
             warnings=event_warnings,
             next_action="repair quiesce executor output and resume from the preserved state",
@@ -495,14 +530,12 @@ def _quiesce_slots(state_path: Path, executor_events_dir: Path, output_path: Pat
         state["status"] = "RUNNING"
         state["machine_state"] = "MAINTAIN_BACKGROUND_POOL"
         state["next_action"] = "maintain background slot pool"
-        outcome = "continue"
         next_state = "MAINTAIN_BACKGROUND_POOL"
         cleanup_directives: list[dict[str, str]] = []
     elif event.get("blocked_protocol"):
         state["status"] = "BLOCKED_PROTOCOL"
         state["machine_state"] = "BLOCKED_PROTOCOL"
         state["next_action"] = "protocol cannot represent the next semantic step; manual intervention required"
-        outcome = "blocked_protocol"
         next_state = "BLOCKED_PROTOCOL"
         cleanup_directives = [
             {
@@ -515,7 +548,6 @@ def _quiesce_slots(state_path: Path, executor_events_dir: Path, output_path: Pat
         state["status"] = "COMPLETE"
         state["machine_state"] = "COMPLETE"
         state["next_action"] = "emit final report and remove orchestration hook"
-        outcome = "complete"
         next_state = "COMPLETE"
         cleanup_directives = [
             {
@@ -535,34 +567,39 @@ def _quiesce_slots(state_path: Path, executor_events_dir: Path, output_path: Pat
             },
         ]
 
-    _write_json(state_path, state)
     payload = {
         "schema_version": 1,
-        "producer": _CONTROL_AGENT,
-        "phase": "QUIESCE_SLOTS",
-        "outcome": outcome,
         "worker_kind": None,
         "worker_ref": None,
         "task_file": None,
         "result_file": str(Path(".ml-metaopt") / "executor-events" / f"quiesce-slots-iter-{iteration}.json"),
         "continue_campaign": bool(event.get("continue_campaign")),
         "stop_reason": event.get("stop_reason", ""),
-        "recommended_executor_phase": None,
         "recommended_next_machine_state": next_state,
-        "recommended_next_action": state["next_action"],
         "iteration_report": state.get("last_iteration_report"),
         "executor_directives": cleanup_directives,
         "warnings": [],
         "summary": event.get("summary", "quiesce results integrated"),
     }
-    return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
+    persist_state_handoff(state_path, previous_state, state, payload, control_agent=_CONTROL_AGENT)
+    return emit_handoff(output_path, payload, handoff_type=_QUIESCE_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
 
 def main() -> int:
     args = _parse_args()
     load_handoff, _, error = _load_inputs(Path(args.load_handoff), Path(args.state_path))
     if error is not None:
-        payload = _runtime_error(Path(args.output), None, error["action"], error["summary"], error["warnings"])
+        payload = _runtime_error(
+            Path(args.output),
+            {
+                "plan_roll_iteration": _PLAN_HANDOFF_TYPE,
+                "gate_roll_iteration": _GATE_HANDOFF_TYPE,
+                "quiesce_slots": _QUIESCE_HANDOFF_TYPE,
+            }[args.mode],
+            error["action"],
+            error["summary"],
+            error["warnings"],
+        )
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
 

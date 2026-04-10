@@ -11,10 +11,10 @@ Load this file before dispatching any worker subagent.
 ## Dispatch Types
 
 ### Slot-Based Dispatch
-Used for ideation, maintenance, synthesis, design, materialization, diagnosis, and analysis. The orchestrator creates a slot entry in `active_slots` with the appropriate `slot_class`, `mode`, and `model_class` before launching the subagent.
+Used for ideation, maintenance, selection, design, materialization, diagnosis, and analysis. The orchestrator creates a slot entry in `active_slots` with the appropriate `slot_class`, `mode`, and `model_class` before launching the subagent.
 
 ### Inline Dispatch
-Used for rollover. The orchestrator launches the subagent synchronously during a state transition. No slot entry is created in `active_slots`. The subagent returns before the orchestrator advances to the next state.
+Used for rollover. `metaopt-iteration-close-control` emits a `launch_requests` entry for `metaopt-rollover-worker` without `slot_class` or `mode`; the absence of `slot_class` signals inline dispatch to the orchestrator. The orchestrator launches the worker synchronously. No slot entry is created in `active_slots`. The subagent returns before the orchestrator advances to the next state. Because rollover is inline-only, `mode = "rollover"` is not a valid auxiliary slot mode — attempts to dispatch rollover as a slot-based worker are rejected by the guardrail.
 
 ### Launch Request Model Hints
 
@@ -23,7 +23,7 @@ Every `launch_requests` entry may include a `preferred_model` field — a determ
 - `strong_coder` → `claude-opus-4.6-fast`
 - `general_worker` → `claude-sonnet-4`
 
-The `preferred_model` is a deterministic launch parameter, not an excuse for semantic fallback. If the preferred model is unavailable, the orchestrator uses the strongest available model in the same class and records the substitution in the slot metadata (`requested_model` vs `resolved_model`).
+The `preferred_model` is a deterministic launch parameter, not an excuse for semantic fallback. If the preferred model is unavailable, the orchestrator takes the next configured fallback for that model class and records the substitution in the slot metadata (`requested_model` vs `resolved_model`).
 
 ### Artifact Preconditions and `BLOCKED_PROTOCOL`
 
@@ -137,15 +137,15 @@ This phase is governed by `metaopt-background-control`:
 - Findings-only: append findings summary to `state.maintenance_summary`
 - Code-modifying: write one unified diff patch artifact to `.ml-metaopt/artifacts/patches/`; orchestrator integrates mechanically
 
-### Prompt Bridge
+### Task File Bridge
 
-Because `repo-audit-refactor-optimize` is a generic skill, the orchestrator must include in its subagent prompt:
-- The patch artifact contract from `references/worker-lanes.md` (unified diff format, metadata fields)
+Because `repo-audit-refactor-optimize` is a generic skill, `metaopt-background-control` must embed the following context in every staged maintenance task file it writes:
+- The patch artifact contract from `references/worker-lanes.md` (unified diff format, required metadata fields)
 - The target worktree path
 - The campaign goal context for focus area selection
 - An explicit instruction to produce either findings-only output or one unified diff patch with the required metadata fields
 
-If the maintenance worker returns output that does not match the expected patch artifact shape, treat it as findings-only and append to `state.maintenance_summary`.
+The orchestrator passes this task file to the worker without modification. If the maintenance worker returns output that does not match the expected patch artifact shape, the `metaopt-background-control` gate phase treats it as findings-only and appends to `state.maintenance_summary`.
 
 ## SELECT_EXPERIMENT
 
@@ -156,7 +156,7 @@ This state is governed by `metaopt-select-design`:
 
 **Worker target:** `metaopt-selection-worker` (`custom_agent`)
 **Slot class:** `auxiliary`
-**Mode:** `synthesis`
+**Mode:** `selection`
 **Model class:** `strong_reasoner`
 
 ### Input (from orchestrator context)
@@ -208,13 +208,13 @@ This state is governed by `metaopt-select-design`:
 **Model class:** `strong_coder` (enforced: `mode = materialization` requires `model_class = strong_coder`)
 
 This state is governed by `metaopt-local-execution-control`:
-- The control agent writes staged materialization task files (`plan_local_changeset`)
-- The orchestrator launches the materialization worker, applies patches mechanically, packages artifacts, and stages raw executor outputs
+- The control agent writes a staged materialization task file and emits a `launch_requests` entry for `metaopt-materialization-worker` (`plan_local_changeset`)
+- The orchestrator launches the worker from the `launch_requests` entry, applies patches mechanically per `executor_directives`, packages artifacts, and stages raw executor outputs
 - The control agent semantically updates `state.local_changeset` and decides the next retry/advance action (`gate_local_sanity`)
 
 ### Input (from orchestrator context)
 
-The materialization worker operates in one of three modes. The orchestrator must pass `materialization_mode` to indicate which.
+The materialization worker operates in one of three modes. `metaopt-local-execution-control` embeds `materialization_mode` in the staged task file it writes; the orchestrator passes the task file to the worker without modification.
 
 > `materialization_mode` is a dispatch-specific parameter passed in the worker subagent prompt; it is not part of the Standard Envelope. Valid values: `"standard"`, `"remediation"`, `"conflict_resolution"`.
 
@@ -379,7 +379,7 @@ This state is governed by `metaopt-iteration-close-control`:
 - Move filtered carry-over proposals into `state.current_proposals`
 - For merged proposals, enrich the merged candidate with a new `proposal_id` (using `<campaign_id>-p<sequence_number>`), set `source_slot_id = "rollover"` and `creation_iteration` to the new iteration, then append to `state.current_proposals`
 - Clear `state.next_proposals`
-- If `needs_fresh_ideation == true`, the orchestrator prioritizes ideation in the next `MAINTAIN_BACKGROUND_POOL` entry
+- If `needs_fresh_ideation == true`, `metaopt-background-control` prioritizes ideation slots in its next `MAINTAIN_BACKGROUND_POOL` plan phase
 - Increment `state.current_iteration` only when the campaign will continue into another iteration
 - Clear `state.selected_experiment` after persisting the completed experiment record
 - Evaluate stop conditions against `target_metric`, `max_iterations`, and `max_no_improve_iterations`

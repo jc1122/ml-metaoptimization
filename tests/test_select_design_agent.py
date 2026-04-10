@@ -23,10 +23,10 @@ class SelectDesignAgentTests(unittest.TestCase):
             return handoff
         payload = {
             "schema_version": 1,
-            "producer": "metaopt-load-campaign",
-            "phase": "LOAD_CAMPAIGN",
-            "outcome": "ok",
+            "handoff_type": "load_campaign.validate",
+            "control_agent": "metaopt-load-campaign",
             "campaign_id": "market-forecast-v3",
+            "campaign_valid": True,
             "campaign_identity_hash": "sha256:f50928628873800b25a5dfb41f2fd6c93acfc210424953f53a5005e09379fa4c",
             "runtime_config_hash": "sha256:6f59ca57fb3da56f815d7fb03f8be7335fa9d14344c49154308e9e65990e9ac6",
             "goal": "Reduce forecasting error without destabilizing rollout assumptions",
@@ -71,6 +71,8 @@ class SelectDesignAgentTests(unittest.TestCase):
                 "backend": "ray-hetzner",
                 "retry_policy": {"max_attempts": 2},
             },
+            "recommended_next_machine_state": "HYDRATE_STATE",
+            "state_patch": None,
             "warnings": [],
             "summary": "ok",
         }
@@ -204,11 +206,10 @@ class SelectDesignAgentTests(unittest.TestCase):
                 state=self._base_state(),
             )
 
-            self.assertEqual(payload["phase"], "PLAN_SELECT_EXPERIMENT")
-            self.assertEqual(payload["outcome"], "planned")
+            self.assertEqual(payload["handoff_type"], "select_design.plan_select_experiment")
             self.assertEqual(payload["worker_kind"], "custom_agent")
             self.assertEqual(payload["worker_ref"], "metaopt-selection-worker")
-            self.assertEqual(payload["recommended_executor_phase"], "RUN_SELECTION")
+            self.assertEqual(payload["launch_requests"][0]["mode"], "selection")
             self.assertEqual(payload["recommended_next_machine_state"], "SELECT_EXPERIMENT")
             self.assertEqual(payload["task_file"], ".ml-metaopt/tasks/select-experiment-iter-1.md")
             self.assertEqual(payload["result_file"], ".ml-metaopt/worker-results/select-experiment-iter-1.json")
@@ -266,12 +267,11 @@ class SelectDesignAgentTests(unittest.TestCase):
                 state=json.loads((tempdir / ".ml-metaopt" / "state.json").read_text(encoding="utf-8")),
             )
 
-            self.assertEqual(payload["phase"], "GATE_SELECT_AND_PLAN_DESIGN")
-            self.assertEqual(payload["outcome"], "selection_complete")
+            self.assertEqual(payload["handoff_type"], "select_design.gate_select_and_plan_design")
             self.assertEqual(payload["worker_kind"], "custom_agent")
             self.assertEqual(payload["worker_ref"], "metaopt-design-worker")
             self.assertEqual(payload["proposal_id"], "market-forecast-v3-p1")
-            self.assertEqual(payload["recommended_executor_phase"], "RUN_DESIGN")
+            self.assertEqual(payload["launch_requests"][0]["mode"], "design")
             self.assertEqual(payload["recommended_next_machine_state"], "DESIGN_EXPERIMENT")
 
             state = json.loads(state_path.read_text(encoding="utf-8"))
@@ -282,6 +282,8 @@ class SelectDesignAgentTests(unittest.TestCase):
             self.assertIsNone(state["selected_experiment"]["design"])
             self.assertEqual(state["selected_experiment"]["diagnosis_history"], [])
             self.assertIsNone(state["selected_experiment"]["analysis_summary"])
+            self.assertEqual(payload["state_patch"]["next_action"], "run design worker")
+            self.assertEqual(payload["state_patch"]["selected_experiment"]["proposal_id"], "market-forecast-v3-p1")
 
             design_task = (tasks_dir / "design-experiment-iter-1.md").read_text(encoding="utf-8")
             self.assertIn("metaopt-design-worker", design_task)
@@ -327,8 +329,7 @@ class SelectDesignAgentTests(unittest.TestCase):
                 state=json.loads((tempdir / ".ml-metaopt" / "state.json").read_text(encoding="utf-8")),
             )
 
-            self.assertEqual(payload["phase"], "FINALIZE_SELECT_DESIGN")
-            self.assertEqual(payload["outcome"], "selected_and_designed")
+            self.assertEqual(payload["handoff_type"], "select_design.finalize_select_design")
             self.assertEqual(payload["recommended_next_machine_state"], "MATERIALIZE_CHANGESET")
             self.assertEqual(payload["proposal_id"], "market-forecast-v3-p1")
             self.assertIn("validation", payload["design_summary"])
@@ -361,8 +362,9 @@ class SelectDesignAgentTests(unittest.TestCase):
                 state=json.loads((tempdir / ".ml-metaopt" / "state.json").read_text(encoding="utf-8")),
             )
 
-            self.assertEqual(payload["outcome"], "runtime_error")
-            self.assertEqual(payload["recommended_next_action"], "repair selection worker result and re-run gating")
+            self.assertEqual(payload["summary"], "winning proposal does not match frozen current_proposals")
+            self.assertEqual(payload["recovery_action"], "repair selection worker result and re-run gating")
+            self.assertIsNone(payload["recommended_next_machine_state"])
             state_after = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertIsNone(state_after["selected_experiment"])
             self.assertEqual(state_after["machine_state"], "SELECT_EXPERIMENT")
@@ -391,8 +393,9 @@ class SelectDesignAgentTests(unittest.TestCase):
                 state=json.loads((tempdir / ".ml-metaopt" / "state.json").read_text(encoding="utf-8")),
             )
 
-            self.assertEqual(payload["outcome"], "runtime_error")
-            self.assertEqual(payload["recommended_next_action"], "stage selection worker result before gating")
+            self.assertEqual(payload["summary"], "selection result missing")
+            self.assertEqual(payload["recovery_action"], "stage selection worker result before gating")
+            self.assertIsNone(payload["recommended_next_machine_state"])
             state_after = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertIsNone(state_after["selected_experiment"])
 
@@ -426,8 +429,9 @@ class SelectDesignAgentTests(unittest.TestCase):
                 state=json.loads((tempdir / ".ml-metaopt" / "state.json").read_text(encoding="utf-8")),
             )
 
-            self.assertEqual(payload["outcome"], "runtime_error")
-            self.assertEqual(payload["recommended_next_action"], "repair design worker result and re-run finalization")
+            self.assertEqual(payload["summary"], "design result proposal_id does not match selected_experiment")
+            self.assertEqual(payload["recovery_action"], "repair design worker result and re-run finalization")
+            self.assertIsNone(payload["recommended_next_machine_state"])
             state_after = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertIsNone(state_after["selected_experiment"]["design"])
             self.assertEqual(state_after["machine_state"], "DESIGN_EXPERIMENT")
@@ -441,14 +445,15 @@ class SelectDesignAgentTests(unittest.TestCase):
                 malformed_handoff=True,
             )
 
-            self.assertEqual(payload["outcome"], "runtime_error")
-            self.assertEqual(payload["recommended_next_action"], "repair or replace load_campaign.latest.json")
+            self.assertEqual(payload["summary"], "load handoff unreadable")
+            self.assertEqual(payload["recovery_action"], "repair or replace load_campaign.latest.json")
+            self.assertIsNone(payload["recommended_next_machine_state"])
 
     def _assert_envelope_keys(self, payload: dict, *, handoff_type: str, control_agent: str = "metaopt-select-design") -> None:
         self.assertEqual(payload["handoff_type"], handoff_type)
         self.assertEqual(payload["control_agent"], control_agent)
         self.assertIsInstance(payload["launch_requests"], list)
-        self.assertIsInstance(payload["state_patch"], dict)
+        self.assertTrue(payload["state_patch"] is None or isinstance(payload["state_patch"], dict))
         self.assertIsInstance(payload["executor_directives"], list)
         self.assertIn("summary", payload)
         self.assertIn("warnings", payload)
@@ -461,7 +466,7 @@ class SelectDesignAgentTests(unittest.TestCase):
                 mode="plan_select_experiment",
                 state=self._base_state(),
             )
-            self._assert_envelope_keys(payload, handoff_type="SELECT_DESIGN")
+            self._assert_envelope_keys(payload, handoff_type="select_design.plan_select_experiment")
 
     def test_gate_select_envelope_keys(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir_str:
@@ -480,7 +485,7 @@ class SelectDesignAgentTests(unittest.TestCase):
                 mode="gate_select_and_plan_design",
                 state=json.loads((tempdir / ".ml-metaopt" / "state.json").read_text(encoding="utf-8")),
             )
-            self._assert_envelope_keys(payload, handoff_type="SELECT_DESIGN")
+            self._assert_envelope_keys(payload, handoff_type="select_design.gate_select_and_plan_design")
 
     def test_finalize_design_envelope_keys(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir_str:
@@ -511,7 +516,7 @@ class SelectDesignAgentTests(unittest.TestCase):
                 mode="finalize_select_design",
                 state=json.loads((tempdir / ".ml-metaopt" / "state.json").read_text(encoding="utf-8")),
             )
-            self._assert_envelope_keys(payload, handoff_type="SELECT_DESIGN")
+            self._assert_envelope_keys(payload, handoff_type="select_design.finalize_select_design")
 
     def test_runtime_error_envelope_keys(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir_str:
@@ -521,8 +526,8 @@ class SelectDesignAgentTests(unittest.TestCase):
                 state=self._base_state(),
                 malformed_handoff=True,
             )
-            self._assert_envelope_keys(payload, handoff_type="SELECT_DESIGN")
-            self.assertEqual(payload["outcome"], "runtime_error")
+            self._assert_envelope_keys(payload, handoff_type="select_design.plan_select_experiment")
+            self.assertEqual(payload["summary"], "load handoff unreadable")
 
     def test_plan_select_launch_request_includes_preferred_model_for_strong_reasoner(self) -> None:
         """Selection launch request must carry preferred_model == 'claude-opus-4.6-fast'."""
@@ -533,7 +538,6 @@ class SelectDesignAgentTests(unittest.TestCase):
                 state=self._base_state(),
             )
 
-            self.assertEqual(payload["outcome"], "planned")
             self.assertGreater(len(payload["launch_requests"]), 0)
             sel_lr = payload["launch_requests"][0]
             self.assertEqual(sel_lr["slot_class"], "auxiliary")
@@ -561,7 +565,6 @@ class SelectDesignAgentTests(unittest.TestCase):
                 state=json.loads((tempdir / ".ml-metaopt" / "state.json").read_text(encoding="utf-8")),
             )
 
-            self.assertEqual(payload["outcome"], "selection_complete")
             self.assertGreater(len(payload["launch_requests"]), 0)
             design_lr = payload["launch_requests"][0]
             self.assertEqual(design_lr["slot_class"], "auxiliary")
@@ -607,10 +610,9 @@ class SelectDesignAgentTests(unittest.TestCase):
             )
 
             # Must transition to BLOCKED_PROTOCOL, not runtime_error
-            self.assertEqual(payload["outcome"], "blocked_protocol")
             self.assertEqual(payload["recommended_next_machine_state"], "BLOCKED_PROTOCOL")
             self.assertIn("materialization", payload["summary"])
-            self.assertIn("protocol violation", payload["recommended_next_action"])
+            self.assertIn("protocol violation", payload["state_patch"]["next_action"])
             self.assertTrue(len(payload["warnings"]) > 0)
             # State on disk must reflect BLOCKED_PROTOCOL
             state_after = json.loads(state_path.read_text(encoding="utf-8"))

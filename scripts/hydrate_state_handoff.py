@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
 import json
 import os
 import re
@@ -9,7 +10,14 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _handoff_utils import emit_handoff, read_json, timestamp, write_json
+from _handoff_utils import (
+    emit_handoff,
+    load_campaign_handoff_is_ready,
+    persist_state_handoff,
+    read_json,
+    timestamp,
+    write_json,
+)
 
 
 AGENTS_HOOK = """<!-- ml-metaoptimization:begin -->
@@ -17,7 +25,7 @@ AGENTS_HOOK = """<!-- ml-metaoptimization:begin -->
 `.ml-metaopt/state.json` exists. Inspect its `status`.
 If `status` is `RUNNING`, invoke the `ml-metaoptimization` skill immediately,
 resume from `machine_state`, and do not ask the user for campaign inputs.
-If `status` is terminal, remove this block and follow `next_action` instead of auto-resuming.
+If `status` is terminal, remove this block, stop auto-resuming, and surface `next_action` to the operator without executing from it.
 <!-- ml-metaoptimization:end -->
 """
 AGENTS_HOOK_RE = re.compile(
@@ -59,17 +67,21 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-_HANDOFF_TYPE = "HYDRATE_STATE"
+_HANDOFF_TYPE = "hydrate_state.hydrate"
 _CONTROL_AGENT = "metaopt-hydrate-state"
 _TERMINAL_STATUSES = {"COMPLETE", "BLOCKED_CONFIG", "BLOCKED_PROTOCOL", "FAILED"}
 
 
-def _runtime_error(output_path: Path, summary: str, *, warnings: list[str] | None = None, state_preserved: bool = False) -> dict[str, Any]:
+def _runtime_error(
+    output_path: Path,
+    recovery_action: str,
+    summary: str,
+    *,
+    warnings: list[str] | None = None,
+    state_preserved: bool = False,
+) -> dict[str, Any]:
     payload = {
         "schema_version": 1,
-        "producer": _CONTROL_AGENT,
-        "phase": _HANDOFF_TYPE,
-        "outcome": "runtime_error",
         "state_path": None,
         "state_written": False,
         "state_preserved": state_preserved,
@@ -80,9 +92,10 @@ def _runtime_error(output_path: Path, summary: str, *, warnings: list[str] | Non
         "effective_status": None,
         "effective_machine_state": None,
         "recommended_next_machine_state": None,
-        "recommended_next_action": summary,
+        "recovery_action": recovery_action,
         "runtime_capabilities": None,
         "agents_hook_action": "unchanged",
+        "state_patch": None,
         "warnings": warnings or [],
         "summary": summary,
     }
@@ -187,6 +200,7 @@ def _fresh_state(load_handoff: dict[str, Any], runtime_capabilities: dict[str, A
             "current_pool_frozen": False,
             "ideation_rounds_by_slot": {},
             "shortfall_reason": "",
+            "pool_saturated_iteration": None,
         },
         "active_slots": [],
         "current_proposals": [],
@@ -198,6 +212,7 @@ def _fresh_state(load_handoff: dict[str, Any], runtime_capabilities: dict[str, A
         "completed_experiments": [],
         "key_learnings": [],
         "no_improve_iterations": 0,
+        "maintenance_summary": [],
         "campaign_started_at": timestamp(),
         "runtime_capabilities": {
             "verified_at": runtime_capabilities["verified_at"],
@@ -207,14 +222,6 @@ def _fresh_state(load_handoff: dict[str, Any], runtime_capabilities: dict[str, A
         },
     }
 
-
-def _blocked_state(load_handoff: dict[str, Any], runtime_capabilities: dict[str, Any], next_action: str, *, status: str = "BLOCKED_CONFIG") -> dict[str, Any]:
-    state = _fresh_state(load_handoff, runtime_capabilities)
-    state["status"] = status
-    state["machine_state"] = status
-    state["next_action"] = next_action
-    state["active_slots"] = []
-    return state
 
 
 def build_handoff(
@@ -227,20 +234,35 @@ def build_handoff(
     try:
         load_handoff = _load_step1_handoff(load_handoff_path)
     except Exception as exc:
-        return _runtime_error(output_path, "repair or replace load_campaign.latest.json", warnings=[str(exc)])
+        return _runtime_error(
+            output_path,
+            "repair or replace load_campaign.latest.json",
+            "load handoff unreadable",
+            warnings=[str(exc)],
+        )
 
-    if not load_handoff or load_handoff.get("outcome") != "ok":
-        return _runtime_error(output_path, "repair or regenerate load_campaign.latest.json")
+    if not load_campaign_handoff_is_ready(load_handoff):
+        return _runtime_error(
+            output_path,
+            "repair or regenerate load_campaign.latest.json",
+            "load handoff invalid",
+        )
 
     try:
         runtime_capabilities = _probe_skills(skills_manifest_path)
     except Exception as exc:
-        return _runtime_error(output_path, "repair or replace agents/worker-skills.json", warnings=[str(exc)])
+        return _runtime_error(
+            output_path,
+            "repair or replace agents/worker-skills.json",
+            "skills manifest unreadable",
+            warnings=[str(exc)],
+        )
 
     warnings: list[str] = []
     state_written = False
     state_preserved = False
     resume_mode = "none"
+    previous_state: dict[str, Any] = {}
 
     if state_path.exists():
         try:
@@ -250,6 +272,7 @@ def build_handoff(
             return _runtime_error(
                 output_path,
                 "repair or replace .ml-metaopt/state.json",
+                "existing state unreadable",
                 warnings=warnings,
                 state_preserved=True,
             )
@@ -258,9 +281,6 @@ def build_handoff(
             agents_action = _remove_hook(agents_path)
             payload = {
                 "schema_version": 1,
-                "producer": _CONTROL_AGENT,
-                "phase": _HANDOFF_TYPE,
-                "outcome": "blocked_config",
                 "state_path": str(state_path),
                 "state_written": False,
                 "state_preserved": True,
@@ -271,7 +291,7 @@ def build_handoff(
                 "effective_status": "BLOCKED_CONFIG",
                 "effective_machine_state": "BLOCKED_CONFIG",
                 "recommended_next_machine_state": "BLOCKED_CONFIG",
-                "recommended_next_action": "archive or remove the stale state before starting a new campaign",
+                "recovery_action": "archive or remove the stale state before starting a new campaign",
                 "runtime_capabilities": {
                     "verified_at": runtime_capabilities["verified_at"],
                     "available_skills": runtime_capabilities["available_skills"],
@@ -279,12 +299,14 @@ def build_handoff(
                     "degraded_lanes": runtime_capabilities["degraded_lanes"],
                 },
                 "agents_hook_action": agents_action,
+                "state_patch": None,
                 "warnings": warnings,
                 "summary": "state identity mismatch detected; preserved stale state and blocked resume",
             }
             return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
         state = existing_state
+        previous_state = deepcopy(existing_state)
         state["runtime_capabilities"] = {
             "verified_at": runtime_capabilities["verified_at"],
             "available_skills": runtime_capabilities["available_skills"],
@@ -301,25 +323,20 @@ def build_handoff(
         state = _fresh_state(load_handoff, runtime_capabilities)
         resume_mode = "fresh"
         outcome = "initialized"
+        previous_state = {}
 
     if runtime_capabilities["blocking_skill"] and outcome != "terminal":
-        state = _blocked_state(
-            load_handoff,
-            runtime_capabilities,
-            f"install missing skill: {runtime_capabilities['blocking_skill']}",
-        )
+        # Preserve all existing campaign data; only update control fields.
+        state["status"] = "BLOCKED_CONFIG"
+        state["machine_state"] = "BLOCKED_CONFIG"
+        state["next_action"] = f"install missing skill: {runtime_capabilities['blocking_skill']}"
+        state["active_slots"] = []
         outcome = "blocked_config"
 
     agents_action = _ensure_hook(agents_path) if state["status"] == "RUNNING" else _remove_hook(agents_path)
-    state_path.parent.mkdir(parents=True, exist_ok=True)
-    state_path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    state_written = True
 
     payload = {
         "schema_version": 1,
-        "producer": _CONTROL_AGENT,
-        "phase": _HANDOFF_TYPE,
-        "outcome": outcome,
         "state_path": str(state_path),
         "state_written": state_written,
         "state_preserved": state_preserved,
@@ -330,7 +347,7 @@ def build_handoff(
         "effective_status": state["status"],
         "effective_machine_state": state["machine_state"],
         "recommended_next_machine_state": state["machine_state"],
-        "recommended_next_action": state["next_action"],
+        "recovery_action": None,
         "runtime_capabilities": state["runtime_capabilities"],
         "agents_hook_action": agents_action,
         "warnings": warnings,
@@ -344,6 +361,9 @@ def build_handoff(
             else "required skill missing; wrote blocked state"
         ),
     }
+    persist_state_handoff(state_path, previous_state, state, payload, control_agent=_CONTROL_AGENT)
+    state_written = True
+    payload["state_written"] = True
     return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
 

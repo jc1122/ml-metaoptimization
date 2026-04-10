@@ -27,10 +27,10 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
             return handoff
         payload = {
             "schema_version": 1,
-            "producer": "metaopt-load-campaign",
-            "phase": "LOAD_CAMPAIGN",
-            "outcome": "ok",
+            "handoff_type": "load_campaign.validate",
+            "control_agent": "metaopt-load-campaign",
             "campaign_id": "market-forecast-v3",
+            "campaign_valid": True,
             "campaign_identity_hash": "sha256:f50928628873800b25a5dfb41f2fd6c93acfc210424953f53a5005e09379fa4c",
             "runtime_config_hash": "sha256:6f59ca57fb3da56f815d7fb03f8be7335fa9d14344c49154308e9e65990e9ac6",
             "objective_snapshot": {
@@ -50,6 +50,8 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 "runner_type": "ray_queue_runner",
                 "entrypoint": "python3 /srv/metaopt/project/scripts/ray_runner.py",
             },
+            "recommended_next_machine_state": "HYDRATE_STATE",
+            "state_patch": None,
             "warnings": [],
             "summary": "ok",
         }
@@ -209,8 +211,7 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 state=self._base_state(),
             )
 
-            self.assertEqual(payload["phase"], "PLAN_REMOTE_BATCH")
-            self.assertEqual(payload["outcome"], "planned")
+            self.assertEqual(payload["handoff_type"], "remote_execution.plan_remote_batch")
             self.assertEqual(payload["batch_id"], batch_id)
             self.assertEqual(payload["recommended_next_machine_state"], "ENQUEUE_REMOTE_BATCH")
             self.assertTrue(payload["manifest_path"].endswith(f"{batch_id}.json"))
@@ -233,7 +234,7 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 },
             )
 
-            self.assertEqual(payload["outcome"], "waiting")
+            self.assertEqual(payload["recommended_next_machine_state"], "WAIT_FOR_REMOTE_BATCH")
             self.assertEqual(updated_state["machine_state"], "WAIT_FOR_REMOTE_BATCH")
             self.assertEqual(updated_state["remote_batches"][0]["batch_id"], batch_id)
             self.assertEqual(updated_state["remote_batches"][0]["queue_ref"], "ray-queue-123")
@@ -258,7 +259,7 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 },
             )
 
-            self.assertEqual(payload["outcome"], "waiting")
+            self.assertEqual(payload["recommended_next_machine_state"], "WAIT_FOR_REMOTE_BATCH")
             self.assertEqual(updated_state["machine_state"], "WAIT_FOR_REMOTE_BATCH")
             self.assertEqual(updated_state["remote_batches"][0]["batch_id"], "batch-20260406-0002")
             self.assertEqual(updated_state["remote_batches"][0]["queue_ref"], "ray-queue-123")
@@ -281,7 +282,7 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 },
             )
 
-            self.assertEqual(payload["outcome"], "fetch_results")
+            self.assertEqual(payload["recommended_next_machine_state"], "WAIT_FOR_REMOTE_BATCH")
             self.assertEqual(updated_state["machine_state"], "WAIT_FOR_REMOTE_BATCH")
             self.assertEqual(updated_state["remote_batches"][0]["status"], "completed")
 
@@ -315,7 +316,7 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 },
             )
 
-            self.assertEqual(payload["outcome"], "run_analysis")
+            self.assertEqual(payload["recommended_next_machine_state"], "WAIT_FOR_REMOTE_BATCH")
             self.assertEqual(payload["worker_kind"], "custom_agent")
             self.assertEqual(payload["worker_ref"], "metaopt-analysis-worker")
             task_file = tasks_dir / "remote-analysis-batch-20260406-0002.md"
@@ -362,7 +363,8 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 },
             )
 
-            self.assertEqual(payload["outcome"], "analyzed")
+            self.assertEqual(payload["handoff_type"], "remote_execution.analyze_remote_results")
+            self.assertEqual(payload["recommended_next_machine_state"], "ROLL_ITERATION")
             self.assertEqual(updated_state["machine_state"], "ROLL_ITERATION")
             self.assertEqual(updated_state["baseline"]["aggregate"], 0.1213)
             self.assertEqual(updated_state["no_improve_iterations"], 0)
@@ -402,7 +404,7 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 },
             )
 
-            self.assertEqual(payload["outcome"], "blocked_config")
+            self.assertEqual(payload["recommended_next_machine_state"], "BLOCKED_CONFIG")
             self.assertEqual(updated_state["status"], "BLOCKED_CONFIG")
             self.assertEqual(updated_state["machine_state"], "BLOCKED_CONFIG")
 
@@ -427,7 +429,7 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 },
             )
 
-            self.assertEqual(payload["outcome"], "run_remote_diagnosis")
+            self.assertEqual(payload["recommended_next_machine_state"], "WAIT_FOR_REMOTE_BATCH")
             self.assertEqual(payload["worker_kind"], "custom_agent")
             self.assertEqual(payload["worker_ref"], "metaopt-diagnosis-worker")
             self.assertEqual(updated_state["machine_state"], "WAIT_FOR_REMOTE_BATCH")
@@ -447,15 +449,22 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 malformed_handoff=True,
             )
 
-            self.assertEqual(payload["outcome"], "runtime_error")
-            self.assertEqual(payload["recommended_next_action"], "repair or replace load_campaign.latest.json")
+            self.assertEqual(payload["summary"], "load handoff unreadable")
+            self.assertEqual(payload["recovery_action"], "repair or replace load_campaign.latest.json")
+            self.assertIsNone(payload["recommended_next_machine_state"])
             self.assertEqual(json.dumps(updated_state, sort_keys=True), original)
 
-    def _assert_envelope_keys(self, payload: dict, *, handoff_type: str = "REMOTE_EXECUTION_CONTROL", control_agent: str = "metaopt-remote-execution-control") -> None:
+    def _assert_envelope_keys(
+        self,
+        payload: dict,
+        *,
+        handoff_type: str,
+        control_agent: str = "metaopt-remote-execution-control",
+    ) -> None:
         self.assertEqual(payload["handoff_type"], handoff_type)
         self.assertEqual(payload["control_agent"], control_agent)
         self.assertIsInstance(payload["launch_requests"], list)
-        self.assertIsInstance(payload["state_patch"], dict)
+        self.assertTrue(payload["state_patch"] is None or isinstance(payload["state_patch"], dict))
         self.assertIsInstance(payload["executor_directives"], list)
         self.assertIn("summary", payload)
         self.assertIn("warnings", payload)
@@ -468,7 +477,7 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 mode="plan_remote_batch",
                 state=self._base_state(),
             )
-            self._assert_envelope_keys(payload)
+            self._assert_envelope_keys(payload, handoff_type="remote_execution.plan_remote_batch")
 
     def test_analyze_remote_results_envelope_keys(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir_str:
@@ -495,7 +504,40 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                     }
                 },
             )
-            self._assert_envelope_keys(payload)
+            self._assert_envelope_keys(payload, handoff_type="remote_execution.analyze_remote_results")
+
+    def test_analyze_remote_results_emits_state_patch_for_analysis_and_baseline(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            state = self._base_state()
+            state["machine_state"] = "WAIT_FOR_REMOTE_BATCH"
+            state["remote_batches"] = [{"batch_id": "batch-20260406-0002", "queue_ref": "ray-queue-123", "status": "completed"}]
+            payload, _, _ = self._run(
+                Path(tempdir_str),
+                mode="analyze_remote_results",
+                state=state,
+                executor_events={
+                    "remote-results-batch-20260406-0002": {
+                        "batch_id": "batch-20260406-0002",
+                        "status": "completed",
+                        "per_dataset": {"ds_main": 0.1208, "ds_holdout": 0.1225},
+                    }
+                },
+                worker_results={
+                    "remote-analysis-batch-20260406-0002": {
+                        "judgment": "improvement",
+                        "new_aggregate": 0.1213,
+                        "delta": -0.0071,
+                        "learnings": ["Rolling validation tightened the aggregate metric."],
+                        "invalidations": [],
+                        "carry_over_candidates": [],
+                    }
+                },
+            )
+
+            self.assertIn("baseline", payload["state_patch"])
+            self.assertIn("completed_experiments", payload["state_patch"])
+            self.assertIn("selected_experiment", payload["state_patch"])
+            self.assertEqual(payload["state_patch"]["next_action"], "roll iteration")
 
     def test_runtime_error_envelope_keys(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir_str:
@@ -505,8 +547,8 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 state=self._base_state(),
                 malformed_handoff=True,
             )
-            self._assert_envelope_keys(payload)
-            self.assertEqual(payload["outcome"], "runtime_error")
+            self._assert_envelope_keys(payload, handoff_type="remote_execution.plan_remote_batch")
+            self.assertEqual(payload["summary"], "load handoff unreadable")
 
     # ── directive-driven execution tests ─────────────────────────────
 
@@ -550,7 +592,6 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 },
             )
 
-            self.assertEqual(payload["outcome"], "waiting")
             directives = payload["executor_directives"]
             self.assertEqual(len(directives), 1)
             self.assertEqual(directives[0]["action"], "poll_batch_status")
@@ -574,7 +615,6 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 },
             )
 
-            self.assertEqual(payload["outcome"], "waiting")
             directives = payload["executor_directives"]
             self.assertEqual(len(directives), 1)
             self.assertEqual(directives[0]["action"], "poll_batch_status")
@@ -599,7 +639,6 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 },
             )
 
-            self.assertEqual(payload["outcome"], "fetch_results")
             directives = payload["executor_directives"]
             self.assertEqual(len(directives), 1)
             self.assertEqual(directives[0]["action"], "fetch_batch_results")
@@ -632,7 +671,6 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 },
             )
 
-            self.assertEqual(payload["outcome"], "run_analysis")
             self.assertEqual(payload["worker_ref"], "metaopt-analysis-worker")
             self.assertEqual(payload["executor_directives"], [])
 
@@ -657,7 +695,6 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 },
             )
 
-            self.assertEqual(payload["outcome"], "run_remote_diagnosis")
             self.assertEqual(payload["worker_ref"], "metaopt-diagnosis-worker")
             self.assertEqual(payload["executor_directives"], [])
 
@@ -776,7 +813,6 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 },
             )
 
-            self.assertEqual(payload["outcome"], "run_analysis")
             self.assertGreater(len(payload["launch_requests"]), 0)
             lr = payload["launch_requests"][0]
             self.assertEqual(lr["slot_class"], "auxiliary")
@@ -807,7 +843,6 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 },
             )
 
-            self.assertEqual(payload["outcome"], "run_remote_diagnosis")
             self.assertGreater(len(payload["launch_requests"]), 0)
             lr = payload["launch_requests"][0]
             self.assertEqual(lr["slot_class"], "auxiliary")
@@ -859,7 +894,7 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                     }
                 },
             )
-            self.assertEqual(payload["outcome"], "runtime_error")
+            self.assertIsNone(payload["recommended_next_machine_state"])
             self.assertIn("new_aggregate", payload["summary"])
             self.assertEqual(updated_state["baseline"]["aggregate"], original_baseline["aggregate"],
                 "baseline must not change when analysis payload is malformed")
@@ -889,7 +924,7 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                     }
                 },
             )
-            self.assertEqual(payload["outcome"], "runtime_error")
+            self.assertIsNone(payload["recommended_next_machine_state"])
             self.assertIn("delta", payload["summary"])
 
     def test_analyze_missing_per_dataset_on_improvement_returns_runtime_error(self) -> None:
@@ -918,10 +953,84 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                     }
                 },
             )
-            self.assertEqual(payload["outcome"], "runtime_error")
+            self.assertIsNone(payload["recommended_next_machine_state"])
             self.assertIn("per_dataset", payload["summary"])
             self.assertEqual(updated_state["baseline"]["by_dataset"], original_baseline["by_dataset"],
                 "baseline.by_dataset must not change when per_dataset is missing")
+
+    def test_gate_remote_batch_analysis_task_includes_batch_results_payload(self) -> None:
+        """Analysis task file must embed the actual batch results payload, not just a reference."""
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            state = self._base_state()
+            state["machine_state"] = "WAIT_FOR_REMOTE_BATCH"
+            state["remote_batches"] = [{"batch_id": "batch-20260406-0002", "queue_ref": "ray-queue-123", "status": "completed"}]
+            results_payload = {
+                "batch_id": "batch-20260406-0002",
+                "status": "completed",
+                "best_aggregate_result": {"metric": "rmse", "value": 0.1213},
+                "per_dataset": {"ds_main": 0.1208, "ds_holdout": 0.1225},
+                "artifact_locations": {
+                    "code": "s3://metaopt/artifacts/code/batch-20260406-0002.tar.gz",
+                    "data_manifest": "s3://metaopt/artifacts/data/batch-20260406-0002.json",
+                    "metrics": "s3://metaopt/results/batch-20260406-0002/metrics.json",
+                },
+                "logs_location": "s3://metaopt/results/batch-20260406-0002/logs.txt",
+            }
+            _, _, tasks_dir = self._run(
+                Path(tempdir_str),
+                mode="gate_remote_batch",
+                state=state,
+                executor_events={
+                    "remote-status-batch-20260406-0002": {
+                        "batch_id": "batch-20260406-0002",
+                        "status": "completed",
+                        "timestamps": {"queued_at": "2026-04-06T10:00:00Z"},
+                    },
+                    "remote-results-batch-20260406-0002": results_payload,
+                },
+            )
+
+            task_text = (tasks_dir / "remote-analysis-batch-20260406-0002.md").read_text(encoding="utf-8")
+            self.assertIn("Batch Results", task_text)
+            self.assertIn("0.1208", task_text, "per_dataset ds_main value must appear in task file")
+            self.assertIn("0.1213", task_text, "best_aggregate_result value must appear in task file")
+            self.assertIn("s3://metaopt/results/batch-20260406-0002/metrics.json", task_text,
+                          "artifact location must appear in task file")
+
+    def test_gate_remote_batch_diagnosis_task_includes_experiment_context(self) -> None:
+        """Remote diagnosis task file must include experiment design, changeset, sanity config, and attempt number."""
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            state = self._base_state()
+            state["machine_state"] = "WAIT_FOR_REMOTE_BATCH"
+            state["remote_batches"] = [{"batch_id": "batch-20260406-0002", "queue_ref": "ray-queue-123", "status": "running"}]
+            state["selected_experiment"]["sanity_attempts"] = 1
+            state["selected_experiment"]["design"] = {
+                "proposal_id": "market-forecast-v3-p1",
+                "primary_intervention": "Reduce leakage risk in evaluation",
+                "target_area": "validation",
+            }
+            _, _, tasks_dir = self._run(
+                Path(tempdir_str),
+                mode="gate_remote_batch",
+                state=state,
+                executor_events={
+                    "remote-status-batch-20260406-0002": {
+                        "batch_id": "batch-20260406-0002",
+                        "status": "failed",
+                        "timestamps": {"queued_at": "2026-04-06T10:00:00Z"},
+                        "classification": "infra_error",
+                        "message": "worker exited on cluster",
+                        "returncode": 137,
+                    }
+                },
+            )
+
+            task_text = (tasks_dir / "remote-diagnosis-batch-20260406-0002.md").read_text(encoding="utf-8")
+            self.assertIn("Experiment Context", task_text)
+            self.assertIn("primary_intervention", task_text, "experiment design must appear in task file")
+            self.assertIn("iter-1-materialization", task_text, "local changeset must appear in task file")
+            self.assertIn("Attempt Number", task_text)
+            self.assertIn("1", task_text, "sanity_attempts value must appear")
 
     def test_agent_profile_exists_and_declares_all_modes(self) -> None:
         self.assertTrue(AGENT_PROFILE.exists(), f"missing {AGENT_PROFILE}")

@@ -23,11 +23,12 @@ Every control agent emits a JSON handoff object conforming to this envelope. Fie
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `handoff_type` | string | yes | Identifies the handoff variant. Format: `<control_agent_short_name>.<phase>`, e.g. `"load_campaign.validate"`, `"background_control.plan"`, `"background_control.gate"`. |
-| `control_agent` | string | yes | The producing control agent name, e.g. `"metaopt-background-control"`. Equivalent to the legacy `producer` field. |
+| `handoff_type` | string | yes | Identifies the handoff variant. Format: `<control_agent_short_name>.<phase_or_mode>`, e.g. `"load_campaign.validate"`, `"background_control.plan_background_work"`, `"background_control.gate_background_work"`. |
+| `control_agent` | string | yes | The producing control agent name, e.g. `"metaopt-background-control"`. |
 | `recommended_next_machine_state` | string or null | yes | The machine state the orchestrator should transition to after applying this handoff. Null when the control agent defers the decision to a later gate phase. |
+| `recovery_action` | string or null | no | Operator-facing recovery guidance for runtime-error or blocked handoffs. This field is descriptive only and must never be executed mechanically. |
 | `launch_requests` | array | yes | Ordered list of worker launch requests for the orchestrator to execute. Empty array when no launches are needed. Each entry specifies `worker_ref`, `model_class`, `task_file`, `result_file`, and optionally `preferred_model`. |
-| `state_patch` | object or null | yes | A partial state object whose keys the orchestrator merges into `.ml-metaopt/state.json`. Null when no state mutation is needed. Only keys owned by this control agent may appear. |
+| `state_patch` | object or null | yes | A partial state object whose keys the orchestrator merges into `.ml-metaopt/state.json`. Emit an object when the handoff mutates semantic state and `null` when it does not. `machine_state` and `status` are never valid `state_patch` keys. Only keys owned by this control agent may appear. |
 | `executor_directives` | array | yes | Ordered list of instructions for the orchestrator executor phase (e.g. commands to run, files to write, worktrees to create). Empty array when no executor action is needed. |
 | `summary` | string | yes | Human-readable summary of the handoff decision for logging and debugging. |
 | `warnings` | array of strings | yes | Diagnostic warnings that do not block progress but should be logged. Empty array when none. |
@@ -37,6 +38,7 @@ Every control agent emits a JSON handoff object conforming to this envelope. Fie
 - `executor_directives` is the authoritative description of executor-side work.
 - When a phase requires executor activity, the governing control agent must emit explicit directive objects instead of relying on prose in `summary`, `next_action`, or the state-machine narrative.
 - The orchestrator must execute `executor_directives` mechanically in order and must not infer missing executor work from free-form text.
+- `summary`, `warnings`, `recovery_action`, and `next_action` are descriptive only. They are never executable instructions.
 - Each directive object must contain:
   - `action` — required non-empty string
   - `reason` — required non-empty string explaining why the directive exists
@@ -68,10 +70,6 @@ Every control agent emits a JSON handoff object conforming to this envelope. Fie
 - `delete_state_file` — required fields: `state_path`
 - `emit_final_report` — required fields: `report_type`
 
-### Legacy Compatibility
-
-Existing handoff scripts use `producer` instead of `control_agent` and `phase`/`outcome` instead of `handoff_type`. The canonical field names above are the target schema. During migration, both forms are accepted — the orchestrator treats `producer` as equivalent to `control_agent` and constructs `handoff_type` from `producer` + `phase` when the new field is absent.
-
 ### Launch Request Fields
 
 Each entry in `launch_requests` specifies:
@@ -82,7 +80,7 @@ Each entry in `launch_requests` specifies:
 | `model_class` | string | yes | Model class (`"strong_coder"`, `"strong_reasoner"`, or `"general_worker"`) |
 | `task_file` | string | yes | Path to the staged task file to pass to the worker |
 | `result_file` | string | yes | Path where the worker writes its structured result |
-| `preferred_model` | string | no | Deterministic model hint. When present, the orchestrator should use this specific model for the launch. Added automatically by `normalize_launch_requests()` when absent, based on the model class: `claude-opus-4.6-fast` for `strong_reasoner` and `strong_coder`, `claude-sonnet-4` for `general_worker`. This is a launch hint, not an excuse for semantic fallback — if the preferred model is unavailable, use the strongest available model in the same class and record the substitution. |
+| `preferred_model` | string | no | Deterministic model hint. When present, the orchestrator should use this specific model for the launch. Added automatically by `normalize_launch_requests()` when absent, based on the first entry in the model-class resolution order: `claude-opus-4.6-fast` then `gpt-5.4` for `strong_reasoner` and `strong_coder`, `claude-sonnet-4` then `gpt-5.4` for `general_worker`. If the preferred model is unavailable, take the next configured fallback and record the substitution. |
 | `slot_class` | string | no | Slot class for slot-based dispatch (`"background"` or `"auxiliary"`) |
 | `mode` | string | no | Slot mode for slot-based dispatch |
 
@@ -90,7 +88,7 @@ Each entry in `launch_requests` specifies:
 
 When a control agent encounters unsupported semantic work, lane drift, missing worker artifacts, or any protocol violation it cannot resolve, it must fail closed to `BLOCKED_PROTOCOL` rather than improvising or allowing the orchestrator to attempt generic semantic fallback. The orchestrator is mechanical — it has no ability to perform semantic work — so any attempt to work around a protocol gap would produce undefined behavior.
 
-The orchestrator must never hand-edit semantic state. It only applies control-agent `state_patch` updates, executes `executor_directives`, and sets `machine_state` from `recommended_next_machine_state`. Manual state edits to fields such as `baseline`, `selected_experiment`, `completed_experiments`, `key_learnings`, `status`, or `next_action` are protocol violations, even when they appear equivalent to the intended outcome.
+The orchestrator must never hand-edit semantic state. It only applies control-agent `state_patch` updates, executes `executor_directives`, sets `machine_state` from `recommended_next_machine_state`, and derives `status` from the resulting machine state. Manual state edits to fields such as `baseline`, `selected_experiment`, `completed_experiments`, `key_learnings`, `status`, or `next_action` are protocol violations, even when they appear equivalent to the intended outcome.
 
 Control agents that may emit `BLOCKED_PROTOCOL`:
 - `metaopt-hydrate-state`: prior state has an unrecoverable protocol violation
@@ -165,13 +163,13 @@ Each control agent owns a defined set of state keys. Only the owning control age
 
 | Control Agent | Owned State Keys |
 |---------------|-----------------|
-| `metaopt-load-campaign` | `campaign_identity_hash`, `runtime_config_hash`, `objective_snapshot` |
-| `metaopt-hydrate-state` | `version`, `campaign_id`, `status` (initialization only), `current_iteration`, `baseline`, `runtime_capabilities`, `proposal_cycle` (initialization only), `active_slots` (initialization only), `current_proposals` (initialization only), `next_proposals` (initialization only), `completed_experiments` (initialization only), `key_learnings` (initialization only), `no_improve_iterations` (initialization only) |
-| `metaopt-background-control` | `active_slots` (background class), `proposal_cycle`, `current_proposals` (append only), `next_proposals` (append only) |
-| `metaopt-select-design` | `selected_experiment`, `proposal_cycle.current_pool_frozen` |
-| `metaopt-local-execution-control` | `local_changeset`, `selected_experiment.sanity_attempts`, `selected_experiment.diagnosis_history` |
-| `metaopt-remote-execution-control` | `remote_batches`, `selected_experiment.analysis_summary`, `baseline` (post-analysis update), `no_improve_iterations` |
-| `metaopt-iteration-close-control` | `current_iteration`, `status` (lifecycle transitions, e.g. stop-condition → `"completed"`), `current_proposals` (rollover reset), `next_proposals` (rollover drain), `selected_experiment` (clear to null), `local_changeset` (clear to null), `completed_experiments` (append), `key_learnings` (append), `active_slots` (drain/cancel) |
+| `metaopt-load-campaign` | *(none — always emits `state_patch: null`; campaign identity and runtime hashes are read from the handoff payload by `metaopt-hydrate-state`)* |
+| `metaopt-hydrate-state` | `version`, `campaign_id`, `campaign_identity_hash`, `runtime_config_hash`, `current_iteration`, `next_action`, `objective_snapshot`, `proposal_cycle`, `active_slots`, `current_proposals`, `next_proposals`, `selected_experiment`, `local_changeset`, `remote_batches`, `baseline`, `completed_experiments`, `key_learnings`, `no_improve_iterations`, `maintenance_summary`, `campaign_started_at`, `runtime_capabilities` |
+| `metaopt-background-control` | `active_slots` (background class), `proposal_cycle`, `current_proposals` (append only), `next_proposals` (append only), `next_action`, `maintenance_summary` (append only) |
+| `metaopt-select-design` | `selected_experiment`, `proposal_cycle.current_pool_frozen`, `next_action` |
+| `metaopt-local-execution-control` | `local_changeset`, `selected_experiment.sanity_attempts`, `selected_experiment.diagnosis_history`, `next_action` |
+| `metaopt-remote-execution-control` | `pending_remote_batch`, `remote_batches`, `selected_experiment.analysis_summary`, `selected_experiment.diagnosis_history`, `baseline`, `no_improve_iterations`, `completed_experiments`, `key_learnings`, `next_action` |
+| `metaopt-iteration-close-control` | `current_iteration`, `current_proposals`, `next_proposals`, `selected_experiment`, `local_changeset`, `completed_experiments`, `key_learnings`, `active_slots`, `last_iteration_report`, `next_action` |
 
 ### Orchestrator-Managed Keys
 
@@ -181,19 +179,30 @@ Each control agent owns a defined set of state keys. Only the owning control age
 
 The following keys are written by multiple control agents under strict ordering rules:
 
-- `status`: initialized by `metaopt-hydrate-state` during bootstrap; updated by `metaopt-iteration-close-control` for lifecycle transitions (e.g. setting `"completed"` when stop conditions are met). No other control agent writes `status`.
-- `next_action`: exempt from single-owner rule. Every control agent writes this key in its `state_patch` to describe what the orchestrator should do next.
+- `status`: derived centrally by the orchestrator from `machine_state`. Control agents never write it in `state_patch`.
+- `next_action`: exempt from single-owner rule. Control agents may write it in `state_patch` as operator guidance. The orchestrator must never execute from it.
 - `active_slots`: background-class slots are owned by `metaopt-background-control`; auxiliary-class slots are owned by the control agent that requested the launch. `metaopt-iteration-close-control` may drain or cancel any slot during `QUIESCE_SLOTS`.
+- `local_changeset`: written by `metaopt-local-execution-control` during `MATERIALIZE_CHANGESET` / `LOCAL_SANITY`, then extended or cleared by `metaopt-iteration-close-control` during `QUIESCE_SLOTS`. The ordering rule is strict: iteration-close only touches it after local-execution has finished for that iteration.
 
 ## Orchestrator Responsibilities
 
 The orchestrator is a mechanical executor. Given a control-handoff envelope, it:
 
 1. Validates the envelope structure
-2. Applies `state_patch` to `.ml-metaopt/state.json` (rejecting unauthorized keys; `machine_state` is never a valid `state_patch` key)
+2. Applies `state_patch` to `.ml-metaopt/state.json` (rejecting unauthorized keys; `machine_state` and `status` are never valid `state_patch` keys)
 3. Executes `executor_directives` (file writes, worktree operations, command execution)
 4. Launches workers from `launch_requests`
 5. Sets `machine_state` to `recommended_next_machine_state` (validating that the transition is legal per `references/state-machine.md`)
-6. Persists updated state
+6. Derives `status` from `machine_state`
+7. Persists updated state
 
 The orchestrator never interprets semantic content (e.g., proposal quality, diagnosis routing, stop condition evaluation). These decisions belong exclusively to control agents.
+
+### Pre-Transition Self-Check
+
+Before executing any state transition, the orchestrator must verify:
+
+- Every semantic decision driving this transition originated from a control-agent handoff envelope — not from orchestrator-local reasoning.
+- No field in `state_patch` was computed, inferred, or modified by the orchestrator. The orchestrator applies patches verbatim.
+- All `executor_directives` came from the handoff envelope. The orchestrator did not add, remove, or reorder directives based on its own interpretation of `summary`, `next_action`, or prose elsewhere in the document.
+- If any of the above conditions is not met, the orchestrator must stop and transition to `BLOCKED_PROTOCOL` with `next_action` describing which decision was taken outside the control-agent boundary.

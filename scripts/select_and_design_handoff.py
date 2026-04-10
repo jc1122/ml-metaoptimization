@@ -1,15 +1,24 @@
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
 import json
 from pathlib import Path
 from typing import Any
 
-from _handoff_utils import emit_handoff, read_json, write_json
+from _handoff_utils import (
+    emit_handoff,
+    load_campaign_handoff_is_ready,
+    persist_state_handoff,
+    read_json,
+    write_json,
+)
 from _guardrail_utils import check_lane_drift
 
-_HANDOFF_TYPE = "SELECT_DESIGN"
 _CONTROL_AGENT = "metaopt-select-design"
+_PLAN_HANDOFF_TYPE = "select_design.plan_select_experiment"
+_GATE_HANDOFF_TYPE = "select_design.gate_select_and_plan_design"
+_FINALIZE_HANDOFF_TYPE = "select_design.finalize_select_design"
 
 
 def _parse_args() -> argparse.Namespace:
@@ -41,8 +50,8 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
 
 def _runtime_error(
     output_path: Path,
-    phase: str | None,
-    action: str,
+    handoff_type: str,
+    recovery_action: str,
     summary: str,
     warnings: list[str] | None = None,
     *,
@@ -50,23 +59,20 @@ def _runtime_error(
 ) -> dict[str, Any]:
     payload = {
         "schema_version": 1,
-        "producer": _CONTROL_AGENT,
-        "phase": phase,
-        "outcome": "runtime_error",
         "proposal_id": proposal_id,
         "worker_kind": None,
         "worker_ref": None,
         "task_file": None,
         "result_file": None,
-        "recommended_executor_phase": None,
         "recommended_next_machine_state": None,
-        "recommended_next_action": action,
+        "recovery_action": recovery_action,
         "selection_rationale": None,
         "design_summary": None,
+        "state_patch": None,
         "warnings": warnings or [],
         "summary": summary,
     }
-    return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
+    return emit_handoff(output_path, payload, handoff_type=handoff_type, control_agent=_CONTROL_AGENT)
 
 
 def _load_inputs(load_handoff_path: Path, state_path: Path) -> tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None]:
@@ -78,7 +84,7 @@ def _load_inputs(load_handoff_path: Path, state_path: Path) -> tuple[dict[str, A
             "summary": "load handoff unreadable",
             "warnings": [str(exc)],
         }
-    if not isinstance(load_handoff, dict) or load_handoff.get("outcome") != "ok":
+    if not load_campaign_handoff_is_ready(load_handoff):
         return None, None, {
             "action": "repair or replace load_campaign.latest.json",
             "summary": "load handoff invalid",
@@ -228,17 +234,18 @@ def _plan_select_experiment(
     output_path: Path,
 ) -> dict[str, Any]:
     state = _read_json(state_path)
+    previous_state = deepcopy(state)
     if state.get("selected_experiment") is not None:
         return _runtime_error(
             output_path,
-            "PLAN_SELECT_EXPERIMENT",
+            _PLAN_HANDOFF_TYPE,
             "clear stale selected_experiment before re-running selection",
             "selected_experiment already populated",
         )
     if not state.get("current_proposals"):
         return _runtime_error(
             output_path,
-            "PLAN_SELECT_EXPERIMENT",
+            _PLAN_HANDOFF_TYPE,
             "rebuild proposal pool before selection",
             "current_proposals is empty",
         )
@@ -251,21 +258,15 @@ def _plan_select_experiment(
     state["proposal_cycle"]["current_pool_frozen"] = True
     state["machine_state"] = "SELECT_EXPERIMENT"
     state["next_action"] = "run selection worker"
-    _write_json(state_path, state)
 
     payload = {
         "schema_version": 1,
-        "producer": _CONTROL_AGENT,
-        "phase": "PLAN_SELECT_EXPERIMENT",
-        "outcome": "planned",
         "proposal_id": None,
         "worker_kind": "custom_agent",
         "worker_ref": "metaopt-selection-worker",
         "task_file": task_file,
         "result_file": result_file,
-        "recommended_executor_phase": "RUN_SELECTION",
         "recommended_next_machine_state": "SELECT_EXPERIMENT",
-        "recommended_next_action": "launch selection worker",
         "selection_rationale": None,
         "design_summary": None,
         "launch_requests": [
@@ -282,7 +283,8 @@ def _plan_select_experiment(
         "warnings": [],
         "summary": "selection worker is ready to choose one proposal from the frozen pool",
     }
-    return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
+    persist_state_handoff(state_path, previous_state, state, payload, control_agent=_CONTROL_AGENT)
+    return emit_handoff(output_path, payload, handoff_type=_PLAN_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
 
 def _gate_select_and_plan_design(
@@ -293,10 +295,11 @@ def _gate_select_and_plan_design(
     output_path: Path,
 ) -> dict[str, Any]:
     state = _read_json(state_path)
+    previous_state = deepcopy(state)
     if state.get("selected_experiment") is not None:
         return _runtime_error(
             output_path,
-            "GATE_SELECT_AND_PLAN_DESIGN",
+            _GATE_HANDOFF_TYPE,
             "clear stale selected_experiment before re-running selection",
             "selected_experiment already populated",
         )
@@ -306,7 +309,7 @@ def _gate_select_and_plan_design(
     if not selection_result_path.exists():
         return _runtime_error(
             output_path,
-            "GATE_SELECT_AND_PLAN_DESIGN",
+            _GATE_HANDOFF_TYPE,
             "stage selection worker result before gating",
             "selection result missing",
         )
@@ -315,7 +318,7 @@ def _gate_select_and_plan_design(
     if not isinstance(selection_result, dict):
         return _runtime_error(
             output_path,
-            "GATE_SELECT_AND_PLAN_DESIGN",
+            _GATE_HANDOFF_TYPE,
             "repair selection worker result and re-run gating",
             "selection result invalid",
         )
@@ -324,7 +327,7 @@ def _gate_select_and_plan_design(
     if error:
         return _runtime_error(
             output_path,
-            "GATE_SELECT_AND_PLAN_DESIGN",
+            _GATE_HANDOFF_TYPE,
             "repair selection worker result and re-run gating",
             error,
         )
@@ -333,7 +336,7 @@ def _gate_select_and_plan_design(
     if not isinstance(selection_rationale, str) or not selection_rationale:
         return _runtime_error(
             output_path,
-            "GATE_SELECT_AND_PLAN_DESIGN",
+            _GATE_HANDOFF_TYPE,
             "repair selection worker result and re-run gating",
             "selection result missing ranking_rationale",
             proposal_id=winning_proposal["proposal_id"],
@@ -356,21 +359,15 @@ def _gate_select_and_plan_design(
     task_path = tasks_dir / Path(task_file).name
     task_path.parent.mkdir(parents=True, exist_ok=True)
     task_path.write_text(_design_task_markdown(load_handoff, state, result_file), encoding="utf-8")
-    _write_json(state_path, state)
 
     payload = {
         "schema_version": 1,
-        "producer": _CONTROL_AGENT,
-        "phase": "GATE_SELECT_AND_PLAN_DESIGN",
-        "outcome": "selection_complete",
         "proposal_id": winning_proposal["proposal_id"],
         "worker_kind": "custom_agent",
         "worker_ref": "metaopt-design-worker",
         "task_file": task_file,
         "result_file": result_file,
-        "recommended_executor_phase": "RUN_DESIGN",
         "recommended_next_machine_state": "DESIGN_EXPERIMENT",
-        "recommended_next_action": "launch design worker",
         "selection_rationale": selection_rationale,
         "design_summary": None,
         "launch_requests": [
@@ -387,23 +384,25 @@ def _gate_select_and_plan_design(
         "warnings": [],
         "summary": "selection result validated and design worker is ready",
     }
-    return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
+    persist_state_handoff(state_path, previous_state, state, payload, control_agent=_CONTROL_AGENT)
+    return emit_handoff(output_path, payload, handoff_type=_GATE_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
 
 def _finalize_select_design(state_path: Path, worker_results_dir: Path, output_path: Path) -> dict[str, Any]:
     state = _read_json(state_path)
+    previous_state = deepcopy(state)
     selected_experiment = state.get("selected_experiment")
     if not isinstance(selected_experiment, dict):
         return _runtime_error(
             output_path,
-            "FINALIZE_SELECT_DESIGN",
+            _FINALIZE_HANDOFF_TYPE,
             "persist selected_experiment before finalizing design",
             "selected_experiment missing",
         )
     if selected_experiment.get("design") is not None:
         return _runtime_error(
             output_path,
-            "FINALIZE_SELECT_DESIGN",
+            _FINALIZE_HANDOFF_TYPE,
             "clear stale design before re-running finalization",
             "selected_experiment.design already populated",
             proposal_id=selected_experiment.get("proposal_id"),
@@ -414,7 +413,7 @@ def _finalize_select_design(state_path: Path, worker_results_dir: Path, output_p
     if not design_result_path.exists():
         return _runtime_error(
             output_path,
-            "FINALIZE_SELECT_DESIGN",
+            _FINALIZE_HANDOFF_TYPE,
             "stage design worker result before finalizing",
             "design result missing",
             proposal_id=selected_experiment.get("proposal_id"),
@@ -424,7 +423,7 @@ def _finalize_select_design(state_path: Path, worker_results_dir: Path, output_p
     if not isinstance(design_result, dict):
         return _runtime_error(
             output_path,
-            "FINALIZE_SELECT_DESIGN",
+            _FINALIZE_HANDOFF_TYPE,
             "repair design worker result and re-run finalization",
             "design result invalid",
             proposal_id=selected_experiment.get("proposal_id"),
@@ -434,7 +433,7 @@ def _finalize_select_design(state_path: Path, worker_results_dir: Path, output_p
     if design_result.get("proposal_id") != proposal_id:
         return _runtime_error(
             output_path,
-            "FINALIZE_SELECT_DESIGN",
+            _FINALIZE_HANDOFF_TYPE,
             "repair design worker result and re-run finalization",
             "design result proposal_id does not match selected_experiment",
             proposal_id=proposal_id,
@@ -448,52 +447,42 @@ def _finalize_select_design(state_path: Path, worker_results_dir: Path, output_p
             "protocol violation: design result contains materialization-lane "
             f"fields {drift_fields}; manual intervention required"
         )
-        _write_json(state_path, state)
         payload = {
             "schema_version": 1,
-            "producer": _CONTROL_AGENT,
-            "phase": "FINALIZE_SELECT_DESIGN",
-            "outcome": "blocked_protocol",
             "proposal_id": proposal_id,
             "worker_kind": None,
             "worker_ref": None,
             "task_file": None,
             "result_file": None,
-            "recommended_executor_phase": None,
             "recommended_next_machine_state": "BLOCKED_PROTOCOL",
-            "recommended_next_action": state["next_action"],
             "selection_rationale": selected_experiment.get("selection_rationale"),
             "design_summary": None,
             "warnings": [f"lane drift detected in design result: {drift_fields}"],
             "summary": f"design result contains materialization-lane fields: {drift_fields}",
         }
-        return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
+        persist_state_handoff(state_path, previous_state, state, payload, control_agent=_CONTROL_AGENT)
+        return emit_handoff(output_path, payload, handoff_type=_FINALIZE_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
     selected_experiment["design"] = design_result
     state["proposal_cycle"]["current_pool_frozen"] = True
     state["machine_state"] = "MATERIALIZE_CHANGESET"
     state["next_action"] = "materialize selected experiment"
-    _write_json(state_path, state)
 
     payload = {
         "schema_version": 1,
-        "producer": _CONTROL_AGENT,
-        "phase": "FINALIZE_SELECT_DESIGN",
-        "outcome": "selected_and_designed",
         "proposal_id": proposal_id,
         "worker_kind": None,
         "worker_ref": None,
         "task_file": None,
         "result_file": design_result_file,
-        "recommended_executor_phase": None,
         "recommended_next_machine_state": "MATERIALIZE_CHANGESET",
-        "recommended_next_action": "materialize selected experiment",
         "selection_rationale": selected_experiment.get("selection_rationale"),
         "design_summary": design_result.get("description") or design_result.get("experiment_name"),
         "warnings": [],
         "summary": "experiment design finalized and ready for materialization",
     }
-    return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
+    persist_state_handoff(state_path, previous_state, state, payload, control_agent=_CONTROL_AGENT)
+    return emit_handoff(output_path, payload, handoff_type=_FINALIZE_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
 
 def main() -> int:
@@ -508,7 +497,11 @@ def main() -> int:
     if error is not None:
         payload = _runtime_error(
             output_path,
-            None,
+            {
+                "plan_select_experiment": _PLAN_HANDOFF_TYPE,
+                "gate_select_and_plan_design": _GATE_HANDOFF_TYPE,
+                "finalize_select_design": _FINALIZE_HANDOFF_TYPE,
+            }[args.mode],
             error["action"],
             error["summary"],
             error["warnings"],

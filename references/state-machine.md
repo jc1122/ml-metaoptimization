@@ -39,7 +39,7 @@ Every delegated phase is governed by a mandatory control agent. The orchestrator
 Within each reinvocation, the orchestrator processes events in this order before invoking the governing control agent:
 
 1. Stage raw outputs of any completed slots
-2. Invoke the governing control agent (plan or gate phase as appropriate) and apply the resulting handoff
+2. Invoke the governing control agent in the correct phase and apply the resulting handoff. Phase selection rule: if the latest handoff file for the current state has `recommended_next_machine_state = null`, the plan phase already ran and the gate phase is pending — invoke gate. If no handoff exists for the current state, or the prior handoff already completed (non-null `recommended_next_machine_state`), invoke plan.
 3. During `QUIESCE_SLOTS`, execute only drain and cancel directives from the handoff — do not launch new workers
 
 ## Executor Directives
@@ -222,14 +222,10 @@ This state is governed by `metaopt-iteration-close-control`. The control agent w
 
 This state is governed by `metaopt-iteration-close-control`. The orchestrator drains active slots and stages raw outcomes; the control agent decides whether the campaign continues or completes. See `references/control-protocol.md`.
 
-- Stop launching new work
-- Persist any finished slot output before changing slot ownership
-- Wait up to a 60-second drain window for in-flight slots to complete
-- The orchestrator stages raw drain/cancel outcomes; semantic continue-vs-complete routing is the responsibility of `metaopt-iteration-close-control`
-- cancel leftovers after the 60-second drain window
-- record cancellation reasons in state and append any mechanical patch-application outcome to `apply_results` in `local_changeset`
-- If the campaign continues, set `machine_state = MAINTAIN_BACKGROUND_POOL`, keep `status = RUNNING`, and re-invoke `ml-metaoptimization`
-- If the campaign stops, transition to `COMPLETE`
+- The orchestrator executes `drain_slots` and `cancel_slots` directives from the `quiesce_slots` handoff; it stages raw outcomes (drain results, cancellation exit codes) as executor events in `.ml-metaopt/executor-events/` — it does not write to `state.json` autonomously
+- `metaopt-iteration-close-control` reads those executor events and returns cancellation reasons, `apply_results` updates, and the continue/stop decision in its `state_patch` and `recommended_next_machine_state`
+- The orchestrator applies the `state_patch` (which records cancellation reasons and patch-application outcomes into `local_changeset.apply_results`) and transitions per `recommended_next_machine_state`
+- Do not launch new work during this state — execute only drain and cancel directives
 
 ### Terminal States
 

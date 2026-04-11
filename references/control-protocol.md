@@ -12,10 +12,12 @@ The orchestrator is a **transport and runtime shell**. It owns file I/O, process
 
 Most control agents operate in a two-phase pattern:
 
-1. **Plan phase** — the control agent reads current state, decides what should happen next, and emits a handoff with `launch_requests` and `executor_directives`. The orchestrator executes these directives (launches workers, runs commands, writes files).
+1. **Plan phase** — the control agent reads current state, decides what should happen next, and emits a handoff with `launch_requests` and `executor_directives`. The orchestrator executes these directives (launches workers, runs commands, writes files). The plan phase sets `recommended_next_machine_state = null` to signal that a gate phase is pending.
 2. **Gate phase** — the control agent reads the results of the executed work, decides whether the transition criteria are met, and emits a handoff with `recommended_next_machine_state` and `state_patch`. The orchestrator applies the patch and transitions.
 
 Some control agents (e.g. `metaopt-load-campaign`) operate in a single phase when no executor work is needed.
+
+**Phase selection rule** (how the orchestrator determines which phase to invoke): read the latest handoff file for the current machine state. If it has `recommended_next_machine_state = null`, the plan phase already ran and the gate phase is pending — invoke gate. If no handoff file exists for the current state, or the prior handoff has a non-null `recommended_next_machine_state`, invoke plan. The orchestrator must not infer the phase from any other signal.
 
 ## Universal Control-Handoff Envelope
 

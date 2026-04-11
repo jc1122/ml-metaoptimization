@@ -92,7 +92,7 @@ These are system-level constraints the orchestrator validates after applying eac
 **Subagent failure policy:**
 - Relaunch once
 - If the failure is rate-limit related, wait and relaunch once
-- If the same task fails twice, record the failure in `key_learnings`, mark the task abandoned, and continue
+- If the same task fails twice, write a failure executor event to `.ml-metaopt/executor-events/failure-<slot_id>.json` and re-invoke the governing control agent; the control agent reads the failure event and emits a `state_patch` that removes the slot and records any abandonment notes under its owned fields
 
 ## Required References
 

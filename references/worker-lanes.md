@@ -73,8 +73,8 @@ Execution rules:
 - findings-only maintenance may use `general_worker`
 - code-modifying maintenance must use `strong_coder`
 - return either findings-only output or one patch artifact plus verification notes
-- the orchestrator applies maintenance patch artifacts mechanically in a dedicated integration worktree
-- if patch application conflicts or requires a non-trivial merge, dispatch `metaopt-materialization-worker` in conflict-resolution mode with the conflicting patches, the base worktree state, and the experiment design context
+- maintenance patch artifacts are deferred to `QUIESCE_SLOTS`; `metaopt-iteration-close-control` emits `apply_patch_artifacts` directives for each pending patch and the orchestrator applies them mechanically in a dedicated integration worktree
+- if patch application conflicts or requires a non-trivial merge, the orchestrator writes the conflict outcome as an executor event; `metaopt-iteration-close-control` reads the event in its next gate phase and emits conflict-resolution `launch_requests` targeting `metaopt-materialization-worker`
 
 Metaoptimization bridge requirements:
 - `metaopt-background-control` must embed the patch artifact contract (format, metadata fields, and integration path) in the staged maintenance task file it writes, because `repo-audit-refactor-optimize` does not natively encode these requirements

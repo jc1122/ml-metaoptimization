@@ -132,8 +132,8 @@ This state is governed by `metaopt-local-execution-control`. The control agent w
 
 - Dispatch the `metaopt-materialization-worker` custom agent as `strong_coder` subagents in isolated worktrees
 - Count these coders against `auxiliary_slots` with `mode = materialization`
-- After the materialization subagent finishes, the orchestrator attempts clean mechanical integration and records the outcome (success or conflict) as an executor event in `.ml-metaopt/executor-events/`
-- The orchestrator then re-invokes `metaopt-local-execution-control` in `gate_materialization` phase; the control agent reads the integration outcome and either emits a conflict-resolution `launch_requests` entry (patches did not merge cleanly) or advances to `LOCAL_SANITY` (merge succeeded)
+- `metaopt-local-execution-control`'s `plan_local_changeset` handoff emits an `apply_patch_artifacts` directive (with `output_event_path` set) ordering the orchestrator to attempt mechanical patch integration and write the outcome — success or conflict details — as an executor event
+- The orchestrator then re-invokes `metaopt-local-execution-control` in `gate_materialization` phase; the control agent reads the integration outcome executor event and either emits a conflict-resolution `launch_requests` entry (patches did not merge cleanly) or advances to `LOCAL_SANITY` (merge succeeded)
 - Conflict-resolution is still part of the `MATERIALIZE_CHANGESET` state; the machine advances to `LOCAL_SANITY` only after successful integration
 - Package an immutable code artifact under `.ml-metaopt/artifacts/code/`
 - Package the manifest-linked data artifact inputs under `.ml-metaopt/artifacts/data/`

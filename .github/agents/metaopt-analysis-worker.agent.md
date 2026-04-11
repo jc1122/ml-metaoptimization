@@ -1,7 +1,7 @@
 ---
 name: metaopt-analysis-worker
 description: Shared leaf analysis worker for completed remote batch results. Reads one staged analysis task file and writes one structured analysis result file.
-model: gpt-5.4
+model: claude-opus-4.6
 tools:
   - read
   - search

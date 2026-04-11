@@ -25,9 +25,9 @@ Model resolution is deterministic:
 - `general_worker`: ideation and findings-only maintenance work
 
 Fallback order:
-- `strong_coder`: `claude-opus-4.6-fast`, then `gpt-5.4`
-- `strong_reasoner`: `claude-opus-4.6-fast`, then `gpt-5.4`
-- `general_worker`: `claude-sonnet-4`, then `gpt-5.4`
+- `strong_coder`: `claude-opus-4.6` (or any opus ≥ 4.6 if available), then `gpt-5.4` (or any gpt ≥ 5.4 if available)
+- `strong_reasoner`: `claude-opus-4.6` (or any opus ≥ 4.6 if available), then `gpt-5.4` (or any gpt ≥ 5.4 if available)
+- `general_worker`: `claude-sonnet-4`, then `gpt-5.4` (or any gpt ≥ 5.4 if available)
 
 ## Ideation Lane
 

@@ -1,7 +1,7 @@
 ---
 name: metaopt-remote-execution-control
 description: Plan and gate the Steps 9/11 remote enqueue, wait, and result-analysis loop while keeping semantic routing out of the main orchestrator.
-model: gpt-5.4
+model: claude-opus-4.6
 tools:
   - read
   - search

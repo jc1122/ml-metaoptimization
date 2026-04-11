@@ -1,7 +1,7 @@
 ---
 name: metaopt-load-campaign
 description: Validate `ml_metaopt_campaign.yaml`, compute campaign/runtime hashes, and produce an advisory LOAD_CAMPAIGN handoff for the main orchestrator.
-model: gpt-5.4
+model: claude-opus-4.6
 tools:
   - read
   - search

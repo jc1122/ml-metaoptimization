@@ -20,11 +20,11 @@ The campaign is fully file-driven. The orchestrator never asks the user for camp
 Target runtime: GitHub Copilot agent with subagent dispatch and access to multiple models.
 
 Named models below refer to Copilot-exposed models. Model selection is deterministic, not discretionary:
-- `strong_coder`: resolution order `claude-opus-4.6-fast`, then `gpt-5.4`
-- `strong_reasoner`: resolution order `claude-opus-4.6-fast`, then `gpt-5.4`
+- `strong_coder`: resolution order `claude-opus-4.6`, then `gpt-5.4`
+- `strong_reasoner`: resolution order `claude-opus-4.6`, then `gpt-5.4`
 - `general_worker`: resolution order `claude-sonnet-4`, then `gpt-5.4`
 
-Record the requested model and resolved model in state metadata when the first choice is unavailable.
+Within each family, prefer the highest available version: any opus ≥ 4.6 is preferred over `claude-opus-4.6`, and any gpt ≥ 5.4 is preferred over `gpt-5.4`, if exposed by the runtime. Record the requested model and resolved model in state metadata when the first choice is unavailable.
 
 ## Required Files
 

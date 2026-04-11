@@ -1,7 +1,7 @@
 ---
 name: metaopt-materialization-worker
-description: Leaf materialization worker for the Step 7 local execution lane. Reads one staged task file and writes one structured patch/result file, suggest to use opus-4.6-fast agents or newer ones.
-model: gpt-5.4
+description: Leaf materialization worker for the Step 7 local execution lane. Reads one staged task file and writes one structured patch/result file, suggest to use claude-opus-4.6 or any newer opus (≥ 4.6); fallback to gpt-5.4 or any newer gpt (≥ 5.4).
+model: claude-opus-4.6
 tools:
   - read
   - search

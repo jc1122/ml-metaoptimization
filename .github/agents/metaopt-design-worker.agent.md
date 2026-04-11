@@ -1,7 +1,7 @@
 ---
 name: metaopt-design-worker
 description: Read one staged design task, transform the selected proposal into a concrete experiment design, and write one structured JSON result.
-model: gpt-5.4
+model: claude-opus-4.6
 tools:
   - read
   - search

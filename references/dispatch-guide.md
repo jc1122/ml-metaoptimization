@@ -19,11 +19,11 @@ Used for rollover. `metaopt-iteration-close-control` emits a `launch_requests` e
 ### Launch Request Model Hints
 
 Every `launch_requests` entry may include a `preferred_model` field — a deterministic model hint specifying which model the orchestrator should use for the launch. The guardrail utility `normalize_launch_requests()` adds `preferred_model` automatically when absent:
-- `strong_reasoner` → `claude-opus-4.6-fast`
-- `strong_coder` → `claude-opus-4.6-fast`
+- `strong_reasoner` → `claude-opus-4.6` (or the highest available opus ≥ 4.6)
+- `strong_coder` → `claude-opus-4.6` (or the highest available opus ≥ 4.6)
 - `general_worker` → `claude-sonnet-4`
 
-The `preferred_model` is a deterministic launch parameter, not an excuse for semantic fallback. If the preferred model is unavailable, the orchestrator takes the next configured fallback for that model class and records the substitution in the slot metadata (`requested_model` vs `resolved_model`).
+The `preferred_model` is a deterministic launch parameter, not an excuse for semantic fallback. If the preferred model is unavailable, the orchestrator takes the next configured fallback for that model class (`gpt-5.4`, or the highest available gpt ≥ 5.4) and records the substitution in the slot metadata (`requested_model` vs `resolved_model`).
 
 ### Artifact Preconditions and `BLOCKED_PROTOCOL`
 

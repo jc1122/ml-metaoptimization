@@ -1,7 +1,7 @@
 ---
 name: metaopt-background-control
 description: Plan and gate the Steps 3/4 background proposal loop, writing staged task files and semantically integrating staged worker results without letting the orchestrator interpret them.
-model: gpt-5.4
+model: claude-opus-4.6
 tools:
   - read
   - search

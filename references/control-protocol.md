@@ -80,7 +80,7 @@ Each entry in `launch_requests` specifies:
 | `model_class` | string | yes | Model class (`"strong_coder"`, `"strong_reasoner"`, or `"general_worker"`) |
 | `task_file` | string | yes | Path to the staged task file to pass to the worker |
 | `result_file` | string | yes | Path where the worker writes its structured result |
-| `preferred_model` | string | no | Deterministic model hint. When present, the orchestrator should use this specific model for the launch. Added automatically by `normalize_launch_requests()` when absent, based on the first entry in the model-class resolution order: `claude-opus-4.6-fast` then `gpt-5.4` for `strong_reasoner` and `strong_coder`, `claude-sonnet-4` then `gpt-5.4` for `general_worker`. If the preferred model is unavailable, take the next configured fallback and record the substitution. |
+| `preferred_model` | string | no | Deterministic model hint. When present, the orchestrator should use this specific model for the launch. Added automatically by `normalize_launch_requests()` when absent: `claude-opus-4.6` (or highest available opus ≥ 4.6) for `strong_reasoner` and `strong_coder`; `claude-sonnet-4` for `general_worker`. If the preferred model is unavailable, take the next fallback — `gpt-5.4` or the highest available gpt ≥ 5.4 — and record the substitution. |
 | `slot_class` | string | no | Slot class for slot-based dispatch (`"background"` or `"auxiliary"`) |
 | `mode` | string | no | Slot mode for slot-based dispatch |
 

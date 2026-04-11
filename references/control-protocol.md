@@ -47,12 +47,11 @@ Every control agent emits a JSON handoff object conforming to this envelope. Fie
 
 ### Executor Directive Catalog
 
+> **Remote queue commands are NOT executor directives.** `enqueue_batch`, `poll_batch_status`, and `fetch_batch_results` are executed directly by `metaopt-remote-execution-control` using the `hetzner-delegation` skill. The orchestrator never calls queue commands. Only `write_manifest` (a local file write) remains an orchestrator-side directive for the remote execution path.
+
 #### Remote execution directives
 
 - `write_manifest` — required fields: `manifest_path`, `batch_id`
-- `enqueue_batch` — required fields: `command`, `manifest_path`, `batch_id`
-- `poll_batch_status` — required fields: `command`, `batch_id`
-- `fetch_batch_results` — required fields: `command`, `batch_id`
 
 #### Local execution directives
 
@@ -147,7 +146,7 @@ The following control agents form the semantic layer of the metaoptimization sta
 
 - **Scope:** `ENQUEUE_REMOTE_BATCH`, `WAIT_FOR_REMOTE_BATCH`, `ANALYZE_RESULTS` states
 - **Phases:** plan enqueue (`plan_remote_batch`) → gate batch status (`gate_remote_batch`) → gate analysis (`analyze_remote_results`)
-- **Responsibility:** Generate batch manifests, monitor batch lifecycle, delegate result analysis, update baseline
+- **Responsibility:** Generate batch manifests, execute queue commands directly via the `hetzner-delegation` skill, monitor batch lifecycle, delegate result analysis, update baseline
 - **Handoff script:** `scripts/remote_execution_control_handoff.py`
 
 ### `metaopt-iteration-close-control`

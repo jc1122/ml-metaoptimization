@@ -163,20 +163,20 @@ This state is governed by `metaopt-local-execution-control`. The orchestrator ru
 
 ### `ENQUEUE_REMOTE_BATCH`
 
-This state is governed by `metaopt-remote-execution-control`. The control agent validates enqueue readiness and plans the batch; the orchestrator writes the manifest and calls `enqueue_command` mechanically. See `references/control-protocol.md`.
+This state is governed by `metaopt-remote-execution-control`. The control agent validates enqueue readiness, writes the manifest (via a `write_manifest` executor directive to the orchestrator), and then executes `enqueue_command` itself using the `hetzner-delegation` skill. The orchestrator does not call `enqueue_command`. See `references/control-protocol.md`.
 
-- Call `remote_queue.enqueue_command`
+- `metaopt-remote-execution-control` invokes the `hetzner-delegation` skill and calls `remote_queue.enqueue_command`
 - Pass exactly one immutable batch manifest
 - Expect one stdout JSON object containing `batch_id`, `queue_ref`, and `status = "queued"`
-- Record `batch_id` and queue reference in state
+- Control agent records `batch_id` and queue reference in `state_patch`; orchestrator applies it
 
 ### `WAIT_FOR_REMOTE_BATCH`
 
-This state is governed by `metaopt-remote-execution-control`. The orchestrator polls `status_command` and stages raw backend payloads; the control agent interprets batch status and routes failure diagnosis. See `references/control-protocol.md`.
+This state is governed by `metaopt-remote-execution-control`. The control agent polls `status_command` via the `hetzner-delegation` skill and interprets batch status; the orchestrator does not call queue commands directly. See `references/control-protocol.md`.
 
 - Continue background-slot work while the batch runs
-- Poll only `remote_queue.status_command`
-- The orchestrator stages raw backend status and results payloads; semantic interpretation and remote routing are the responsibility of `metaopt-remote-execution-control`
+- `metaopt-remote-execution-control` polls `remote_queue.status_command` via the `hetzner-delegation` skill and stages raw backend payloads for semantic interpretation
+- Semantic interpretation and remote failure routing are the exclusive responsibility of `metaopt-remote-execution-control`
 - Never inspect raw cluster jobs directly from this skill
 - If `stop_conditions.max_wallclock_hours` is exceeded, set `next_action = "finish current batch and stop"`, stop launching new work, and continue polling the current batch to completion
 - If all slots are unexpectedly idle during this state, transition through `MAINTAIN_BACKGROUND_POOL` to restore the declared slot set before doing any lower-priority work
@@ -192,10 +192,10 @@ This state is governed by `metaopt-remote-execution-control`. The orchestrator p
 
 ### `ANALYZE_RESULTS`
 
-This state is governed by `metaopt-remote-execution-control`. The orchestrator fetches completed-results payloads; the control agent stages analysis tasks and updates baseline state. See `references/control-protocol.md`.
+This state is governed by `metaopt-remote-execution-control`. The control agent fetches completed-results payloads via the `hetzner-delegation` skill, stages analysis tasks, and updates baseline state. The orchestrator does not call `results_command`. See `references/control-protocol.md`.
 
-- Call `remote_queue.results_command`
-- The orchestrator stages raw completed-results payloads; semantic result judgment and baseline updates are the responsibility of `metaopt-remote-execution-control`
+- `metaopt-remote-execution-control` invokes the `hetzner-delegation` skill and calls `remote_queue.results_command`
+- The control agent stages raw completed-results payloads; semantic result judgment and baseline updates are its exclusive responsibility
 - Dispatch the `metaopt-analysis-worker` custom agent as one `strong_reasoner` subagent to compare the result against the aggregate baseline and extract learnings
 - If the aggregate result clears `objective.improvement_threshold` in the configured direction, update the baseline and reset `no_improve_iterations` to `0`
 - Otherwise leave the baseline unchanged and increment `no_improve_iterations`

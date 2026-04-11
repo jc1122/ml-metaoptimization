@@ -70,7 +70,7 @@ If `AGENTS.md` does not exist on first run, create it before appending the marke
 - the orchestrator must not edit project files directly; it may only apply worker-produced patches mechanically or write protocol-owned artifacts/manifests/state files
 - generic semantic fallback is forbidden: if the orchestrator encounters unsupported semantic work, it must never improvise; instead it fails closed to `BLOCKED_PROTOCOL` with recovery guidance
 - background slots are filled before auxiliary work is launched — `metaopt-background-control` enforces this through its `launch_requests`; the orchestrator must not fill slots autonomously outside of a control-agent handoff
-- use the queue backend contract instead of raw cluster operations
+- use the queue backend contract instead of raw cluster operations; the orchestrator never calls queue commands directly — `metaopt-remote-execution-control` owns all queue execution using the `hetzner-delegation` skill
 - use the aggregate metric as the authoritative campaign score
 - bound `LOCAL_SANITY` remediation to at most three attempts per experiment
 - never silently discard prior state on campaign identity drift

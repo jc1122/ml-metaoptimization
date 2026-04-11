@@ -45,9 +45,11 @@ Within each family, prefer the highest available version: any opus ≥ 4.6 is pr
 ```
 
 `.ml-metaopt/preflight-readiness.json` is the readiness artifact produced by `metaopt-preflight`.
-`LOAD_CAMPAIGN` reads this artifact after campaign validation passes; if it is missing, stale (hash mismatch), or failed, the orchestrator transitions to `BLOCKED_CONFIG` with a directive to run or re-run `metaopt-preflight`.
+`LOAD_CAMPAIGN` reads this artifact after campaign validation passes; if it is missing, stale (hash mismatch), or failed, `metaopt-load-campaign` recommends `BLOCKED_CONFIG` with `next_action` set to run or re-run `metaopt-preflight`.
 
-Append this block to `AGENTS.md` on initialization if it is not already present:
+`metaopt-hydrate-state` manages the `AGENTS.md` resume hook. On initialization it creates `AGENTS.md` if absent and appends the marked block below. On terminal states, the governing control agent emits a `remove_agents_hook` directive and the orchestrator executes it. The orchestrator never appends or removes this block autonomously.
+
+Reference content of the marked block:
 
 ```markdown
 <!-- ml-metaoptimization:begin -->
@@ -58,10 +60,6 @@ resume from `machine_state`, and do not ask the user for campaign inputs.
 If `status` is terminal, remove this block, stop auto-resuming, and surface `next_action` to the operator without executing from it.
 <!-- ml-metaoptimization:end -->
 ```
-
-Remove only this marked block when entering `BLOCKED_CONFIG`, `BLOCKED_PROTOCOL`, `FAILED`, or `COMPLETE`.
-
-If `AGENTS.md` does not exist on first run, create it before appending the marked block.
 
 ## Behavioral Guarantees
 

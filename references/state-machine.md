@@ -87,7 +87,7 @@ This state is governed by `metaopt-background-control`. The control agent plans 
 - Ensure exactly `dispatch_policy.background_slots` background slots exist
 - Prefer ideation via the `metaopt-ideation-worker` custom agent when `current_proposals` is below target and `next_proposals` is below cap
 - Otherwise assign maintenance work via `repo-audit-refactor-optimize`
-- **Patch integration timing:** maintenance workers may produce patch outputs, but those patches are NOT applied automatically during background work. The orchestrator collects completed maintenance outputs and defers patch application (if any) to `QUIESCE_SLOTS`, where mechanical integration happens before rollover.
+- **Patch integration timing:** maintenance workers may produce patch outputs, but those patches are NOT applied during background work. When a maintenance slot completes, the orchestrator records the patch path as an executor event in `.ml-metaopt/executor-events/`. Integration is deferred to `QUIESCE_SLOTS`, where `metaopt-iteration-close-control` emits `apply_patch_artifacts` directives and the orchestrator applies them mechanically.
 - The current proposal cycle starts on the first entry into this state for an iteration
 - Create or reset `proposal_cycle.cycle_id` when a new iteration first enters this state after `ROLL_ITERATION` or fresh initialization
 - Set `proposal_cycle.current_pool_frozen = false` when a new proposal cycle begins and keep it false while `current_proposals` may still grow

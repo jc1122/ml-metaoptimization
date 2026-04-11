@@ -135,7 +135,7 @@ This phase is governed by `metaopt-background-control`:
 ### Output → State
 
 - Findings-only: append findings summary to `state.maintenance_summary`
-- Code-modifying: write one unified diff patch artifact to `.ml-metaopt/artifacts/patches/`; orchestrator integrates mechanically
+- Code-modifying: write one unified diff patch artifact to `.ml-metaopt/artifacts/patches/`; patch is NOT applied during background work — the orchestrator records the patch path as an executor event and defers integration to `QUIESCE_SLOTS` via `apply_patch_artifacts` directives from `metaopt-iteration-close-control`
 
 ### Task File Bridge
 

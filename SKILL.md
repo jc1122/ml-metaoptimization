@@ -142,7 +142,7 @@ Each machine state is governed by exactly one control agent. The orchestrator in
 | `HYDRATE_STATE` | `metaopt-hydrate-state` | `hydrate` |
 | `MAINTAIN_BACKGROUND_POOL`, `WAIT_FOR_PROPOSAL_THRESHOLD` | `metaopt-background-control` | `plan_background_work` → `gate_background_work` |
 | `SELECT_EXPERIMENT`, `DESIGN_EXPERIMENT` | `metaopt-select-design` | `plan_select_experiment` → `gate_select_and_plan_design` → `finalize_select_design` |
-| `MATERIALIZE_CHANGESET`, `LOCAL_SANITY` | `metaopt-local-execution-control` | `plan_local_changeset` → `gate_local_sanity` |
+| `MATERIALIZE_CHANGESET`, `LOCAL_SANITY` | `metaopt-local-execution-control` | `plan_local_changeset` → `gate_materialization` → `gate_local_sanity` |
 | `ENQUEUE_REMOTE_BATCH`, `WAIT_FOR_REMOTE_BATCH`, `ANALYZE_RESULTS` | `metaopt-remote-execution-control` | `plan_remote_batch` → `gate_remote_batch` → `analyze_remote_results` |
 | `ROLL_ITERATION`, `QUIESCE_SLOTS` | `metaopt-iteration-close-control` | `plan_roll_iteration` → `gate_roll_iteration` → `quiesce_slots` |
 

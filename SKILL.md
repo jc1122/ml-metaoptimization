@@ -113,15 +113,16 @@ Use `ml_metaopt_campaign.example.yaml` as the canonical campaign example rather 
 The orchestrator may:
 - invoke the governing control agent for the current machine state as a subagent (see Control Agent Dispatch table below), read the resulting handoff from `.ml-metaopt/handoffs/`, and apply it mechanically per `references/control-protocol.md`
 - read and validate campaign/state files
-- update `.ml-metaopt/state.json`
+- apply control-agent `state_patch` updates to `.ml-metaopt/state.json` and set `machine_state`/`status` from the handoff envelope
 - execute `remove_agents_hook` directives emitted by control agents (`AGENTS.md` hook append is handled by `metaopt-hydrate-state` directly when it runs as a subagent)
-- create and remove isolated worktrees
-- run local sanity commands
-- package immutable code/data artifacts
-- write remote batch manifests
-- dispatch `@hetzner-delegation-worker` for `queue_op` executor directives and write results to `.ml-metaopt/queue-results/`
-- ingest machine-readable results
-- emit iteration reports
+- create and remove isolated worktrees as infrastructure for worker dispatch and cleanup
+- execute `run_sanity` directives emitted by `metaopt-local-execution-control`, staging raw stdout/stderr/exit-code outputs as executor events
+- execute `package_code_artifact` and `package_data_manifest` directives, writing resulting artifact URIs to the specified `output_event_path`
+- execute `write_manifest` directives emitted by `metaopt-remote-execution-control`
+- execute `queue_op` directives by dispatching `@hetzner-delegation-worker` and writing its JSON output to `.ml-metaopt/queue-results/`
+- execute `apply_patch_artifacts` directives, writing integration outcomes to `output_event_path` when specified
+- stage raw outputs of completed workers and executor operations in `.ml-metaopt/executor-events/` and `.ml-metaopt/worker-results/` for control agents to read in gate phases
+- execute `emit_iteration_report` and `emit_final_report` directives
 
 The orchestrator must delegate all semantic decisions. Leaf workers are dispatched exclusively from `launch_requests` in control-agent handoffs — the orchestrator never constructs worker task files or prompt envelopes directly:
 - proposal generation (via `metaopt-ideation-worker`)

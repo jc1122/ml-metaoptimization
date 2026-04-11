@@ -295,8 +295,8 @@ This state is governed by `metaopt-local-execution-control`:
 **Model class:** `strong_reasoner`
 
 This state is governed by `metaopt-remote-execution-control`:
-- The control agent polls `status_command` via the `hetzner-delegation` skill and stages raw backend JSON payloads; the orchestrator does not call queue commands
-- The control agent interprets those payloads, requests diagnosis via a staged task file, and performs the canonical state updates described below (`gate_remote_batch`)
+- The control agent emits `queue_op` directives for `status_command`; the orchestrator dispatches `@hetzner-delegation-worker` and writes raw backend JSON payloads to `.ml-metaopt/queue-results/status-<batch_id>.json`
+- The control agent reads those payloads, requests diagnosis via a staged task file, and performs the canonical state updates described below (`gate_remote_batch`)
 
 Dispatched only when `remote_queue.status_command` returns `status = "failed"`.
 
@@ -330,8 +330,8 @@ Dispatched only when `remote_queue.status_command` returns `status = "failed"`.
 **Model class:** `strong_reasoner`
 
 This state is governed by `metaopt-remote-execution-control`:
-- The control agent stages an analysis task file after completed results have been fetched (`analyze_remote_results`)
-- The orchestrator launches `metaopt-analysis-worker` and stages raw analysis JSON
+- The control agent emits a `queue_op` directive for `results_command`; the orchestrator dispatches `@hetzner-delegation-worker` and writes the completed results payload to `.ml-metaopt/queue-results/results-<batch_id>.json`
+- The control agent reads that file, stages an analysis task file (`analyze_remote_results`), and the orchestrator launches `metaopt-analysis-worker`
 - The control agent updates `analysis_summary`, baseline state, learnings, and rollover readiness
 
 ### Input (from orchestrator context)
@@ -340,7 +340,7 @@ This state is governed by `metaopt-remote-execution-control`:
 
 | Field | Source |
 |-------|--------|
-| `batch_results` | Raw JSON object fetched by `metaopt-remote-execution-control` via `remote_queue.results_command` (using the `hetzner-delegation` skill) and passed as `batch_results` in the subagent prompt. Minimum expected keys: `batch_id`, `status`, `trials` (list), `summary_metrics`. |
+| `batch_results` | Raw JSON object from `.ml-metaopt/queue-results/results-<batch_id>.json` (written by the orchestrator after dispatching `@hetzner-delegation-worker` for `results_command`) and passed as `batch_results` in the subagent prompt. Minimum expected keys: `batch_id`, `status`, `trials` (list), `summary_metrics`. |
 | Experiment context | Selected experiment design + winning proposal |
 
 ### Output → State

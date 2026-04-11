@@ -163,19 +163,19 @@ This state is governed by `metaopt-local-execution-control`. The orchestrator ru
 
 ### `ENQUEUE_REMOTE_BATCH`
 
-This state is governed by `metaopt-remote-execution-control`. The control agent validates enqueue readiness, writes the manifest (via a `write_manifest` executor directive to the orchestrator), and then executes `enqueue_command` itself using the `hetzner-delegation` skill. The orchestrator does not call `enqueue_command`. See `references/control-protocol.md`.
+This state is governed by `metaopt-remote-execution-control`. The control agent validates enqueue readiness, writes the manifest (via a `write_manifest` executor directive), and emits a `queue_op` directive for `enqueue`. The orchestrator dispatches `@hetzner-delegation-worker` and writes the result to `.ml-metaopt/queue-results/enqueue-<batch_id>.json`. The control agent reads that file in the gate phase. See `references/control-protocol.md`.
 
-- `metaopt-remote-execution-control` invokes the `hetzner-delegation` skill and calls `remote_queue.enqueue_command`
+- `metaopt-remote-execution-control` emits a `queue_op` directive; orchestrator dispatches `@hetzner-delegation-worker` with `remote_queue.enqueue_command`
 - Pass exactly one immutable batch manifest
 - Expect one stdout JSON object containing `batch_id`, `queue_ref`, and `status = "queued"`
 - Control agent records `batch_id` and queue reference in `state_patch`; orchestrator applies it
 
 ### `WAIT_FOR_REMOTE_BATCH`
 
-This state is governed by `metaopt-remote-execution-control`. The control agent polls `status_command` via the `hetzner-delegation` skill and interprets batch status; the orchestrator does not call queue commands directly. See `references/control-protocol.md`.
+This state is governed by `metaopt-remote-execution-control`. The control agent emits `queue_op` directives for status polling; the orchestrator dispatches `@hetzner-delegation-worker` and writes results for the control agent to interpret. See `references/control-protocol.md`.
 
 - Continue background-slot work while the batch runs
-- `metaopt-remote-execution-control` polls `remote_queue.status_command` via the `hetzner-delegation` skill and stages raw backend payloads for semantic interpretation
+- `metaopt-remote-execution-control` emits `queue_op` directives for `remote_queue.status_command`; orchestrator dispatches `@hetzner-delegation-worker` and writes raw backend payloads to `.ml-metaopt/queue-results/status-<batch_id>.json`
 - Semantic interpretation and remote failure routing are the exclusive responsibility of `metaopt-remote-execution-control`
 - Never inspect raw cluster jobs directly from this skill
 - If `stop_conditions.max_wallclock_hours` is exceeded, set `next_action = "finish current batch and stop"`, stop launching new work, and continue polling the current batch to completion
@@ -192,10 +192,10 @@ This state is governed by `metaopt-remote-execution-control`. The control agent 
 
 ### `ANALYZE_RESULTS`
 
-This state is governed by `metaopt-remote-execution-control`. The control agent fetches completed-results payloads via the `hetzner-delegation` skill, stages analysis tasks, and updates baseline state. The orchestrator does not call `results_command`. See `references/control-protocol.md`.
+This state is governed by `metaopt-remote-execution-control`. The control agent emits a `queue_op` directive for results fetch; the orchestrator dispatches `@hetzner-delegation-worker` and writes results to `.ml-metaopt/queue-results/results-<batch_id>.json`. The control agent reads that file, stages analysis tasks, and updates baseline state. See `references/control-protocol.md`.
 
-- `metaopt-remote-execution-control` invokes the `hetzner-delegation` skill and calls `remote_queue.results_command`
-- The control agent stages raw completed-results payloads; semantic result judgment and baseline updates are its exclusive responsibility
+- `metaopt-remote-execution-control` emits a `queue_op` directive; orchestrator dispatches `@hetzner-delegation-worker` with `remote_queue.results_command`
+- The control agent reads the result file and stages raw completed-results payloads; semantic result judgment and baseline updates are its exclusive responsibility
 - Dispatch the `metaopt-analysis-worker` custom agent as one `strong_reasoner` subagent to compare the result against the aggregate baseline and extract learnings
 - If the aggregate result clears `objective.improvement_threshold` in the configured direction, update the baseline and reset `no_improve_iterations` to `0`
 - Otherwise leave the baseline unchanged and increment `no_improve_iterations`

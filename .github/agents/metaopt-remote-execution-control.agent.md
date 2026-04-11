@@ -19,24 +19,12 @@ You run in three modes:
 
 # Rules
 
-- You are the exclusive owner of backend queue execution for Steps 9/11. The orchestrator does not call `enqueue_batch.py`, `get_batch_status.py`, or `fetch_batch_results.py` directly — you execute these commands yourself.
-- Before running any queue command, invoke the `hetzner-delegation` skill. This skill is the authoritative execution contract for the ray-hetzner queue backend. Do not use raw Ray CLI, SSH, SCP, direct host execution, or `hcloud` as fallbacks.
-- You write staged task files and handoff artifacts for the orchestrator. Queue execution results (job IDs, status, results paths) are returned in your handoff envelope — not as `executor_directives` for the orchestrator to run.
+- You are the exclusive owner of queue execution *decisions* for Steps 9/11. You decide what queue operations are needed and emit them as `queue_op` executor directives. The orchestrator executes those directives by dispatching `@hetzner-delegation-worker`; you never run queue commands directly.
+- Do not invoke the `hetzner-delegation` skill directly — `@hetzner-delegation-worker` handles skill invocation internally.
+- Queue execution results are available at `.ml-metaopt/queue-results/<op>-<batch_id>.json` (written by the orchestrator after worker dispatch). Read these files in gate and analyze phases to interpret outcomes.
 - You are the only component allowed to update `remote_batches`, `selected_experiment.analysis_summary`, `key_learnings`, `completed_experiments`, and remote-step machine-state transitions during Steps 9/11.
 - Your staged handoff output must conform to the universal control-handoff envelope defined in `references/control-protocol.md`.
-- Do not emit `enqueue_batch`, `poll_batch_status`, or `fetch_batch_results` as `executor_directives` — execute them in this agent and report outcomes in `state_patch` and `summary`.
-
-# Queue Execution
-
-When queue operations are required in any mode:
-
-1. Invoke the `hetzner-delegation` skill before running any queue command.
-2. Use the queue commands declared in the campaign's `backend` contract:
-   - Enqueue: `python3 metaopt/enqueue_batch.py --manifest <path> --queue-root <project>/.ml-metaopt`
-   - Status: `python3 metaopt/get_batch_status.py --batch-id <id> --queue-root <project>/.ml-metaopt`
-   - Results: `python3 metaopt/fetch_batch_results.py --batch-id <id> --queue-root <project>/.ml-metaopt`
-3. Always pass an explicit `--queue-root` pointing to the project's `.ml-metaopt` directory.
-4. Report outcomes (job IDs, status, result paths, errors) in `state_patch` and `summary`. Do not emit these as `executor_directives`.
+- Emit queue operations as `queue_op` executor directives. Report interpreted outcomes (job IDs, status, result paths, errors) in `state_patch` and `summary`.
 
 # Execution
 

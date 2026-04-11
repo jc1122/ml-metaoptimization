@@ -70,7 +70,7 @@ If `AGENTS.md` does not exist on first run, create it before appending the marke
 - the orchestrator must not edit project files directly; it may only apply worker-produced patches mechanically or write protocol-owned artifacts/manifests/state files
 - generic semantic fallback is forbidden: if the orchestrator encounters unsupported semantic work, it must never improvise; instead it fails closed to `BLOCKED_PROTOCOL` with recovery guidance
 - background slots are filled before auxiliary work is launched — `metaopt-background-control` enforces this through its `launch_requests`; the orchestrator must not fill slots autonomously outside of a control-agent handoff
-- use the queue backend contract instead of raw cluster operations; the orchestrator never calls queue commands directly — `metaopt-remote-execution-control` owns all queue execution using the `hetzner-delegation` skill
+- use the queue backend contract instead of raw cluster operations; the orchestrator never calls queue commands directly — it dispatches `@hetzner-delegation-worker` for `queue_op` executor directives emitted by `metaopt-remote-execution-control`, then writes the worker's JSON result to `.ml-metaopt/queue-results/` for the control agent to read
 - use the aggregate metric as the authoritative campaign score
 - bound `LOCAL_SANITY` remediation to at most three attempts per experiment
 - never silently discard prior state on campaign identity drift
@@ -119,7 +119,7 @@ The orchestrator may:
 - run local sanity commands
 - package immutable code/data artifacts
 - write remote batch manifests
-- call the queue backend commands declared in the campaign file
+- dispatch `@hetzner-delegation-worker` for `queue_op` executor directives and write results to `.ml-metaopt/queue-results/`
 - ingest machine-readable results
 - emit iteration reports
 

@@ -47,11 +47,10 @@ Every control agent emits a JSON handoff object conforming to this envelope. Fie
 
 ### Executor Directive Catalog
 
-> **Remote queue commands are NOT executor directives.** `enqueue_batch`, `poll_batch_status`, and `fetch_batch_results` are executed directly by `metaopt-remote-execution-control` using the `hetzner-delegation` skill. The orchestrator never calls queue commands. Only `write_manifest` (a local file write) remains an orchestrator-side directive for the remote execution path.
-
 #### Remote execution directives
 
 - `write_manifest` — required fields: `manifest_path`, `batch_id`
+- `queue_op` — required fields: `operation` (one of `enqueue`, `status`, `results`), `batch_id`, `command` (full shell command string from campaign `backend` contract), `result_file` (path the orchestrator writes the worker JSON result to, e.g. `.ml-metaopt/queue-results/<op>-<batch_id>.json`). The orchestrator executes this directive by dispatching `@hetzner-delegation-worker` and writing its JSON output to `result_file`. `metaopt-remote-execution-control` reads `result_file` in the subsequent gate or analyze phase.
 
 #### Local execution directives
 

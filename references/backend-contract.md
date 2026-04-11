@@ -4,9 +4,9 @@
 
 The skill interacts with remote execution **only** through this queue-based contract. The backend owns cluster verification, sync, submission, retries, result collection, and utilization management.
 
-**Execution ownership:** All three queue commands (`enqueue_command`, `status_command`, `results_command`) are executed exclusively by `metaopt-remote-execution-control`, which must invoke the `hetzner-delegation` skill before running any of them. The orchestrator never calls queue commands directly — it only writes manifest files (via the `write_manifest` executor directive) and applies state patches returned by the control agent.
+**Execution ownership:** `metaopt-remote-execution-control` decides what queue operations are needed and emits them as `queue_op` executor directives. The orchestrator executes those directives by dispatching `@hetzner-delegation-worker` (which invokes the `hetzner-delegation` skill internally) and writes the worker's JSON result to `.ml-metaopt/queue-results/<op>-<batch_id>.json`. The control agent reads the result file in its subsequent gate or analyze phase. The orchestrator never calls queue commands directly — it only writes manifest files (via `write_manifest`), dispatches the worker (via `queue_op`), and applies state patches returned by the control agent.
 
-**Queue-only rule:** The skill must never execute raw SSH commands, Ray cluster operations, `kubectl exec`, or any direct cluster interaction. All remote execution flows through the three declared queue commands below, called by `metaopt-remote-execution-control` via `hetzner-delegation`. Any attempt to bypass this contract — whether by the orchestrator constructing ad-hoc remote commands or by a control agent emitting raw-cluster executor directives — is a protocol breach and must be rejected. If a control agent emits an executor directive with a blocked action (e.g. `ssh_command`, `raw_ssh`, `shell_exec`, `kubectl_exec`), the guardrail validators reject it before execution. No raw SSH, Ray CLI, or direct cluster probing is permitted from within this skill.
+**Queue-only rule:** The skill must never execute raw SSH commands, Ray cluster operations, `kubectl exec`, or any direct cluster interaction. All remote execution flows through the three declared queue commands below, dispatched by the orchestrator via `@hetzner-delegation-worker`. Any attempt to bypass this contract — whether by the orchestrator constructing ad-hoc remote commands or by a control agent emitting raw-cluster executor directives — is a protocol breach and must be rejected. If a control agent emits an executor directive with a blocked action (e.g. `ssh_command`, `raw_ssh`, `shell_exec`, `kubectl_exec`), the guardrail validators reject it before execution. No raw SSH, Ray CLI, or direct cluster probing is permitted from within this skill.
 
 Forbidden fallback examples include `ray job submit`, `ray start`, `ray stop`, `scp`, `rsync`, and cloud-console or cloud-CLI lifecycle detours such as `hcloud`. If the queue backend cannot represent the needed next step, the orchestrator must fail closed to `BLOCKED_PROTOCOL` or route through the diagnosis lane; it must never invent a direct-per-node execution path.
 
@@ -17,7 +17,7 @@ Declared in `ml_metaopt_campaign.yaml` under `remote_queue`:
 - `status_command`
 - `results_command`
 
-`metaopt-remote-execution-control` must call only these commands for remote execution, via the `hetzner-delegation` skill. No other component may invoke them.
+`metaopt-remote-execution-control` emits `queue_op` directives referencing only these commands. The orchestrator dispatches `@hetzner-delegation-worker` to execute them. No other component may invoke these commands.
 
 These fields are shell command strings, not argv arrays. The backend command contract assumes shell execution semantics, including normal shell path expansion.
 The orchestrator appends one shell-escaped value after the command string declared in the campaign file.

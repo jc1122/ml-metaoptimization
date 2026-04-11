@@ -279,12 +279,12 @@ These worker targets are required for the state machine to proceed past their di
 
 ### Degradable Worker Targets (record and continue)
 
-These worker targets have defined fallback behavior. If missing, record the degradation in `state.runtime_capabilities.degraded_lanes` and continue.
+These worker targets have defined fallback behavior. If missing, `metaopt-hydrate-state` records the degradation in `state.runtime_capabilities.degraded_lanes` via `state_patch` and continues. The governing control agent detects the degraded lane from `state.runtime_capabilities.degraded_lanes` and implements the fallback via its own `state_patch` and `launch_requests` — the orchestrator never implements fallbacks directly.
 
-| Skill | Fallback Behavior |
+| Skill | Fallback Behavior (implemented by governing control agent) |
 |-------|-------------------|
-| `metaopt-rollover-worker` | Carry over all `next_proposals` without filtering. Set `needs_fresh_ideation = false`. Record degradation in `key_learnings`. |
-| `repo-audit-refactor-optimize` | Fall back to findings-only maintenance (already documented in Worker Policy). |
+| `metaopt-rollover-worker` | `metaopt-iteration-close-control` carries over all `next_proposals` without filtering, sets `needs_fresh_ideation = false`, and records the degradation in `key_learnings` via `state_patch`. |
+| `repo-audit-refactor-optimize` | `metaopt-background-control` falls back to findings-only maintenance (already documented in Worker Policy). |
 
 ### Verification Timing
 

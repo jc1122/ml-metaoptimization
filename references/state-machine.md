@@ -30,7 +30,7 @@ Every delegated phase is governed by a mandatory control agent. The orchestrator
 | `HYDRATE_STATE` | `metaopt-hydrate-state` | single-phase (hydrate) | — |
 | `MAINTAIN_BACKGROUND_POOL`, `WAIT_FOR_PROPOSAL_THRESHOLD` | `metaopt-background-control` | `plan_background_work` | `gate_background_work` |
 | `SELECT_EXPERIMENT`, `DESIGN_EXPERIMENT` | `metaopt-select-design` | `plan_select_experiment` | `gate_select_and_plan_design`, `finalize_select_design` |
-| `MATERIALIZE_CHANGESET`, `LOCAL_SANITY` | `metaopt-local-execution-control` | `plan_local_changeset` | `gate_local_sanity` |
+| `MATERIALIZE_CHANGESET`, `LOCAL_SANITY` | `metaopt-local-execution-control` | `plan_local_changeset` | `gate_materialization`, `gate_local_sanity` |
 | `ENQUEUE_REMOTE_BATCH`, `WAIT_FOR_REMOTE_BATCH`, `ANALYZE_RESULTS` | `metaopt-remote-execution-control` | `plan_remote_batch` | `gate_remote_batch`, `analyze_remote_results` |
 | `ROLL_ITERATION`, `QUIESCE_SLOTS` | `metaopt-iteration-close-control` | `plan_roll_iteration` | `gate_roll_iteration`, `quiesce_slots` |
 
@@ -238,4 +238,13 @@ All four terminal states remove the `AGENTS.md` hook using the same operation as
 
 `BLOCKED_PROTOCOL` vs `BLOCKED_CONFIG`: `BLOCKED_CONFIG` signals that the campaign YAML or environment configuration needs repair (user-actionable). `BLOCKED_PROTOCOL` signals that the orchestrator or a control agent detected a protocol-level violation — such as lane drift, missing worker artifacts, or unsupported semantic operations — that cannot be resolved without manual intervention. The orchestrator must never attempt to improvise around a protocol violation.
 
-When the campaign reaches a terminal state via `QUIESCE_SLOTS`, the control agent emits explicit `executor_directives` in the handoff output so the orchestrator does not need to infer cleanup intent. For `COMPLETE`, the directives are `remove_agents_hook`, `delete_state_file`, and `emit_final_report`. The orchestrator executes these directives mechanically without semantic interpretation.
+Any control agent that recommends a terminal state must emit the appropriate cleanup `executor_directives` in its handoff so the orchestrator never infers cleanup intent from prose. The orchestrator executes these directives mechanically without semantic interpretation.
+
+| Terminal state | Required directives |
+|---------------|---------------------|
+| `COMPLETE` | `remove_agents_hook`, `delete_state_file`, `emit_final_report` |
+| `BLOCKED_CONFIG` | `remove_agents_hook` |
+| `BLOCKED_PROTOCOL` | `remove_agents_hook` |
+| `FAILED` | `remove_agents_hook` |
+
+The `COMPLETE` terminal state is only reachable via `QUIESCE_SLOTS` (after all slots have been drained or cancelled). The other terminal states may be recommended by any control agent from any state.

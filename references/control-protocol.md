@@ -145,7 +145,7 @@ The following control agents form the semantic layer of the metaoptimization sta
 
 - **Scope:** `ENQUEUE_REMOTE_BATCH`, `WAIT_FOR_REMOTE_BATCH`, `ANALYZE_RESULTS` states
 - **Phases:** plan enqueue (`plan_remote_batch`) → gate batch status (`gate_remote_batch`) → gate analysis (`analyze_remote_results`)
-- **Responsibility:** Generate batch manifests, execute queue commands directly via the `hetzner-delegation` skill, monitor batch lifecycle, delegate result analysis, update baseline
+- **Responsibility:** Generate batch manifests, emit `queue_op` directives for the orchestrator to dispatch via `@hetzner-delegation-worker`, monitor batch lifecycle, delegate result analysis, update baseline
 - **Handoff script:** `scripts/remote_execution_control_handoff.py`
 
 ### `metaopt-iteration-close-control`

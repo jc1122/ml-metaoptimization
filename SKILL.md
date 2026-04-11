@@ -245,6 +245,8 @@ Each worker target has its own execution contract. The orchestrator consumes str
 
 Worker-target contracts reference `references/worker-lanes.md` and `references/contracts.md` in this repository as the authoritative source.
 
+**Queue execution worker (orchestrator-dispatched):** `@hetzner-delegation-worker` is dispatched directly by the orchestrator for `queue_op` executor directives — not via `launch_requests`. It executes one queue command per invocation (enqueue/status/results) and returns structured JSON written to `.ml-metaopt/queue-results/`. It is not a lane worker and does not appear in the table above.
+
 ## Skill Availability
 
 This section documents worker-target availability recorded during hydration.
@@ -274,6 +276,7 @@ These worker targets are required for the state machine to proceed past their di
 - `metaopt-materialization-worker` — required for `MATERIALIZE_CHANGESET`
 - `metaopt-diagnosis-worker` — required for `LOCAL_SANITY` and remote failure diagnosis handling
 - `metaopt-analysis-worker` — required for `ANALYZE_RESULTS`
+- `hetzner-delegation-worker` — required for `ENQUEUE_REMOTE_BATCH`, `WAIT_FOR_REMOTE_BATCH`, and `ANALYZE_RESULTS` (dispatched by orchestrator for `queue_op` directives)
 
 ### Degradable Worker Targets (record and continue)
 

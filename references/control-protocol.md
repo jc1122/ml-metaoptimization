@@ -59,7 +59,7 @@ Every control agent emits a JSON handoff object conforming to this envelope. Fie
 - `apply_patch_artifacts` — required fields: `result_file`, `target_worktree`; optional field: `output_event_path` (when present, the orchestrator writes the integration outcome — success or conflict details — as an executor event at this path, for the control agent to read in its next gate phase)
 - `package_code_artifact` — required fields: `worktree`, `code_roots`, `output_event_path` (path where the orchestrator writes the resulting artifact URI as an executor event for the control agent to read in gate phase)
 - `package_data_manifest` — required fields: `worktree`, `data_roots`, `output_event_path` (same pattern as `package_code_artifact`)
-- `run_sanity` — required fields: `worktree`, `command`, `max_duration_seconds`
+- `run_sanity` — required fields: `worktree`, `command`, `max_duration_seconds`, `output_event_path` (path where the orchestrator writes captured stdout, stderr, exit-code, and duration as an executor event for the control agent to read in its gate phase)
 
 #### Iteration-close and terminal directives
 

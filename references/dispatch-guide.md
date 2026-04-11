@@ -252,9 +252,9 @@ The materialization worker operates in one of three modes. `metaopt-local-execut
 - Write unified diff patch to `.ml-metaopt/artifacts/patches/`
 - Populate `state.local_changeset.patch_artifacts[]` with `{ producer_slot_id, purpose, patch_path, target_worktree }`
 - Write sanity verification notes to `state.local_changeset.verification_notes`
-- Orchestrator packages code artifact → `state.local_changeset.code_artifact_uri`
-- Orchestrator packages data manifest → `state.local_changeset.data_manifest_uri`
-- Orchestrator writes batch manifest → `.ml-metaopt/artifacts/manifests/`
+- Orchestrator executes `package_code_artifact` directive and writes the resulting URI to `output_event_path`; control agent gate phase reads it and emits `code_artifact_uri` in `state_patch`
+- Orchestrator executes `package_data_manifest` directive and writes the resulting URI to `output_event_path`; control agent gate phase reads it and emits `data_manifest_uri` in `state_patch`
+- Orchestrator executes `write_manifest` directive and writes the batch manifest to the path specified in the directive
 
 ## LOCAL_SANITY — Diagnosis (on failure)
 

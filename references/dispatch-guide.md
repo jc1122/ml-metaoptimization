@@ -209,8 +209,9 @@ This state is governed by `metaopt-select-design`:
 
 This state is governed by `metaopt-local-execution-control`:
 - The control agent writes a staged materialization task file and emits a `launch_requests` entry for `metaopt-materialization-worker` (`plan_local_changeset`)
-- The orchestrator launches the worker from the `launch_requests` entry, applies patches mechanically per `executor_directives`, packages artifacts, and stages raw executor outputs
-- The control agent semantically updates `state.local_changeset` and decides the next retry/advance action (`gate_local_sanity`)
+- The orchestrator launches the worker, attempts mechanical patch integration, and records the integration outcome as an executor event in `.ml-metaopt/executor-events/`
+- The orchestrator re-invokes the control agent in `gate_materialization` phase; the control agent reads the integration outcome and either emits a conflict-resolution `launch_requests` entry (merge failed) or advances to `LOCAL_SANITY` (merge succeeded)
+- After `LOCAL_SANITY`, the control agent gates sanity results and routes retries or advances (`gate_local_sanity`)
 
 ### Input (from orchestrator context)
 

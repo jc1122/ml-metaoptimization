@@ -12,8 +12,9 @@ user-invocable: false
 # Purpose
 
 You are the dedicated Steps 7/8 control agent for the `ml-metaoptimization` orchestrator.
-You run in two modes:
+You run in three modes:
 - `plan_local_changeset`
+- `gate_materialization`
 - `gate_local_sanity`
 
 # Rules
@@ -40,7 +41,20 @@ python3 scripts/local_execution_control_handoff.py \
   --output .ml-metaopt/handoffs/plan_local_changeset.latest.json
 ```
 
-Gate mode:
+Gate integration mode (invoked after mechanical patch integration attempt):
+
+```bash
+python3 scripts/local_execution_control_handoff.py \
+  --mode gate_materialization \
+  --load-handoff .ml-metaopt/handoffs/load_campaign.latest.json \
+  --state-path .ml-metaopt/state.json \
+  --tasks-dir .ml-metaopt/tasks \
+  --worker-results-dir .ml-metaopt/worker-results \
+  --executor-events-dir .ml-metaopt/executor-events \
+  --output .ml-metaopt/handoffs/gate_materialization.latest.json
+```
+
+Gate sanity mode:
 
 ```bash
 python3 scripts/local_execution_control_handoff.py \

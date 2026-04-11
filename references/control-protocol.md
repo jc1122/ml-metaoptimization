@@ -137,8 +137,8 @@ The following control agents form the semantic layer of the metaoptimization sta
 ### `metaopt-local-execution-control`
 
 - **Scope:** `MATERIALIZE_CHANGESET`, `LOCAL_SANITY` states
-- **Phases:** plan (`plan_local_changeset`) → gate (`gate_local_sanity`)
-- **Responsibility:** Plan materialization work, route diagnosis actions, enforce sanity attempt cap
+- **Phases:** plan (`plan_local_changeset`) → gate integration (`gate_materialization`) → gate sanity (`gate_local_sanity`)
+- **Responsibility:** Plan materialization work, gate integration outcome and emit conflict-resolution `launch_requests` when needed, route diagnosis actions, enforce sanity attempt cap
 - **Handoff script:** `scripts/local_execution_control_handoff.py`
 
 ### `metaopt-remote-execution-control`

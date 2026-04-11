@@ -144,9 +144,8 @@ This state is governed by `metaopt-local-execution-control`. The control agent w
 
 This state is governed by `metaopt-local-execution-control`. The orchestrator runs `sanity.command` and stages raw outputs; the control agent interprets results and routes retries. See `references/control-protocol.md`.
 
-- Run `sanity.command`
-- Enforce `sanity.max_duration_seconds`
-- The orchestrator stages raw sanity outputs; semantic interpretation and retry routing are the responsibility of `metaopt-local-execution-control`
+- `metaopt-local-execution-control` emits a `run_sanity` directive (in the handoff that advances into `LOCAL_SANITY` and after each remediation cycle) ordering the orchestrator to run `sanity.command`; the orchestrator stages raw stdout/stderr/exit-code outputs as executor events
+- Semantic interpretation and retry routing are the exclusive responsibility of `metaopt-local-execution-control`; the orchestrator must not evaluate sanity outcomes directly
 - Required checks:
   - config loads
   - fast path executes

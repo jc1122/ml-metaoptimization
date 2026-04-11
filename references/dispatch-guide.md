@@ -264,7 +264,7 @@ The materialization worker operates in one of three modes. `metaopt-local-execut
 **Model class:** `strong_reasoner`
 
 This state is governed by `metaopt-local-execution-control`:
-- The orchestrator runs `sanity.command` and stages raw stdout/stderr/exit-code artifacts
+- `metaopt-local-execution-control` emits a `run_sanity` directive (in the handoff that transitions into `LOCAL_SANITY` and after each remediation cycle) ordering the orchestrator to execute `sanity.command` and stage raw stdout/stderr/exit-code artifacts
 - The control agent interprets those staged artifacts, requests diagnosis via a staged task file, and performs the canonical state updates described below (`gate_local_sanity`)
 
 ### Input (from orchestrator context)

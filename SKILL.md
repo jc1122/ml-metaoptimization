@@ -114,7 +114,7 @@ The orchestrator may:
 - invoke the governing control agent for the current machine state as a subagent (see Control Agent Dispatch table below), read the resulting handoff from `.ml-metaopt/handoffs/`, and apply it mechanically per `references/control-protocol.md`
 - read and validate campaign/state files
 - update `.ml-metaopt/state.json`
-- append/remove the marked `AGENTS.md` hook
+- execute `remove_agents_hook` directives emitted by control agents (`AGENTS.md` hook append is handled by `metaopt-hydrate-state` directly when it runs as a subagent)
 - create and remove isolated worktrees
 - run local sanity commands
 - package immutable code/data artifacts

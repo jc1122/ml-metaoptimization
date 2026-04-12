@@ -23,7 +23,7 @@ You run in two modes:
 - The orchestrator must not interpret worker results semantically.
 - You are the only component allowed to update proposal pools and `proposal_cycle` semantics during the background loop.
 - Your staged handoff output must conform to the universal control-handoff envelope defined in `references/control-protocol.md`.
-- `executor_directives` are the authoritative executor input when executor-side work is needed; the orchestrator executes them mechanically and in order. The orchestrator must not infer missing executor work from prose, summaries, or legacy fields.
+- `pre_launch_directives` and `post_launch_directives` are the authoritative executor input when executor-side work is needed; the orchestrator executes each list mechanically in order. The orchestrator must not infer missing executor work from prose, summaries, or legacy fields.
 
 # Execution
 
@@ -51,6 +51,32 @@ python3 scripts/background_control_handoff.py \
   --worker-results-dir .ml-metaopt/worker-results \
   --slot-events-dir .ml-metaopt/slot-events \
   --output .ml-metaopt/handoffs/gate_background_work.latest.json
+```
+
+Secondary invocation (WAIT_FOR_REMOTE_BATCH only):
+
+```bash
+python3 scripts/background_control_handoff.py \
+  --mode plan_background_work \
+  --load-handoff .ml-metaopt/handoffs/load_campaign.latest.json \
+  --state-path .ml-metaopt/state.json \
+  --tasks-dir .ml-metaopt/tasks \
+  --worker-results-dir .ml-metaopt/worker-results \
+  --slot-events-dir .ml-metaopt/slot-events \
+  --output .ml-metaopt/handoffs/gate_background_work_secondary.latest.json \
+  --secondary
+```
+
+```bash
+python3 scripts/background_control_handoff.py \
+  --mode gate_background_work \
+  --load-handoff .ml-metaopt/handoffs/load_campaign.latest.json \
+  --state-path .ml-metaopt/state.json \
+  --tasks-dir .ml-metaopt/tasks \
+  --worker-results-dir .ml-metaopt/worker-results \
+  --slot-events-dir .ml-metaopt/slot-events \
+  --output .ml-metaopt/handoffs/gate_background_work_secondary.latest.json \
+  --secondary
 ```
 
 Return the JSON handoff summary and a one-line natural-language summary.

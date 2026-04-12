@@ -97,13 +97,14 @@ def _blocked_protocol(
         "stop_reason": "protocol_violation",
         "recommended_next_machine_state": "BLOCKED_PROTOCOL",
         "iteration_report": state.get("last_iteration_report"),
-        "executor_directives": [
+        "pre_launch_directives": [
             {
                 "action": "remove_agents_hook",
                 "reason": "protocol blocked; orchestration hook no longer needed",
                 "agents_path": "AGENTS.md",
             }
         ],
+        "post_launch_directives": [],
         "warnings": warnings,
         "summary": summary,
     }
@@ -379,7 +380,8 @@ def _plan_roll_iteration(load_handoff: dict[str, Any], state_path: Path, tasks_d
                 "result_file": rollover_result_file,
             },
         ],
-        "executor_directives": [],
+        "pre_launch_directives": [],
+        "post_launch_directives": [],
         "warnings": [],
         "summary": "iteration rollover worker is ready to run",
     }
@@ -469,7 +471,7 @@ def _gate_roll_iteration(load_handoff: dict[str, Any], state_path: Path, worker_
         "stop_reason": stop_reason,
         "recommended_next_machine_state": "QUIESCE_SLOTS",
         "iteration_report": state["last_iteration_report"],
-        "executor_directives": [
+        "pre_launch_directives": [
             {
                 "action": "emit_iteration_report",
                 "reason": "iteration rollover complete; publish iteration report",
@@ -490,6 +492,7 @@ def _gate_roll_iteration(load_handoff: dict[str, Any], state_path: Path, worker_
                 "slot_ids": active_slot_ids,
             },
         ],
+        "post_launch_directives": [],
         "warnings": [],
         "summary": "rollover semantics applied and quiesce preparation is complete",
     }
@@ -577,7 +580,8 @@ def _quiesce_slots(state_path: Path, executor_events_dir: Path, output_path: Pat
         "stop_reason": event.get("stop_reason", ""),
         "recommended_next_machine_state": next_state,
         "iteration_report": state.get("last_iteration_report"),
-        "executor_directives": cleanup_directives,
+        "pre_launch_directives": cleanup_directives,
+        "post_launch_directives": [],
         "warnings": [],
         "summary": event.get("summary", "quiesce results integrated"),
     }

@@ -167,10 +167,8 @@ class BackgroundControlAgentTests(unittest.TestCase):
             self.assertEqual(payload["pool_status"], "building")
             self.assertEqual(payload["recommended_next_machine_state"], "MAINTAIN_BACKGROUND_POOL")
             self.assertEqual(len(payload["launch_requests"]), 2)
-            self.assertEqual(payload["launch_requests"][0]["worker_kind"], "custom_agent")
             self.assertEqual(payload["launch_requests"][0]["worker_ref"], "metaopt-ideation-worker")
-            self.assertEqual(updated_state["active_slots"][0]["mode"], "ideation")
-            self.assertEqual(updated_state["active_slots"][1]["mode"], "ideation")
+            self.assertEqual(updated_state["active_slots"], [])
             task_file = tasks_dir / "bg-1.md"
             self.assertTrue(task_file.exists())
             content = task_file.read_text(encoding="utf-8")
@@ -190,9 +188,8 @@ class BackgroundControlAgentTests(unittest.TestCase):
             )
 
             self.assertEqual(payload["launch_requests"][0]["mode"], "maintenance")
-            self.assertEqual(payload["launch_requests"][0]["worker_kind"], "skill")
             self.assertEqual(payload["launch_requests"][0]["worker_ref"], "repo-audit-refactor-optimize")
-            self.assertEqual(updated_state["active_slots"][0]["mode"], "maintenance")
+            self.assertEqual(updated_state["active_slots"], [])
 
     def test_plan_mode_can_return_ready_without_launches(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir_str:
@@ -291,7 +288,8 @@ class BackgroundControlAgentTests(unittest.TestCase):
             self.assertEqual(payload["control_agent"], "metaopt-background-control")
             self.assertIsInstance(payload["launch_requests"], list)
             self.assertIsInstance(payload["state_patch"], dict)
-            self.assertEqual(payload["executor_directives"], [])
+            self.assertEqual(payload.get("pre_launch_directives", []), [])
+            self.assertEqual(payload.get("post_launch_directives", []), [])
             self.assertIn("summary", payload)
             self.assertIn("warnings", payload)
 
@@ -305,7 +303,7 @@ class BackgroundControlAgentTests(unittest.TestCase):
 
             self.assertIn("next_action", payload["state_patch"])
             self.assertEqual(payload["state_patch"]["next_action"], "execute planned background work")
-            self.assertIn("active_slots", payload["state_patch"])
+            self.assertNotIn("active_slots", payload["state_patch"])
 
     def test_gate_mode_contains_control_protocol_envelope_keys(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir_str:
@@ -322,7 +320,8 @@ class BackgroundControlAgentTests(unittest.TestCase):
             self.assertEqual(payload["control_agent"], "metaopt-background-control")
             self.assertEqual(payload["launch_requests"], [])
             self.assertEqual(payload["state_patch"], {"next_action": "select experiment"})
-            self.assertEqual(payload["executor_directives"], [])
+            self.assertEqual(payload.get("pre_launch_directives", []), [])
+            self.assertEqual(payload.get("post_launch_directives", []), [])
             self.assertIn("summary", payload)
             self.assertIn("warnings", payload)
 
@@ -343,7 +342,7 @@ class BackgroundControlAgentTests(unittest.TestCase):
                 self.assertIsInstance(lr["preferred_model"], str)
                 self.assertTrue(lr["preferred_model"])
                 # Legal worker tuple
-                self.assertIn("worker_kind", lr)
+                self.assertNotIn("worker_kind", lr)
                 self.assertIn("worker_ref", lr)
 
     def test_gate_returns_blocked_protocol_when_ideation_result_leaks_lane_fields(self) -> None:
@@ -576,7 +575,7 @@ class BackgroundControlAgentTests(unittest.TestCase):
         self.assertTrue(AGENT_PROFILE.exists(), f"missing {AGENT_PROFILE}")
         content = AGENT_PROFILE.read_text(encoding="utf-8")
         self.assertIn("name: metaopt-background-control", content)
-        self.assertIn("model: gpt-5.4", content)
+        self.assertIn("model: claude-opus-4.6", content)
         self.assertIn("plan_background_work", content)
         self.assertIn("gate_background_work", content)
         self.assertIn("scripts/background_control_handoff.py", content)

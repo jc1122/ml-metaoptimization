@@ -110,7 +110,7 @@ Use `ml_metaopt_campaign.example.yaml` as the canonical campaign example rather 
 
 The orchestrator may:
 - invoke the governing control agent for the current machine state as a subagent (see Control Agent Dispatch table below), read the resulting handoff from `.ml-metaopt/handoffs/`, and apply it mechanically per `references/control-protocol.md`
-- read and validate campaign/state files
+- read campaign and state files for protocol validation only (envelope shape, legal state transitions, state-patch ownership, dispatch limits, directive schema); semantic campaign validation — field values, sentinel detection, hash computation — belongs exclusively to `metaopt-load-campaign`
 - apply control-agent `state_patch` updates to `.ml-metaopt/state.json` and set `machine_state`/`status` from the handoff envelope
 - execute `remove_agents_hook` directives emitted by control agents (`AGENTS.md` hook append is handled by `metaopt-hydrate-state` directly when it runs as a subagent)
 - create and remove isolated worktrees as infrastructure for worker dispatch and cleanup
@@ -134,7 +134,7 @@ The orchestrator must delegate all semantic decisions. Leaf workers are dispatch
 
 ## Control Agent Dispatch
 
-Each machine state is governed by exactly one control agent. The orchestrator invokes the governing control agent as a subagent, reads the handoff it writes to `.ml-metaopt/handoffs/`, and applies it. See `references/control-protocol.md` for the full phase definitions and handoff envelope contract.
+Each machine state is governed by exactly one primary control agent. The only secondary invocation is `metaopt-background-control` during `WAIT_FOR_REMOTE_BATCH`, and only as a non-advancing background-slot maintenance step after the primary remote-control handoff is applied. The orchestrator invokes the governing control agent as a subagent, reads the handoff it writes to `.ml-metaopt/handoffs/`, and applies it. See `references/control-protocol.md` for the full phase definitions and handoff envelope contract.
 
 | Machine State(s) | Governing Control Agent | Modes |
 |-----------------|------------------------|-------|

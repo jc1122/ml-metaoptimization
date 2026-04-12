@@ -1222,7 +1222,8 @@ class MetaoptValidationTests(unittest.TestCase):
             "recommended_next_machine_state",
             "launch_requests",
             "state_patch",
-            "executor_directives",
+            "pre_launch_directives",
+            "post_launch_directives",
             "summary",
             "warnings",
         ]
@@ -1279,9 +1280,7 @@ class MetaoptValidationTests(unittest.TestCase):
         protocol = _read_text("references/control-protocol.md")
         for action_name in (
             "write_manifest",
-            "enqueue_batch",
-            "poll_batch_status",
-            "fetch_batch_results",
+            "queue_op",
             "apply_patch_artifacts",
             "package_code_artifact",
             "package_data_manifest",
@@ -1310,7 +1309,7 @@ class MetaoptValidationTests(unittest.TestCase):
         dispatch_guide = _read_text("references/dispatch-guide.md")
         _require_pattern(self, protocol, r"execute.*mechanically")
         _require_pattern(self, dispatch_guide, r"must not infer.*executor work")
-        _require_pattern(self, state_machine, r"executor_directives")
+        _require_pattern(self, state_machine, r"pre_launch_directives|post_launch_directives")
 
     def test_contracts_document_campaign_started_at(self) -> None:
         """contracts.md must list campaign_started_at as a required state-file key."""
@@ -1329,9 +1328,9 @@ class MetaoptValidationTests(unittest.TestCase):
         self.assertIn("max_wallclock_hours", state_machine)
 
     def test_state_machine_documents_terminal_cleanup_directives(self) -> None:
-        """state-machine.md terminal states must document explicit executor_directives for cleanup."""
+        """state-machine.md terminal states must document explicit cleanup directives."""
         state_machine = _read_text("references/state-machine.md")
-        self.assertIn("executor_directives", state_machine)
+        self.assertIn("pre_launch_directives", state_machine)
 
     def test_control_agent_manifests_reference_control_protocol(self) -> None:
         """Every control-agent manifest must reference references/control-protocol.md."""
@@ -1372,7 +1371,7 @@ class MetaoptValidationTests(unittest.TestCase):
             )
 
     def test_control_agent_manifests_declare_directives_authoritative(self) -> None:
-        """Every control-agent manifest must declare executor_directives as the authoritative executor input."""
+        """Every control-agent manifest must declare directive lists as the authoritative executor input."""
         control_agent_manifests = [
             ".github/agents/metaopt-load-campaign.agent.md",
             ".github/agents/metaopt-hydrate-state.agent.md",
@@ -1385,14 +1384,19 @@ class MetaoptValidationTests(unittest.TestCase):
         for manifest_path in control_agent_manifests:
             content = _read_text(manifest_path)
             self.assertIn(
-                "executor_directives",
+                "pre_launch_directives",
                 content,
-                f"{manifest_path} must mention executor_directives",
+                f"{manifest_path} must mention pre_launch_directives",
+            )
+            self.assertIn(
+                "post_launch_directives",
+                content,
+                f"{manifest_path} must mention post_launch_directives",
             )
             _require_pattern(
                 self,
                 content,
-                r"`executor_directives`.*authoritative.*executor",
+                r"`pre_launch_directives`.*`post_launch_directives`.*authoritative.*executor",
             )
             _require_pattern(
                 self,
@@ -1465,11 +1469,11 @@ class MetaoptValidationTests(unittest.TestCase):
 
     def test_preferred_model_documented_in_dispatch_guide(self) -> None:
         """dispatch-guide.md must document preferred_model on launch requests
-        and the claude-opus-4.6-fast intent for strong_reasoner/strong_coder."""
+        and the claude-opus-4.6 intent for strong_reasoner/strong_coder."""
         guide = _read_text("references/dispatch-guide.md")
         self.assertIn("preferred_model", guide)
-        self.assertIn("claude-opus-4.6-fast", guide)
-        _require_pattern(self, guide, r"strong_coder.*claude-opus-4\.6-fast|claude-opus-4\.6-fast.*strong_coder")
+        self.assertIn("claude-opus-4.6", guide)
+        _require_pattern(self, guide, r"strong_coder.*claude-opus-4\.6|claude-opus-4\.6.*strong_coder")
 
     def test_preferred_model_documented_in_control_protocol(self) -> None:
         """control-protocol.md launch_requests must document preferred_model
@@ -1485,7 +1489,7 @@ class MetaoptValidationTests(unittest.TestCase):
         sys.path.insert(0, str(ROOT / "scripts"))
         from _guardrail_utils import PREFERRED_MODEL_BY_CLASS
         self.assertIn("strong_coder", PREFERRED_MODEL_BY_CLASS)
-        self.assertEqual(PREFERRED_MODEL_BY_CLASS["strong_coder"], "claude-opus-4.6-fast")
+        self.assertEqual(PREFERRED_MODEL_BY_CLASS["strong_coder"], "claude-opus-4.6")
 
     def test_worker_artifact_preconditions_in_worker_lanes(self) -> None:
         """worker-lanes.md must document that remediation requires

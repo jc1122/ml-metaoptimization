@@ -44,29 +44,28 @@ Within each reinvocation, the orchestrator processes events in this order before
 
 ## Executor Directives
 
-- Whenever executor-side work is required, the governing control agent must emit explicit `executor_directives` in the handoff envelope.
-- The orchestrator executes these directives mechanically and must not infer executor work from prose descriptions in this document.
-- A phase that has no executor-side work still emits `executor_directives = []` so the absence of work is explicit.
+- Whenever executor-side work is required, the governing control agent must emit explicit `pre_launch_directives` and/or `post_launch_directives` in the handoff envelope.
+- The orchestrator executes these directive lists mechanically and must not infer executor work from prose descriptions in this document.
+- A phase that has no executor-side work still emits `pre_launch_directives = []` and `post_launch_directives = []` so the absence of work is explicit.
 
 ## Transition Semantics
 
-> **Reading these sections:** The bullets below describe the *behaviour* the system must produce in each state. For states labelled "governed by `<control-agent>`", the detailed semantic bullets are the control agent's responsibility — the orchestrator executes them mechanically from the control agent's `executor_directives`, `launch_requests`, and `state_patch`. The orchestrator must not apply these rules autonomously. See `references/control-protocol.md` for the handoff protocol.
+> **Reading these sections:** The bullets below describe the *behaviour* the system must produce in each state. For states labelled "governed by `<control-agent>`", the detailed semantic bullets are the control agent's responsibility — the orchestrator executes them mechanically from the control agent's `pre_launch_directives`, `post_launch_directives`, `launch_requests`, and `state_patch`. The orchestrator must not apply these rules autonomously. See `references/control-protocol.md` for the handoff protocol.
 
 ### `LOAD_CAMPAIGN`
 
 This state is governed by `metaopt-load-campaign`. The control agent validates the campaign YAML, evaluates the preflight readiness artifact, and emits a single-phase handoff (`validate`). The orchestrator applies the handoff mechanically. See `references/control-protocol.md`.
 
-- Read `ml_metaopt_campaign.yaml`
-- Validate required fields and schema shape
-- Reject sentinel placeholders such as angle-bracket paths, `YOUR_*`, and dataset fingerprints containing `replace-me`
-- Compute `campaign_identity_hash` and `runtime_config_hash` using the canonical rules from `references/contracts.md`
-- If validation fails, write `status = BLOCKED_CONFIG`, set `next_action = "repair ml_metaopt_campaign.yaml"`, and stop
+- The control agent reads `ml_metaopt_campaign.yaml`
+- The control agent validates required fields and schema shape
+- The control agent rejects sentinel placeholders such as angle-bracket paths, `YOUR_*`, and dataset fingerprints containing `replace-me` — when validation fails, it sets `recommended_next_machine_state = "BLOCKED_CONFIG"` and `next_action = "repair ml_metaopt_campaign.yaml"` in the handoff; the orchestrator derives `status` from the resulting `machine_state`
+- The control agent computes `campaign_identity_hash` and `runtime_config_hash` using the canonical rules from `references/contracts.md`
 - **Preflight gate** (evaluated only when campaign validation passes):
-  - Read `.ml-metaopt/preflight-readiness.json` (artifact emitted by `metaopt-preflight`)
-  - If the artifact is missing, unreadable, or has an unrecognized `schema_version` → block with `next_action = "run metaopt-preflight"`
-  - If the artifact is present but binding freshness fails (hash mismatch on `campaign_identity_hash` or `runtime_config_hash`) → block with `next_action = "re-run metaopt-preflight (campaign configuration has changed)"`
-  - If binding freshness passes and `status` is `FAILED` → block using the artifact's `next_action` and `failures` to present actionable remediation (the environment is not ready, not that configuration has changed)
-  - If binding freshness passes and `status` is `READY` → proceed to `HYDRATE_STATE`
+  - The control agent reads `.ml-metaopt/preflight-readiness.json` (artifact emitted by `metaopt-preflight`)
+  - If the artifact is missing, unreadable, or has an unrecognized `schema_version` → the control agent recommends `BLOCKED_CONFIG` with `next_action = "run metaopt-preflight"`
+  - If the artifact is present but binding freshness fails (hash mismatch on `campaign_identity_hash` or `runtime_config_hash`) → the control agent recommends `BLOCKED_CONFIG` with `next_action = "re-run metaopt-preflight (campaign configuration has changed)"`
+  - If binding freshness passes and preflight `status` is `FAILED` → the control agent recommends `BLOCKED_CONFIG`, using the artifact's `next_action` and `failures` to present actionable remediation (the environment is not ready, not that configuration has changed)
+  - If binding freshness passes and preflight `status` is `READY` → the control agent recommends `HYDRATE_STATE`
 - The handoff includes a `preflight_readiness` advisory payload describing the observed artifact status for inspectability
 
 ### `HYDRATE_STATE`
@@ -132,7 +131,7 @@ This state is governed by `metaopt-local-execution-control`. The control agent w
 
 - Dispatch the `metaopt-materialization-worker` custom agent as `strong_coder` subagents in isolated worktrees
 - Count these coders against `auxiliary_slots` with `mode = materialization`
-- `metaopt-local-execution-control`'s `plan_local_changeset` handoff emits an `apply_patch_artifacts` directive (with `output_event_path` set) ordering the orchestrator to attempt mechanical patch integration and write the outcome — success or conflict details — as an executor event
+- `metaopt-local-execution-control`'s `plan_local_changeset` handoff places an `apply_patch_artifacts` directive (with `output_event_path` set) in `post_launch_directives`, ordering the orchestrator to attempt mechanical patch integration — after the worker completes — and write the outcome as an executor event
 - The orchestrator then re-invokes `metaopt-local-execution-control` in `gate_materialization` phase; the control agent reads the integration outcome executor event and either emits a conflict-resolution `launch_requests` entry (patches did not merge cleanly) or advances to `LOCAL_SANITY` (merge succeeded)
 - Conflict-resolution is still part of the `MATERIALIZE_CHANGESET` state; the machine advances to `LOCAL_SANITY` only after successful integration
 - Package an immutable code artifact under `.ml-metaopt/artifacts/code/`
@@ -174,12 +173,11 @@ This state is governed by `metaopt-remote-execution-control`. The control agent 
 
 This state is governed by `metaopt-remote-execution-control`. The control agent emits `queue_op` directives for status polling; the orchestrator dispatches `@hetzner-delegation-worker` and writes results for the control agent to interpret. See `references/control-protocol.md`.
 
-- Continue background-slot work while the batch runs
 - `metaopt-remote-execution-control` emits `queue_op` directives for `remote_queue.status_command`; orchestrator dispatches `@hetzner-delegation-worker` and writes raw backend payloads to `.ml-metaopt/queue-results/status-<batch_id>.json`
 - Semantic interpretation and remote failure routing are the exclusive responsibility of `metaopt-remote-execution-control`
 - Never inspect raw cluster jobs directly from this skill
-- If `stop_conditions.max_wallclock_hours` is exceeded, set `next_action = "finish current batch and stop"`, stop launching new work, and continue polling the current batch to completion
-- If all slots are unexpectedly idle during this state, transition through `MAINTAIN_BACKGROUND_POOL` to restore the declared slot set before doing any lower-priority work
+- If `stop_conditions.max_wallclock_hours` is exceeded, `metaopt-remote-execution-control` sets `next_action = "finish current batch and stop"` in its `state_patch`, stops emitting background `launch_requests`, and continues polling the current batch to completion
+- **Background slot choreography during polling:** When `metaopt-remote-execution-control`'s gate handoff keeps `machine_state = WAIT_FOR_REMOTE_BATCH` (batch still running, no state transition), the orchestrator additionally invokes `metaopt-background-control` in `plan_background_work` / `gate_background_work` mode as a non-advancing secondary step before the next polling cycle. This secondary invocation fills idle slots and is bounded by `dispatch_policy.background_slots`; it must not advance `machine_state`. All background slot decisions — including whether to fill, how many, and in what mode — remain the exclusive responsibility of `metaopt-background-control`.
 - If `status_command` returns `status = "failed"`:
   - Dispatch the `metaopt-diagnosis-worker` custom agent as a `strong_reasoner` subagent with the remote failure context (`classification`, `message`, `returncode` from the backend response)
   - Persist the diagnosis record to `state.selected_experiment.diagnosis_history`
@@ -221,8 +219,9 @@ This state is governed by `metaopt-iteration-close-control`. The control agent w
 
 This state is governed by `metaopt-iteration-close-control`. The orchestrator drains active slots and stages raw outcomes; the control agent decides whether the campaign continues or completes. See `references/control-protocol.md`.
 
+- Use the 60-second drain window emitted by `metaopt-iteration-close-control`; cancel leftovers after that window instead of waiting indefinitely or inventing new work.
 - The orchestrator executes `drain_slots` and `cancel_slots` directives from the `quiesce_slots` handoff; it stages raw outcomes (drain results, cancellation exit codes) as executor events in `.ml-metaopt/executor-events/` — it does not write to `state.json` autonomously
-- `metaopt-iteration-close-control` reads those executor events and returns cancellation reasons, `apply_results` updates, and the continue/stop decision in its `state_patch` and `recommended_next_machine_state`
+- `metaopt-iteration-close-control` reads those executor events and returns cancellation reasons, `apply_results` updates, and the continue/stop decision in its `state_patch` and `recommended_next_machine_state`; record cancellation reasons in state alongside `apply_results` only from this control-agent patch
 - The orchestrator applies the `state_patch` (which records cancellation reasons and patch-application outcomes into `local_changeset.apply_results`) and transitions per `recommended_next_machine_state`
 - Do not launch new work during this state — execute only drain and cancel directives
 
@@ -237,7 +236,7 @@ All four terminal states remove the `AGENTS.md` hook using the same operation as
 
 `BLOCKED_PROTOCOL` vs `BLOCKED_CONFIG`: `BLOCKED_CONFIG` signals that the campaign YAML or environment configuration needs repair (user-actionable). `BLOCKED_PROTOCOL` signals that the orchestrator or a control agent detected a protocol-level violation — such as lane drift, missing worker artifacts, or unsupported semantic operations — that cannot be resolved without manual intervention. The orchestrator must never attempt to improvise around a protocol violation.
 
-Any control agent that recommends a terminal state must emit the appropriate cleanup `executor_directives` in its handoff so the orchestrator never infers cleanup intent from prose. The orchestrator executes these directives mechanically without semantic interpretation.
+Any control agent that recommends a terminal state must emit the appropriate cleanup directives in its `pre_launch_directives` in its handoff so the orchestrator never infers cleanup intent from prose. The orchestrator executes these directives mechanically without semantic interpretation.
 
 | Terminal state | Required directives |
 |---------------|---------------------|

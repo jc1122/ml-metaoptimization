@@ -19,6 +19,7 @@ LEGACY_HANDOFF_FIELDS = frozenset(
         "outcome",
         "recommended_next_action",
         "recommended_executor_phase",
+        "executor_directives",  # split into pre_launch_directives + post_launch_directives
     }
 )
 
@@ -49,7 +50,6 @@ STATE_PATCH_OWNERSHIP: dict[str, tuple[tuple[str, ...], ...]] = {
         ("campaign_started_at",),
     ),
     "metaopt-background-control": (
-        ("active_slots",),
         ("proposal_cycle",),
         ("current_proposals",),
         ("next_proposals",),
@@ -259,14 +259,14 @@ def normalize_directives(raw: list[dict[str, Any]] | None) -> list[dict[str, Any
     if raw is None:
         return []
     if not isinstance(raw, list):
-        raise TypeError(f"executor_directives must be a list, got {type(raw).__name__}")
+        raise TypeError(f"directive list must be a list, got {type(raw).__name__}")
     for i, entry in enumerate(raw):
         if not isinstance(entry, dict):
-            raise TypeError(f"executor_directives[{i}] must be a dict, got {type(entry).__name__}")
+            raise TypeError(f"directives[{i}] must be a dict, got {type(entry).__name__}")
         if "action" not in entry or not isinstance(entry["action"], str) or not entry["action"]:
-            raise ValueError(f"executor_directives[{i}] must have a non-empty 'action' string")
+            raise ValueError(f"directives[{i}] must have a non-empty 'action' string")
         if "reason" not in entry or not isinstance(entry["reason"], str) or not entry["reason"]:
-            raise ValueError(f"executor_directives[{i}] must have a non-empty 'reason' string")
+            raise ValueError(f"directives[{i}] must have a non-empty 'reason' string")
     return raw
 
 
@@ -295,10 +295,15 @@ def emit_handoff(
     if "state_patch" not in payload:
         raise ValueError("state_patch must be provided explicitly as a dict or null")
     payload["state_patch"] = validate_state_patch(control_agent, payload["state_patch"])
-    payload.setdefault("executor_directives", [])
-    payload["executor_directives"] = normalize_directives(payload["executor_directives"])
-    payload["executor_directives"] = validate_executor_policy(
-        control_agent, payload["handoff_type"], payload["executor_directives"]
+    payload.setdefault("pre_launch_directives", [])
+    payload["pre_launch_directives"] = normalize_directives(payload["pre_launch_directives"])
+    payload["pre_launch_directives"] = validate_executor_policy(
+        control_agent, payload["handoff_type"], payload["pre_launch_directives"]
+    )
+    payload.setdefault("post_launch_directives", [])
+    payload["post_launch_directives"] = normalize_directives(payload["post_launch_directives"])
+    payload["post_launch_directives"] = validate_executor_policy(
+        control_agent, payload["handoff_type"], payload["post_launch_directives"]
     )
     payload.setdefault("summary", "")
     payload.setdefault("warnings", [])

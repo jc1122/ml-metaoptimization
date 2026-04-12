@@ -21,9 +21,9 @@ Your scope is limited to planning, gating, and finalizing `SELECT_EXPERIMENT` an
 - You are authoritative for `state.selected_experiment` and for freezing the current proposal pool.
 - Do not dispatch worker subagents yourself.
 - Your staged handoff output must conform to the universal control-handoff envelope defined in `references/control-protocol.md`.
-- `executor_directives` are the authoritative executor input when executor-side work is needed; the orchestrator executes them mechanically and in order. The orchestrator must not infer missing executor work from prose, summaries, or legacy fields.
-- Write only:
-  - `.ml-metaopt/state.json`
+- `pre_launch_directives` and `post_launch_directives` are the authoritative executor input when executor-side work is needed; the orchestrator executes each list mechanically in order. The orchestrator must not infer missing executor work from prose, summaries, or legacy fields.
+- Do not hand-edit `.ml-metaopt/state.json`. All semantic state updates must be expressed as `state_patch` in the handoff envelope; in the local script harness, the bundled helper may persist exactly that computed patch for verification, but no agent-authored state edits are allowed.
+- Write only these agent-authored artifacts:
   - `.ml-metaopt/handoffs/select_and_design.latest.json`
   - `.ml-metaopt/tasks/select-experiment-iter-*.md`
   - `.ml-metaopt/tasks/design-experiment-iter-*.md`

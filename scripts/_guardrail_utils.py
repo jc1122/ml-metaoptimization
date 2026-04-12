@@ -45,8 +45,8 @@ ALLOWED_WORKERS: frozenset[str] = frozenset({
 # --- Deterministic model resolution order per class ---
 MODEL_RESOLUTION_ORDER_BY_CLASS: dict[str, tuple[str, ...]] = {
     "general_worker": ("claude-sonnet-4", "gpt-5.4"),
-    "strong_reasoner": ("claude-opus-4.6-fast", "gpt-5.4"),
-    "strong_coder": ("claude-opus-4.6-fast", "gpt-5.4"),
+    "strong_reasoner": ("claude-opus-4.6", "gpt-5.4"),
+    "strong_coder": ("claude-opus-4.6", "gpt-5.4"),
 }
 
 # --- Preferred model per model class ---
@@ -104,11 +104,9 @@ ALLOWED_DIRECTIVE_ACTIONS: frozenset[str] = frozenset({
     "drain_slots",
     "emit_final_report",
     "emit_iteration_report",
-    "enqueue_batch",
-    "fetch_batch_results",
     "package_code_artifact",
     "package_data_manifest",
-    "poll_batch_status",
+    "queue_op",
     "remove_agents_hook",
     "run_sanity",
     "write_manifest",
@@ -136,13 +134,11 @@ DIRECTIVE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     "drain_slots": ("drain_window_seconds",),
     "emit_final_report": ("report_type",),
     "emit_iteration_report": ("report_type", "iteration"),
-    "enqueue_batch": ("command", "manifest_path", "batch_id"),
-    "fetch_batch_results": ("command", "batch_id"),
-    "package_code_artifact": ("worktree", "code_roots"),
-    "package_data_manifest": ("worktree", "data_roots"),
-    "poll_batch_status": ("command", "batch_id"),
+    "package_code_artifact": ("worktree", "code_roots", "output_event_path"),
+    "package_data_manifest": ("worktree", "data_roots", "output_event_path"),
+    "queue_op": ("operation", "batch_id", "command", "result_file"),
     "remove_agents_hook": ("agents_path",),
-    "run_sanity": ("worktree", "command", "max_duration_seconds"),
+    "run_sanity": ("worktree", "command", "max_duration_seconds", "output_event_path"),
     "write_manifest": ("manifest_path", "batch_id"),
 }
 
@@ -261,14 +257,14 @@ def validate_executor_policy(
 
         if action in _BLOCKED_DIRECTIVE_ACTIONS:
             raise ValueError(
-                f"executor_directives[{i}]: action {action!r} is a blocked "
+                f"directives[{i}]: action {action!r} is a blocked "
                 f"raw-cluster bypass (control_agent={control_agent!r}, "
                 f"handoff_type={handoff_type!r})"
             )
 
         if action not in ALLOWED_DIRECTIVE_ACTIONS:
             raise ValueError(
-                f"executor_directives[{i}]: action {action!r} is not in "
+                f"directives[{i}]: action {action!r} is not in "
                 f"ALLOWED_DIRECTIVE_ACTIONS (control_agent={control_agent!r}, "
                 f"handoff_type={handoff_type!r})"
             )
@@ -277,8 +273,16 @@ def validate_executor_policy(
         _validate_required_fields(
             entry,
             required_fields,
-            label=f"executor_directives[{i}]",
+            label=f"directives[{i}]",
         )
+
+        if action == "queue_op":
+            operation = entry.get("operation")
+            if operation not in {"enqueue", "status", "results"}:
+                raise ValueError(
+                    f"directives[{i}]: queue_op.operation must be one of "
+                    f"'enqueue', 'status', 'results', got {operation!r}"
+                )
 
     return directives
 

@@ -4,7 +4,7 @@ This reference maps each dispatch state in the state machine to the worker targe
 
 The orchestrator is a transport and runtime shell. It launches workers from pre-staged task files written by control agents, stages raw worker outputs, and re-invokes the governing control agent to gate results. It does not construct prompt envelopes inline or make semantic dispatch decisions. See `references/control-protocol.md` for the control-handoff protocol.
 
-The orchestrator must not infer executor work from prose in this document. When executor-side work is required, the governing control agent emits explicit `executor_directives`; when no executor-side work is required, the handoff must still emit `executor_directives = []`.
+The orchestrator must not infer executor work from prose in this document. When executor-side work is required, the governing control agent emits explicit `pre_launch_directives` and/or `post_launch_directives`; when no executor-side work is required, the handoff must still emit both lists as empty arrays.
 
 Load this file before dispatching any worker subagent.
 
@@ -208,8 +208,8 @@ This state is governed by `metaopt-select-design`:
 **Model class:** `strong_coder` (enforced: `mode = materialization` requires `model_class = strong_coder`)
 
 This state is governed by `metaopt-local-execution-control`:
-- The control agent writes a staged materialization task file, emits a `launch_requests` entry for `metaopt-materialization-worker`, and emits an `apply_patch_artifacts` directive (with `output_event_path` set) ordering the orchestrator to attempt mechanical patch integration after the worker finishes (`plan_local_changeset`)
-- The orchestrator launches the worker; once the worker completes, it executes the `apply_patch_artifacts` directive — attempting mechanical patch integration and writing the outcome (success or conflict details) as an executor event at `output_event_path`
+- The control agent writes a staged materialization task file, emits a `launch_requests` entry for `metaopt-materialization-worker`, and places an `apply_patch_artifacts` directive (with `output_event_path` set) in `post_launch_directives` so the orchestrator attempts mechanical patch integration only after the worker has written its result (`plan_local_changeset`)
+- The orchestrator launches the worker; once the worker completes and its output is staged, it executes the `apply_patch_artifacts` post-launch directive — attempting mechanical patch integration and writing the outcome (success or conflict details) as an executor event at `output_event_path`
 - The orchestrator re-invokes the control agent in `gate_materialization` phase; the control agent reads the integration outcome executor event and either emits a conflict-resolution `launch_requests` entry (merge failed) or advances to `LOCAL_SANITY` (merge succeeded)
 - After `LOCAL_SANITY`, the control agent gates sanity results and routes retries or advances (`gate_local_sanity`)
 

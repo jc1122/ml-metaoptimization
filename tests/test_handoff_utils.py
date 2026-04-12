@@ -65,6 +65,31 @@ class HandoffUtilsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             compute_state_patch(before, after, "metaopt-remote-execution-control")
 
+    def test_background_control_cannot_patch_active_slots(self) -> None:
+        before = {
+            "status": "RUNNING",
+            "machine_state": "MAINTAIN_BACKGROUND_POOL",
+            "next_action": "execute planned background work",
+            "active_slots": [],
+            "proposal_cycle": {"current_pool_frozen": False, "shortfall_reason": ""},
+        }
+        after = deepcopy(before)
+        after["active_slots"] = [
+            {
+                "slot_id": "bg-1",
+                "slot_class": "background",
+                "mode": "ideation",
+                "model_class": "general_worker",
+                "task_file": ".ml-metaopt/tasks/bg-1.md",
+                "result_file": ".ml-metaopt/worker-results/bg-1.json",
+                "status": "running",
+                "attempt": 1,
+            }
+        ]
+
+        with self.assertRaisesRegex(ValueError, "active_slots"):
+            compute_state_patch(before, after, "metaopt-background-control")
+
     def test_apply_state_patch_sets_machine_state_and_derives_status(self) -> None:
         before = {
             "status": "RUNNING",

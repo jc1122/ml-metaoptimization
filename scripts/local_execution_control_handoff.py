@@ -300,7 +300,7 @@ def _plan_local_changeset(
     if materialization_mode == "standard":
         artifacts = load_handoff.get("artifacts", {})
         sanity_cfg = load_handoff.get("sanity", {})
-        executor_directives: list[dict[str, Any]] = [
+        post_launch_directives: list[dict[str, Any]] = [
             {
                 "action": "apply_patch_artifacts",
                 "reason": "apply materialization patches to integration worktree",
@@ -314,12 +314,14 @@ def _plan_local_changeset(
                 "worktree": required_worktree,
                 "code_roots": artifacts.get("code_roots", ["."]),
                 "exclude": artifacts.get("exclude", []),
+                "output_event_path": str(Path(".ml-metaopt") / "executor-events" / f"package-code-{attempt}.json"),
             },
             {
                 "action": "package_data_manifest",
                 "reason": "build data manifest for remote execution",
                 "worktree": required_worktree,
                 "data_roots": artifacts.get("data_roots", []),
+                "output_event_path": str(Path(".ml-metaopt") / "executor-events" / f"package-data-{attempt}.json"),
             },
             {
                 "action": "run_sanity",
@@ -327,10 +329,11 @@ def _plan_local_changeset(
                 "worktree": required_worktree,
                 "command": sanity_cfg.get("command", ""),
                 "max_duration_seconds": sanity_cfg.get("max_duration_seconds"),
+                "output_event_path": str(Path(".ml-metaopt") / "executor-events" / f"sanity-{attempt}.json"),
             },
         ]
     else:
-        executor_directives = []
+        post_launch_directives = []
 
     task_file_path = str(Path(".ml-metaopt") / "tasks" / task_name)
     result_file_path = str(Path(".ml-metaopt") / "worker-results" / f"materialization-{attempt}.json")
@@ -355,7 +358,8 @@ def _plan_local_changeset(
                 "result_file": result_file_path,
             },
         ],
-        "executor_directives": executor_directives,
+        "pre_launch_directives": [],
+        "post_launch_directives": post_launch_directives,
         "warnings": [],
         "summary": f"planned {materialization_mode} local materialization task",
     }

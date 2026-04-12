@@ -88,7 +88,7 @@ class NormalizeLaunchRequestsTests(unittest.TestCase):
             "result_file": ".ml-metaopt/worker-results/selection.json",
         }
         result = normalize_launch_requests([request])
-        self.assertEqual(result[0]["preferred_model"], "claude-opus-4.6-fast")
+        self.assertEqual(result[0]["preferred_model"], "claude-opus-4.6")
 
     def test_strong_coder_gets_preferred_model(self) -> None:
         request = {
@@ -102,7 +102,7 @@ class NormalizeLaunchRequestsTests(unittest.TestCase):
             "result_file": ".ml-metaopt/worker-results/materialization.json",
         }
         result = normalize_launch_requests([request])
-        self.assertEqual(result[0]["preferred_model"], "claude-opus-4.6-fast")
+        self.assertEqual(result[0]["preferred_model"], "claude-opus-4.6")
 
     def test_preferred_model_not_overwritten_when_present(self) -> None:
         request = {
@@ -227,11 +227,12 @@ class ValidateExecutorPolicyTests(unittest.TestCase):
     def test_allowed_action_passes(self) -> None:
         directives = [
             {
-                "action": "enqueue_batch",
+                "action": "queue_op",
                 "reason": "submit batch",
+                "operation": "enqueue",
                 "command": "enqueue batch",
-                "manifest_path": ".ml-metaopt/artifacts/manifests/batch.json",
                 "batch_id": "batch-1",
+                "result_file": ".ml-metaopt/queue-results/enqueue-batch-1.json",
             }
         ]
         result = validate_executor_policy("metaopt-remote-execution-control", "PLAN_REMOTE_BATCH", directives)
@@ -255,13 +256,11 @@ class ValidateExecutorPolicyTests(unittest.TestCase):
             "drain_slots": {"drain_window_seconds": 60},
             "emit_final_report": {"report_type": "final"},
             "emit_iteration_report": {"report_type": "iteration", "iteration": 3},
-            "enqueue_batch": {"command": "enqueue batch", "manifest_path": ".ml-metaopt/artifacts/manifests/batch.json", "batch_id": "batch-1"},
-            "fetch_batch_results": {"command": "fetch batch", "batch_id": "batch-1"},
-            "package_code_artifact": {"worktree": ".ml-metaopt/worktrees/integration", "code_roots": ["src"]},
-            "package_data_manifest": {"worktree": ".ml-metaopt/worktrees/integration", "data_roots": ["data"]},
-            "poll_batch_status": {"command": "poll batch", "batch_id": "batch-1"},
+            "package_code_artifact": {"worktree": ".ml-metaopt/worktrees/integration", "code_roots": ["src"], "output_event_path": ".ml-metaopt/executor-events/package-code.json"},
+            "package_data_manifest": {"worktree": ".ml-metaopt/worktrees/integration", "data_roots": ["data"], "output_event_path": ".ml-metaopt/executor-events/package-data.json"},
+            "queue_op": {"operation": "enqueue", "command": "enqueue batch", "batch_id": "batch-1", "result_file": ".ml-metaopt/queue-results/enqueue-batch-1.json"},
             "remove_agents_hook": {"agents_path": "AGENTS.md"},
-            "run_sanity": {"worktree": ".ml-metaopt/worktrees/integration", "command": "pytest -q", "max_duration_seconds": 600},
+            "run_sanity": {"worktree": ".ml-metaopt/worktrees/integration", "command": "pytest -q", "max_duration_seconds": 600, "output_event_path": ".ml-metaopt/executor-events/sanity.json"},
             "write_manifest": {"manifest_path": ".ml-metaopt/artifacts/manifests/batch.json", "batch_id": "batch-1"},
         }
         for action in sorted(ALLOWED_DIRECTIVE_ACTIONS):
@@ -280,8 +279,8 @@ class ValidateExecutorPolicyTests(unittest.TestCase):
             validate_executor_policy("metaopt-remote-execution-control", "PLAN_REMOTE_BATCH", directives)
 
     def test_missing_directive_field_rejected(self) -> None:
-        directives = [{"action": "enqueue_batch", "reason": "submit batch", "command": "enqueue batch", "batch_id": "batch-1"}]
-        with self.assertRaisesRegex(ValueError, "manifest_path"):
+        directives = [{"action": "queue_op", "reason": "submit batch", "operation": "enqueue", "command": "enqueue batch", "batch_id": "batch-1"}]
+        with self.assertRaisesRegex(ValueError, "result_file"):
             validate_executor_policy("metaopt-remote-execution-control", "PLAN_REMOTE_BATCH", directives)
 
 
@@ -298,10 +297,10 @@ class ConstantsSanityTests(unittest.TestCase):
         self.assertTrue(expected.issubset(ALLOWED_WORKERS))
 
     def test_preferred_model_strong_reasoner(self) -> None:
-        self.assertEqual(PREFERRED_MODEL_BY_CLASS["strong_reasoner"], "claude-opus-4.6-fast")
+        self.assertEqual(PREFERRED_MODEL_BY_CLASS["strong_reasoner"], "claude-opus-4.6")
 
     def test_preferred_model_strong_coder(self) -> None:
-        self.assertEqual(PREFERRED_MODEL_BY_CLASS["strong_coder"], "claude-opus-4.6-fast")
+        self.assertEqual(PREFERRED_MODEL_BY_CLASS["strong_coder"], "claude-opus-4.6")
 
     def test_preferred_model_general_worker(self) -> None:
         self.assertEqual(PREFERRED_MODEL_BY_CLASS["general_worker"], "claude-sonnet-4")
@@ -343,7 +342,7 @@ class ConstantsSanityTests(unittest.TestCase):
         }
         result = normalize_launch_requests([request])
         self.assertEqual(len(result), 1)
-        self.assertEqual(result[0]["preferred_model"], "claude-opus-4.6-fast")
+        self.assertEqual(result[0]["preferred_model"], "claude-opus-4.6")
         self.assertNotIn("slot_class", result[0])
         self.assertNotIn("mode", result[0])
 

@@ -27,6 +27,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--worker-results-dir", required=True)
     parser.add_argument("--slot-events-dir", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--secondary", action="store_true", default=False)
     return parser.parse_args()
 
 
@@ -55,13 +56,15 @@ def _ready_for_selection(state: dict[str, Any], load_handoff: dict[str, Any]) ->
 
 
 def _task_markdown(slot_id: str, request: dict[str, Any], load_handoff: dict[str, Any], state: dict[str, Any]) -> str:
+    worker_kind = "skill" if request["mode"] == "maintenance" else "custom_agent"
+    task_summary = "Generate distinct experiment proposals" if request["mode"] == "ideation" else "Run findings-only maintenance work"
     lines = [
         f"# Slot Task: {slot_id}",
         "",
         f"- Slot ID: `{slot_id}`",
-        f"- Attempt: `{request['attempt']}`",
+        f"- Attempt: `1`",
         f"- Mode: `{request['mode']}`",
-        f"- Worker Kind: `{request['worker_kind']}`",
+        f"- Worker Kind: `{worker_kind}`",
         f"- Worker Ref: `{request['worker_ref']}`",
         f"- Model Class: `{request['model_class']}`",
         f"- Result File: `{request['result_file']}`",
@@ -69,7 +72,7 @@ def _task_markdown(slot_id: str, request: dict[str, Any], load_handoff: dict[str
         "Execute only this assigned scope. Do not make control-plane decisions.",
         "Write one structured JSON result file to the exact result path shown above.",
         "",
-        f"Summary: {request['task_summary']}",
+        f"Summary: {task_summary}",
     ]
     if request["mode"] == "ideation":
         objective = load_handoff.get("objective_snapshot", {})
@@ -149,6 +152,7 @@ def _plan_background_work(
     state_path: Path,
     tasks_dir: Path,
     output_path: Path,
+    secondary: bool = False,
 ) -> dict[str, Any]:
     state = read_json(state_path)
     previous_state = deepcopy(state)
@@ -168,6 +172,8 @@ def _plan_background_work(
             "shortfall_reason": "",
             "summary": "proposal pool already satisfies selection gate",
         }
+        if secondary:
+            payload["recommended_next_machine_state"] = None
         persist_state_handoff(state_path, previous_state, state, payload, control_agent=_CONTROL_AGENT)
         return emit_handoff(output_path, payload, handoff_type=_PLAN_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
@@ -194,31 +200,14 @@ def _plan_background_work(
         result_file = str((Path(".ml-metaopt") / "worker-results" / f"{slot_id}.json"))
         task_file_rel = Path(".ml-metaopt") / "tasks" / f"{slot_id}.md"
         request = {
-            "slot_id": slot_id,
             "slot_class": "background",
             "mode": mode,
-            "worker_kind": worker_kind,
             "worker_ref": worker_ref,
             "model_class": model_class,
-            "attempt": 1,
             "task_file": str(task_file_rel),
             "result_file": result_file,
-            "task_summary": "Generate distinct experiment proposals" if mode == "ideation" else "Run findings-only maintenance work",
         }
         launch_requests.append(request)
-        state["active_slots"].append(
-            {
-                "slot_id": slot_id,
-                "slot_class": "background",
-                "mode": mode,
-                "model_class": model_class,
-                "requested_model": "Auto",
-                "resolved_model": "Auto",
-                "status": "running",
-                "attempt": 1,
-                "task_summary": request["task_summary"],
-            }
-        )
         task_path = tasks_dir / f"{slot_id}.md"
         task_path.write_text(_task_markdown(slot_id, request, load_handoff, state), encoding="utf-8")
         next_slot_num += 1
@@ -239,6 +228,8 @@ def _plan_background_work(
         "shortfall_reason": state["proposal_cycle"]["shortfall_reason"],
         "summary": "background slots planned for continued proposal accumulation",
     }
+    if secondary:
+        payload["recommended_next_machine_state"] = None
     persist_state_handoff(state_path, previous_state, state, payload, control_agent=_CONTROL_AGENT)
     return emit_handoff(output_path, payload, handoff_type=_PLAN_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
@@ -249,6 +240,7 @@ def _gate_background_work(
     worker_results_dir: Path,
     slot_events_dir: Path,
     output_path: Path,
+    secondary: bool = False,
 ) -> dict[str, Any]:
     state = read_json(state_path)
     previous_state = deepcopy(state)
@@ -269,7 +261,6 @@ def _gate_background_work(
             continue
         result = read_json(result_path)
         processed_slots.append(slot_id)
-        slot["status"] = "completed"
 
         if slot["mode"] == "ideation" and result.get("status") == "completed":
             drift_fields = check_lane_drift("ideation", result)
@@ -358,6 +349,8 @@ def _gate_background_work(
         "processed_slots": processed_slots,
         "summary": summary,
     }
+    if secondary:
+        payload["recommended_next_machine_state"] = None
     persist_state_handoff(state_path, previous_state, state, payload, control_agent=_CONTROL_AGENT)
     return emit_handoff(output_path, payload, handoff_type=_GATE_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
@@ -372,9 +365,9 @@ def main() -> int:
     output_path = Path(args.output)
 
     if args.mode == "plan_background_work":
-        payload = _plan_background_work(load_handoff, state_path, tasks_dir, output_path)
+        payload = _plan_background_work(load_handoff, state_path, tasks_dir, output_path, secondary=args.secondary)
     else:
-        payload = _gate_background_work(load_handoff, state_path, worker_results_dir, slot_events_dir, output_path)
+        payload = _gate_background_work(load_handoff, state_path, worker_results_dir, slot_events_dir, output_path, secondary=args.secondary)
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0
 

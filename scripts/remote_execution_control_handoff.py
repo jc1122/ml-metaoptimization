@@ -21,6 +21,7 @@ _CONTROL_AGENT = "metaopt-remote-execution-control"
 _PLAN_HANDOFF_TYPE = "remote_execution.plan_remote_batch"
 _GATE_HANDOFF_TYPE = "remote_execution.gate_remote_batch"
 _ANALYZE_HANDOFF_TYPE = "remote_execution.analyze_remote_results"
+_QUEUE_RESULTS_DIR = Path(".ml-metaopt") / "queue-results"
 
 
 def _parse_args() -> argparse.Namespace:
@@ -31,6 +32,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--tasks-dir", required=True)
     parser.add_argument("--worker-results-dir", required=True)
     parser.add_argument("--executor-events-dir", required=True)
+    parser.add_argument("--queue-results-dir", default=None)
     parser.add_argument("--output", required=True)
     return parser.parse_args()
 
@@ -273,7 +275,7 @@ def _plan_remote_batch(load_handoff: dict[str, Any], state_path: Path, output_pa
         "recommended_next_machine_state": "ENQUEUE_REMOTE_BATCH",
         "judgment": None,
         "delta": None,
-        "executor_directives": [
+        "pre_launch_directives": [
             {
                 "action": "write_manifest",
                 "reason": "batch manifest must be written before enqueue",
@@ -281,11 +283,12 @@ def _plan_remote_batch(load_handoff: dict[str, Any], state_path: Path, output_pa
                 "manifest_path": manifest_path,
             },
             {
-                "action": "enqueue_batch",
+                "action": "queue_op",
                 "reason": "submit batch to remote queue backend",
+                "operation": "enqueue",
                 "command": enqueue_command,
-                "manifest_path": manifest_path,
                 "batch_id": batch_id,
+                "result_file": str(_QUEUE_RESULTS_DIR / f"enqueue-{batch_id}.json"),
             },
         ],
         "warnings": [],
@@ -317,7 +320,7 @@ def _gate_remote_batch(
     if state["machine_state"] == "ENQUEUE_REMOTE_BATCH":
         pending_batch = _pending_batch(state)
         batch_id = pending_batch["batch_id"] if pending_batch is not None else _next_batch_id(state)
-        enqueue_path = executor_events_dir / f"enqueue-{batch_id}.json"
+        enqueue_path = _QUEUE_RESULTS_DIR / f"enqueue-{batch_id}.json"
         if not enqueue_path.exists():
             return _runtime_error(
                 output_path,
@@ -353,12 +356,14 @@ def _gate_remote_batch(
             "recommended_next_machine_state": "WAIT_FOR_REMOTE_BATCH",
             "judgment": None,
             "delta": None,
-            "executor_directives": [
+            "pre_launch_directives": [
                 {
-                    "action": "poll_batch_status",
+                    "action": "queue_op",
                     "reason": "batch is queued; poll for status updates",
+                    "operation": "status",
                     "command": load_handoff["remote_queue"]["status_command"],
                     "batch_id": batch_id,
+                    "result_file": str(_QUEUE_RESULTS_DIR / f"status-{batch_id}.json"),
                 },
             ],
             "warnings": [],
@@ -376,7 +381,7 @@ def _gate_remote_batch(
             "no active remote batch found",
         )
 
-    status_path = executor_events_dir / f"remote-status-{batch_id}.json"
+    status_path = _QUEUE_RESULTS_DIR / f"status-{batch_id}.json"
     if not status_path.exists():
         return _runtime_error(
             output_path,
@@ -411,12 +416,14 @@ def _gate_remote_batch(
             "recommended_next_machine_state": "WAIT_FOR_REMOTE_BATCH",
             "judgment": None,
             "delta": None,
-            "executor_directives": [
+            "pre_launch_directives": [
                 {
-                    "action": "poll_batch_status",
+                    "action": "queue_op",
                     "reason": "batch is still in flight; poll for status updates",
+                    "operation": "status",
                     "command": load_handoff["remote_queue"]["status_command"],
                     "batch_id": batch_id,
+                    "result_file": str(_QUEUE_RESULTS_DIR / f"status-{batch_id}.json"),
                 },
             ],
             "warnings": [],
@@ -426,7 +433,7 @@ def _gate_remote_batch(
         return emit_handoff(output_path, payload, handoff_type=_GATE_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
     if status_payload["status"] == "completed":
-        results_path = executor_events_dir / f"remote-results-{batch_id}.json"
+        results_path = _QUEUE_RESULTS_DIR / f"results-{batch_id}.json"
         if not results_path.exists():
             state["machine_state"] = "WAIT_FOR_REMOTE_BATCH"
             state["next_action"] = "fetch remote batch results"
@@ -440,12 +447,14 @@ def _gate_remote_batch(
                 "recommended_next_machine_state": "WAIT_FOR_REMOTE_BATCH",
                 "judgment": None,
                 "delta": None,
-                "executor_directives": [
+                "pre_launch_directives": [
                     {
-                        "action": "fetch_batch_results",
+                        "action": "queue_op",
                         "reason": "batch completed; results must be fetched from backend",
+                        "operation": "results",
                         "command": load_handoff["remote_queue"]["results_command"],
                         "batch_id": batch_id,
+                        "result_file": str(_QUEUE_RESULTS_DIR / f"results-{batch_id}.json"),
                     },
                 ],
                 "warnings": [],
@@ -603,7 +612,7 @@ def _analyze_remote_results(
             "repair remote_batches before analysis",
             "no completed remote batch found",
         )
-    results_path = executor_events_dir / f"remote-results-{batch_id}.json"
+    results_path = _QUEUE_RESULTS_DIR / f"results-{batch_id}.json"
     analysis_path = worker_results_dir / f"remote-analysis-{batch_id}.json"
     if not results_path.exists() or not analysis_path.exists():
         state["status"] = "BLOCKED_PROTOCOL"
@@ -704,7 +713,10 @@ def _analyze_remote_results(
 
 
 def main() -> int:
+    global _QUEUE_RESULTS_DIR
     args = _parse_args()
+    if args.queue_results_dir is not None:
+        _QUEUE_RESULTS_DIR = Path(args.queue_results_dir)
     load_handoff, _, error = _load_inputs(Path(args.load_handoff), Path(args.state_path))
     if error is not None:
         payload = _runtime_error(

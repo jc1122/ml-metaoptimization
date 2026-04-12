@@ -148,6 +148,7 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
         malformed_handoff: bool = False,
         executor_events: dict[str, dict] | None = None,
         worker_results: dict[str, dict] | None = None,
+        queue_results: dict[str, dict] | None = None,
     ) -> tuple[dict, dict, Path]:
         load_handoff = self._write_load_handoff(tempdir, malformed=malformed_handoff)
         state_path = tempdir / ".ml-metaopt" / "state.json"
@@ -160,6 +161,8 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
         worker_results_dir.mkdir(parents=True, exist_ok=True)
         executor_events_dir = tempdir / ".ml-metaopt" / "executor-events"
         executor_events_dir.mkdir(parents=True, exist_ok=True)
+        queue_results_dir = tempdir / ".ml-metaopt" / "queue-results"
+        queue_results_dir.mkdir(parents=True, exist_ok=True)
         output_path = tempdir / ".ml-metaopt" / "handoffs" / f"{mode}.latest.json"
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -167,6 +170,8 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
             (executor_events_dir / f"{name}.json").write_text(json.dumps(payload), encoding="utf-8")
         for name, payload in (worker_results or {}).items():
             (worker_results_dir / f"{name}.json").write_text(json.dumps(payload), encoding="utf-8")
+        for name, payload in (queue_results or {}).items():
+            (queue_results_dir / f"{name}.json").write_text(json.dumps(payload), encoding="utf-8")
 
         completed = subprocess.run(
             [
@@ -184,6 +189,8 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 str(worker_results_dir),
                 "--executor-events-dir",
                 str(executor_events_dir),
+                "--queue-results-dir",
+                str(queue_results_dir),
                 "--output",
                 str(output_path),
             ],
@@ -225,7 +232,7 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 Path(tempdir_str),
                 mode="gate_remote_batch",
                 state=state,
-                executor_events={
+                queue_results={
                     f"enqueue-{batch_id}": {
                         "batch_id": batch_id,
                         "queue_ref": "ray-queue-123",
@@ -250,7 +257,7 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 Path(tempdir_str),
                 mode="gate_remote_batch",
                 state=state,
-                executor_events={
+                queue_results={
                     "enqueue-batch-20260406-0002": {
                         "batch_id": "batch-20260406-0002",
                         "queue_ref": "ray-queue-123",
@@ -273,8 +280,8 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 Path(tempdir_str),
                 mode="gate_remote_batch",
                 state=state,
-                executor_events={
-                    "remote-status-batch-20260406-0002": {
+                queue_results={
+                    "status-batch-20260406-0002": {
                         "batch_id": "batch-20260406-0002",
                         "status": "completed",
                         "timestamps": {"queued_at": "2026-04-06T10:00:00Z", "started_at": "2026-04-06T10:02:00Z"},
@@ -295,13 +302,13 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 Path(tempdir_str),
                 mode="gate_remote_batch",
                 state=state,
-                executor_events={
-                    "remote-status-batch-20260406-0002": {
+                queue_results={
+                    "status-batch-20260406-0002": {
                         "batch_id": "batch-20260406-0002",
                         "status": "completed",
                         "timestamps": {"queued_at": "2026-04-06T10:00:00Z", "started_at": "2026-04-06T10:02:00Z"},
                     },
-                    "remote-results-batch-20260406-0002": {
+                    "results-batch-20260406-0002": {
                         "batch_id": "batch-20260406-0002",
                         "status": "completed",
                         "best_aggregate_result": {"metric": "rmse", "value": 0.1213},
@@ -337,8 +344,8 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 Path(tempdir_str),
                 mode="analyze_remote_results",
                 state=state,
-                executor_events={
-                    "remote-results-batch-20260406-0002": {
+                queue_results={
+                    "results-batch-20260406-0002": {
                         "batch_id": "batch-20260406-0002",
                         "status": "completed",
                         "best_aggregate_result": {"metric": "rmse", "value": 0.1213},
@@ -380,8 +387,8 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 Path(tempdir_str),
                 mode="gate_remote_batch",
                 state=state,
-                executor_events={
-                    "remote-status-batch-20260406-0002": {
+                queue_results={
+                    "status-batch-20260406-0002": {
                         "batch_id": "batch-20260406-0002",
                         "status": "failed",
                         "timestamps": {"queued_at": "2026-04-06T10:00:00Z"},
@@ -417,8 +424,8 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 Path(tempdir_str),
                 mode="gate_remote_batch",
                 state=state,
-                executor_events={
-                    "remote-status-batch-20260406-0002": {
+                queue_results={
+                    "status-batch-20260406-0002": {
                         "batch_id": "batch-20260406-0002",
                         "status": "failed",
                         "timestamps": {"queued_at": "2026-04-06T10:00:00Z"},
@@ -465,7 +472,8 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
         self.assertEqual(payload["control_agent"], control_agent)
         self.assertIsInstance(payload["launch_requests"], list)
         self.assertTrue(payload["state_patch"] is None or isinstance(payload["state_patch"], dict))
-        self.assertIsInstance(payload["executor_directives"], list)
+        self.assertIsInstance(payload.get("pre_launch_directives", []), list)
+        self.assertIsInstance(payload.get("post_launch_directives", []), list)
         self.assertIn("summary", payload)
         self.assertIn("warnings", payload)
         self.assertIn("recommended_next_machine_state", payload)
@@ -488,8 +496,8 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 Path(tempdir_str),
                 mode="analyze_remote_results",
                 state=state,
-                executor_events={
-                    "remote-results-batch-20260406-0002": {
+                queue_results={
+                    "results-batch-20260406-0002": {
                         "batch_id": "batch-20260406-0002",
                         "status": "completed",
                         "per_dataset": {"ds_main": 0.1208, "ds_holdout": 0.1225},
@@ -515,8 +523,8 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 Path(tempdir_str),
                 mode="analyze_remote_results",
                 state=state,
-                executor_events={
-                    "remote-results-batch-20260406-0002": {
+                queue_results={
+                    "results-batch-20260406-0002": {
                         "batch_id": "batch-20260406-0002",
                         "status": "completed",
                         "per_dataset": {"ds_main": 0.1208, "ds_holdout": 0.1225},
@@ -561,9 +569,9 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 state=self._base_state(),
             )
 
-            directives = payload["executor_directives"]
+            directives = payload["pre_launch_directives"]
             actions = [d["action"] for d in directives]
-            self.assertEqual(actions, ["write_manifest", "enqueue_batch"])
+            self.assertEqual(actions, ["write_manifest", "queue_op"])
 
             write_d = directives[0]
             self.assertEqual(write_d["manifest_path"], payload["manifest_path"])
@@ -571,8 +579,9 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
             self.assertIn("reason", write_d)
 
             enqueue_d = directives[1]
-            self.assertEqual(enqueue_d["command"], "python3 /opt/ray-hetzner/metaopt/enqueue_batch.py --manifest")
-            self.assertEqual(enqueue_d["manifest_path"], payload["manifest_path"])
+            self.assertEqual(enqueue_d["operation"], "enqueue")
+            self.assertIsInstance(enqueue_d["result_file"], str)
+            self.assertTrue(enqueue_d["result_file"])
             self.assertIn("reason", enqueue_d)
 
     def test_gate_remote_batch_enqueue_ack_emits_poll_directive(self) -> None:
@@ -583,7 +592,7 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 Path(tempdir_str),
                 mode="gate_remote_batch",
                 state=state,
-                executor_events={
+                queue_results={
                     f"enqueue-{batch_id}": {
                         "batch_id": batch_id,
                         "queue_ref": "ray-queue-123",
@@ -592,10 +601,10 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 },
             )
 
-            directives = payload["executor_directives"]
+            directives = payload["pre_launch_directives"]
             self.assertEqual(len(directives), 1)
-            self.assertEqual(directives[0]["action"], "poll_batch_status")
-            self.assertEqual(directives[0]["command"], "python3 /opt/ray-hetzner/metaopt/get_batch_status.py --batch-id")
+            self.assertEqual(directives[0]["action"], "queue_op")
+            self.assertEqual(directives[0]["operation"], "status")
             self.assertEqual(directives[0]["batch_id"], batch_id)
 
     def test_gate_remote_batch_still_running_emits_poll_directive(self) -> None:
@@ -607,18 +616,18 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 Path(tempdir_str),
                 mode="gate_remote_batch",
                 state=state,
-                executor_events={
-                    "remote-status-batch-20260406-0002": {
+                queue_results={
+                    "status-batch-20260406-0002": {
                         "batch_id": "batch-20260406-0002",
                         "status": "running",
                     }
                 },
             )
 
-            directives = payload["executor_directives"]
+            directives = payload["pre_launch_directives"]
             self.assertEqual(len(directives), 1)
-            self.assertEqual(directives[0]["action"], "poll_batch_status")
-            self.assertEqual(directives[0]["command"], "python3 /opt/ray-hetzner/metaopt/get_batch_status.py --batch-id")
+            self.assertEqual(directives[0]["action"], "queue_op")
+            self.assertEqual(directives[0]["operation"], "status")
             self.assertEqual(directives[0]["batch_id"], "batch-20260406-0002")
 
     def test_gate_remote_batch_completed_no_results_emits_fetch_directive(self) -> None:
@@ -630,8 +639,8 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 Path(tempdir_str),
                 mode="gate_remote_batch",
                 state=state,
-                executor_events={
-                    "remote-status-batch-20260406-0002": {
+                queue_results={
+                    "status-batch-20260406-0002": {
                         "batch_id": "batch-20260406-0002",
                         "status": "completed",
                         "timestamps": {"queued_at": "2026-04-06T10:00:00Z", "started_at": "2026-04-06T10:02:00Z"},
@@ -639,13 +648,13 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 },
             )
 
-            directives = payload["executor_directives"]
+            directives = payload["pre_launch_directives"]
             self.assertEqual(len(directives), 1)
-            self.assertEqual(directives[0]["action"], "fetch_batch_results")
-            self.assertEqual(directives[0]["command"], "python3 /opt/ray-hetzner/metaopt/fetch_batch_results.py --batch-id")
+            self.assertEqual(directives[0]["action"], "queue_op")
+            self.assertEqual(directives[0]["operation"], "results")
             self.assertEqual(directives[0]["batch_id"], "batch-20260406-0002")
 
-    def test_gate_remote_batch_analysis_launch_has_no_executor_directives(self) -> None:
+    def test_gate_remote_batch_analysis_launch_has_no_directives(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir_str:
             state = self._base_state()
             state["machine_state"] = "WAIT_FOR_REMOTE_BATCH"
@@ -654,13 +663,13 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 Path(tempdir_str),
                 mode="gate_remote_batch",
                 state=state,
-                executor_events={
-                    "remote-status-batch-20260406-0002": {
+                queue_results={
+                    "status-batch-20260406-0002": {
                         "batch_id": "batch-20260406-0002",
                         "status": "completed",
                         "timestamps": {"queued_at": "2026-04-06T10:00:00Z", "started_at": "2026-04-06T10:02:00Z"},
                     },
-                    "remote-results-batch-20260406-0002": {
+                    "results-batch-20260406-0002": {
                         "batch_id": "batch-20260406-0002",
                         "status": "completed",
                         "best_aggregate_result": {"metric": "rmse", "value": 0.1213},
@@ -672,9 +681,10 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
             )
 
             self.assertEqual(payload["worker_ref"], "metaopt-analysis-worker")
-            self.assertEqual(payload["executor_directives"], [])
+            self.assertEqual(payload.get("pre_launch_directives", []), [])
+            self.assertEqual(payload.get("post_launch_directives", []), [])
 
-    def test_gate_remote_batch_diagnosis_launch_has_no_executor_directives(self) -> None:
+    def test_gate_remote_batch_diagnosis_launch_has_no_directives(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir_str:
             state = self._base_state()
             state["machine_state"] = "WAIT_FOR_REMOTE_BATCH"
@@ -683,8 +693,8 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 Path(tempdir_str),
                 mode="gate_remote_batch",
                 state=state,
-                executor_events={
-                    "remote-status-batch-20260406-0002": {
+                queue_results={
+                    "status-batch-20260406-0002": {
                         "batch_id": "batch-20260406-0002",
                         "status": "failed",
                         "timestamps": {"queued_at": "2026-04-06T10:00:00Z"},
@@ -696,7 +706,8 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
             )
 
             self.assertEqual(payload["worker_ref"], "metaopt-diagnosis-worker")
-            self.assertEqual(payload["executor_directives"], [])
+            self.assertEqual(payload.get("pre_launch_directives", []), [])
+            self.assertEqual(payload.get("post_launch_directives", []), [])
 
     def test_plan_remote_batch_stability_emits_same_directives(self) -> None:
         """Re-running plan on a state with pending_remote_batch uses same batch_id in directives."""
@@ -712,9 +723,9 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 state=state,
             )
 
-            directives = payload["executor_directives"]
+            directives = payload["pre_launch_directives"]
             self.assertEqual(directives[0]["batch_id"], "batch-20260406-0002")
-            self.assertEqual(directives[1]["manifest_path"], ".ml-metaopt/artifacts/manifests/batch-20260406-0002.json")
+            self.assertEqual(directives[1]["batch_id"], "batch-20260406-0002")
 
     # ── Task 4: fail-closed guardrails ────────────────────────────────
 
@@ -729,8 +740,8 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 Path(tempdir_str),
                 mode="analyze_remote_results",
                 state=state,
-                executor_events={
-                    "remote-results-batch-20260406-0002": {
+                queue_results={
+                    "results-batch-20260406-0002": {
                         "batch_id": "batch-20260406-0002",
                         "status": "completed",
                         "per_dataset": {"ds_main": 0.1208, "ds_holdout": 0.1225},
@@ -762,8 +773,8 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 Path(tempdir_str),
                 mode="analyze_remote_results",
                 state=state,
-                executor_events={
-                    "remote-results-batch-20260406-0002": {
+                queue_results={
+                    "results-batch-20260406-0002": {
                         "batch_id": "batch-20260406-0002",
                         "status": "completed",
                         "best_aggregate_result": {"metric": "rmse", "value": 0.0500},
@@ -797,13 +808,13 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 Path(tempdir_str),
                 mode="gate_remote_batch",
                 state=state,
-                executor_events={
-                    "remote-status-batch-20260406-0002": {
+                queue_results={
+                    "status-batch-20260406-0002": {
                         "batch_id": "batch-20260406-0002",
                         "status": "completed",
                         "timestamps": {"queued_at": "2026-04-06T10:00:00Z"},
                     },
-                    "remote-results-batch-20260406-0002": {
+                    "results-batch-20260406-0002": {
                         "batch_id": "batch-20260406-0002",
                         "status": "completed",
                         "per_dataset": {"ds_main": 0.1208, "ds_holdout": 0.1225},
@@ -819,7 +830,7 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
             self.assertEqual(lr["mode"], "analysis")
             self.assertEqual(lr["worker_ref"], "metaopt-analysis-worker")
             self.assertEqual(lr["model_class"], "strong_reasoner")
-            self.assertEqual(lr["preferred_model"], "claude-opus-4.6-fast")
+            self.assertEqual(lr["preferred_model"], "claude-opus-4.6")
 
     def test_gate_remote_diagnosis_launch_request_has_preferred_model_claude_opus(self) -> None:
         """Remote diagnosis worker launch must be a legal auxiliary launch with preferred_model."""
@@ -831,8 +842,8 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 Path(tempdir_str),
                 mode="gate_remote_batch",
                 state=state,
-                executor_events={
-                    "remote-status-batch-20260406-0002": {
+                queue_results={
+                    "status-batch-20260406-0002": {
                         "batch_id": "batch-20260406-0002",
                         "status": "failed",
                         "timestamps": {"queued_at": "2026-04-06T10:00:00Z"},
@@ -849,7 +860,7 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
             self.assertEqual(lr["mode"], "diagnosis")
             self.assertEqual(lr["worker_ref"], "metaopt-diagnosis-worker")
             self.assertEqual(lr["model_class"], "strong_reasoner")
-            self.assertEqual(lr["preferred_model"], "claude-opus-4.6-fast")
+            self.assertEqual(lr["preferred_model"], "claude-opus-4.6")
 
     def test_queue_only_no_raw_cluster_directives(self) -> None:
         """Remote execution must remain queue-only; all directives must use allowed actions."""
@@ -862,7 +873,7 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 state=self._base_state(),
             )
             blocked_actions = {"ssh_command", "raw_ssh", "shell_exec", "kubectl_exec"}
-            for d in plan_payload.get("executor_directives", []):
+            for d in plan_payload.get("pre_launch_directives", []) + plan_payload.get("post_launch_directives", []):
                 self.assertNotIn(d["action"], blocked_actions,
                                  f"raw-cluster action {d['action']!r} found in plan_remote_batch")
 
@@ -879,8 +890,8 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 Path(tempdir_str),
                 mode="analyze_remote_results",
                 state=state,
-                executor_events={
-                    "remote-results-batch-20260406-0002": {
+                queue_results={
+                    "results-batch-20260406-0002": {
                         "batch_id": "batch-20260406-0002",
                         "status": "completed",
                         "per_dataset": {"ds_main": 0.1208, "ds_holdout": 0.1225},
@@ -909,8 +920,8 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 Path(tempdir_str),
                 mode="analyze_remote_results",
                 state=state,
-                executor_events={
-                    "remote-results-batch-20260406-0002": {
+                queue_results={
+                    "results-batch-20260406-0002": {
                         "batch_id": "batch-20260406-0002",
                         "status": "completed",
                         "per_dataset": {"ds_main": 0.1208, "ds_holdout": 0.1225},
@@ -938,8 +949,8 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 Path(tempdir_str),
                 mode="analyze_remote_results",
                 state=state,
-                executor_events={
-                    "remote-results-batch-20260406-0002": {
+                queue_results={
+                    "results-batch-20260406-0002": {
                         "batch_id": "batch-20260406-0002",
                         "status": "completed",
                     }
@@ -980,13 +991,13 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 Path(tempdir_str),
                 mode="gate_remote_batch",
                 state=state,
-                executor_events={
-                    "remote-status-batch-20260406-0002": {
+                queue_results={
+                    "status-batch-20260406-0002": {
                         "batch_id": "batch-20260406-0002",
                         "status": "completed",
                         "timestamps": {"queued_at": "2026-04-06T10:00:00Z"},
                     },
-                    "remote-results-batch-20260406-0002": results_payload,
+                    "results-batch-20260406-0002": results_payload,
                 },
             )
 
@@ -1013,8 +1024,8 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 Path(tempdir_str),
                 mode="gate_remote_batch",
                 state=state,
-                executor_events={
-                    "remote-status-batch-20260406-0002": {
+                queue_results={
+                    "status-batch-20260406-0002": {
                         "batch_id": "batch-20260406-0002",
                         "status": "failed",
                         "timestamps": {"queued_at": "2026-04-06T10:00:00Z"},
@@ -1036,7 +1047,7 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
         self.assertTrue(AGENT_PROFILE.exists(), f"missing {AGENT_PROFILE}")
         content = AGENT_PROFILE.read_text(encoding="utf-8")
         self.assertIn("name: metaopt-remote-execution-control", content)
-        self.assertIn("model: gpt-5.4", content)
+        self.assertIn("model: claude-opus-4.6", content)
         self.assertIn("plan_remote_batch", content)
         self.assertIn("gate_remote_batch", content)
         self.assertIn("analyze_remote_results", content)
@@ -1046,7 +1057,7 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
         self.assertTrue(ANALYSIS_WORKER_PROFILE.exists(), f"missing {ANALYSIS_WORKER_PROFILE}")
         content = ANALYSIS_WORKER_PROFILE.read_text(encoding="utf-8")
         self.assertIn("name: metaopt-analysis-worker", content)
-        self.assertIn("model: gpt-5.4", content)
+        self.assertIn("model: claude-opus-4.6", content)
         self.assertIn("Do not launch subagents.", content)
         self.assertIn("Do not mutate `.ml-metaopt/state.json`.", content)
 

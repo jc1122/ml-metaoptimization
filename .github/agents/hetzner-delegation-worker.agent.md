@@ -1,7 +1,7 @@
 ---
 name: hetzner-delegation-worker
-description: Leaf worker that executes a single hetzner-delegation queue operation for the ml-metaoptimization orchestrator — enqueue a batch, poll status, or fetch results. Dispatched by metaopt-remote-execution-control; not user-invocable.
-model: claude-sonnet-4-6
+description: Leaf worker that executes a single hetzner-delegation queue operation for the ml-metaoptimization orchestrator — enqueue a batch, poll status, or fetch results. Dispatched mechanically by the orchestrator for queue_op directives; not user-invocable.
+model: claude-sonnet-4
 tools:
   - read
   - search

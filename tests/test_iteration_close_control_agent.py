@@ -453,7 +453,7 @@ class IterationCloseControlAgentTests(unittest.TestCase):
                 },
             )
 
-            directives = payload["executor_directives"]
+            directives = payload["pre_launch_directives"]
             self.assertEqual(
                 [directive["action"] for directive in directives],
                 ["remove_agents_hook", "delete_state_file", "emit_final_report"],
@@ -492,7 +492,7 @@ class IterationCloseControlAgentTests(unittest.TestCase):
             self.assertEqual(updated_state["machine_state"], "BLOCKED_PROTOCOL")
             self.assertEqual(updated_state["active_slots"], [])
             self.assertEqual(payload["recommended_next_machine_state"], "BLOCKED_PROTOCOL")
-            directives = payload["executor_directives"]
+            directives = payload["pre_launch_directives"]
             self.assertEqual(
                 [directive["action"] for directive in directives],
                 ["remove_agents_hook"],
@@ -522,7 +522,7 @@ class IterationCloseControlAgentTests(unittest.TestCase):
                 },
             )
 
-            directive_actions = [d["action"] for d in payload["executor_directives"]]
+            directive_actions = [d["action"] for d in payload["pre_launch_directives"]]
             self.assertNotIn("delete_state_file", directive_actions)
             self.assertNotIn("emit_final_report", directive_actions)
 
@@ -680,11 +680,12 @@ class IterationCloseControlAgentTests(unittest.TestCase):
                 },
             )
 
-            self.assertEqual(payload["executor_directives"], [])
+            self.assertEqual(payload["pre_launch_directives"], [])
+            self.assertEqual(payload["post_launch_directives"], [])
 
-    # ── executor_directives authoritativeness tests ─────────────────────
+    # ── directive authoritativeness tests ───────────────────────────────
 
-    def test_plan_roll_iteration_has_no_executor_directives(self) -> None:
+    def test_plan_roll_iteration_has_no_directives(self) -> None:
         """PLAN_ROLL_ITERATION only launches a worker; no executor-side work."""
         with tempfile.TemporaryDirectory() as tempdir_str:
             payload, _, _ = self._run(
@@ -692,9 +693,10 @@ class IterationCloseControlAgentTests(unittest.TestCase):
                 mode="plan_roll_iteration",
                 state=self._base_state(),
             )
-            self.assertEqual(payload["executor_directives"], [])
+            self.assertEqual(payload["pre_launch_directives"], [])
+            self.assertEqual(payload["post_launch_directives"], [])
 
-    def test_gate_roll_iteration_continuing_emits_executor_directives(self) -> None:
+    def test_gate_roll_iteration_continuing_emits_pre_launch_directives(self) -> None:
         """GATE_ROLL_ITERATION must tell the executor to emit_iteration_report, drain_slots, cancel_slots."""
         with tempfile.TemporaryDirectory() as tempdir_str:
             payload, _, _ = self._run(
@@ -712,7 +714,7 @@ class IterationCloseControlAgentTests(unittest.TestCase):
             )
 
             self.assertTrue(payload["continue_campaign"])
-            directives = payload["executor_directives"]
+            directives = payload["pre_launch_directives"]
             self.assertEqual(
                 [directive["action"] for directive in directives],
                 ["emit_iteration_report", "drain_slots", "cancel_slots"],
@@ -728,7 +730,7 @@ class IterationCloseControlAgentTests(unittest.TestCase):
                 self.assertIn("reason", d)
                 self.assertTrue(d["reason"])
 
-    def test_gate_roll_iteration_stopping_emits_executor_directives(self) -> None:
+    def test_gate_roll_iteration_stopping_emits_pre_launch_directives(self) -> None:
         """When stop_reason is set, gate still emits the quiesce directives."""
         with tempfile.TemporaryDirectory() as tempdir_str:
             state = self._base_state()
@@ -748,7 +750,7 @@ class IterationCloseControlAgentTests(unittest.TestCase):
             )
 
             self.assertFalse(payload["continue_campaign"])
-            directives = payload["executor_directives"]
+            directives = payload["pre_launch_directives"]
             actions = [d["action"] for d in directives]
             self.assertIn("emit_iteration_report", actions)
             self.assertIn("drain_slots", actions)
@@ -771,10 +773,10 @@ class IterationCloseControlAgentTests(unittest.TestCase):
                 },
             )
 
-            report_dir = next(d for d in payload["executor_directives"] if d["action"] == "emit_iteration_report")
+            report_dir = next(d for d in payload["pre_launch_directives"] if d["action"] == "emit_iteration_report")
             self.assertEqual(report_dir["iteration"], 3)
 
-    def test_runtime_error_has_no_executor_directives(self) -> None:
+    def test_runtime_error_has_no_directives(self) -> None:
         """Runtime errors are informational; they must not carry executor work."""
         with tempfile.TemporaryDirectory() as tempdir_str:
             state = self._base_state()
@@ -786,7 +788,8 @@ class IterationCloseControlAgentTests(unittest.TestCase):
             )
             self.assertEqual(payload["summary"], "analysis summary missing")
             self.assertIsNone(payload["recommended_next_machine_state"])
-            self.assertEqual(payload["executor_directives"], [])
+            self.assertEqual(payload["pre_launch_directives"], [])
+            self.assertEqual(payload["post_launch_directives"], [])
 
     def _assert_envelope_keys(
         self,
@@ -799,7 +802,8 @@ class IterationCloseControlAgentTests(unittest.TestCase):
         self.assertEqual(payload["control_agent"], control_agent)
         self.assertIsInstance(payload["launch_requests"], list)
         self.assertTrue(payload["state_patch"] is None or isinstance(payload["state_patch"], dict))
-        self.assertIsInstance(payload["executor_directives"], list)
+        self.assertIsInstance(payload.get("pre_launch_directives", []), list)
+        self.assertIsInstance(payload.get("post_launch_directives", []), list)
         self.assertIn("summary", payload)
         self.assertIn("warnings", payload)
         self.assertIn("recommended_next_machine_state", payload)
@@ -840,7 +844,7 @@ class IterationCloseControlAgentTests(unittest.TestCase):
         self.assertTrue(AGENT_PROFILE.exists(), f"missing {AGENT_PROFILE}")
         content = AGENT_PROFILE.read_text(encoding="utf-8")
         self.assertIn("name: metaopt-iteration-close-control", content)
-        self.assertIn("model: gpt-5.4", content)
+        self.assertIn("model: claude-opus-4.6", content)
         self.assertIn("plan_roll_iteration", content)
         self.assertIn("gate_roll_iteration", content)
         self.assertIn("quiesce_slots", content)
@@ -850,7 +854,7 @@ class IterationCloseControlAgentTests(unittest.TestCase):
         self.assertTrue(WORKER_PROFILE.exists(), f"missing {WORKER_PROFILE}")
         content = WORKER_PROFILE.read_text(encoding="utf-8")
         self.assertIn("name: metaopt-rollover-worker", content)
-        self.assertIn("model: gpt-5.4", content)
+        self.assertIn("model: claude-opus-4.6", content)
         self.assertIn("Do not launch subagents.", content)
         self.assertIn("Do not mutate `.ml-metaopt/state.json`.", content)
 
@@ -880,7 +884,7 @@ class IterationCloseControlAgentTests(unittest.TestCase):
             lr = payload["launch_requests"][0]
             self.assertEqual(lr["worker_ref"], "metaopt-rollover-worker")
             self.assertEqual(lr["model_class"], "strong_reasoner")
-            self.assertEqual(lr["preferred_model"], "claude-opus-4.6-fast")
+            self.assertEqual(lr["preferred_model"], "claude-opus-4.6")
             # Inline dispatch: no slot_class or mode
             self.assertNotIn("slot_class", lr,
                 "rollover is inline dispatch and must not carry slot_class")

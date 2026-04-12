@@ -164,7 +164,8 @@ class LoadCampaignHandoffTests(unittest.TestCase):
             self.assertEqual(payload["control_agent"], "metaopt-load-campaign")
             self.assertEqual(payload["launch_requests"], [])
             self.assertIsNone(payload["state_patch"])
-            self.assertEqual(payload["executor_directives"], [])
+            self.assertEqual(payload["pre_launch_directives"], [])
+            self.assertEqual(payload["post_launch_directives"], [])
             self.assertIn("summary", payload)
             self.assertIn("warnings", payload)
 
@@ -178,7 +179,8 @@ class LoadCampaignHandoffTests(unittest.TestCase):
             self.assertEqual(payload["control_agent"], "metaopt-load-campaign")
             self.assertEqual(payload["launch_requests"], [])
             self.assertIsNone(payload["state_patch"])
-            self.assertEqual(payload["executor_directives"], [])
+            self.assertEqual(payload["pre_launch_directives"], [])
+            self.assertEqual(payload["post_launch_directives"], [])
 
     def test_agent_profile_exists_and_is_programmatic_only(self) -> None:
         self.assertTrue(AGENT_PROFILE.exists(), f"missing {AGENT_PROFILE}")

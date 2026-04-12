@@ -445,7 +445,8 @@ class LocalExecutionControlAgentTests(unittest.TestCase):
         self.assertEqual(payload["control_agent"], control_agent)
         self.assertIsInstance(payload["launch_requests"], list)
         self.assertTrue(payload["state_patch"] is None or isinstance(payload["state_patch"], dict))
-        self.assertIsInstance(payload["executor_directives"], list)
+        self.assertIsInstance(payload.get("pre_launch_directives", []), list)
+        self.assertIsInstance(payload.get("post_launch_directives", []), list)
         self.assertIn("summary", payload)
         self.assertIn("warnings", payload)
         self.assertIn("recommended_next_machine_state", payload)
@@ -523,16 +524,16 @@ class LocalExecutionControlAgentTests(unittest.TestCase):
             self.assertIn("local_changeset", payload["state_patch"])
             self.assertEqual(payload["state_patch"]["next_action"], "enqueue remote batch")
 
-    # ── executor_directives tests ──────────────────────────────────────
+    # ── directive tests ────────────────────────────────────────────────
 
-    def test_plan_standard_emits_executor_directives(self) -> None:
+    def test_plan_standard_emits_post_launch_directives(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir_str:
             payload, _, _ = self._run(
                 Path(tempdir_str),
                 mode="plan_local_changeset",
                 state=self._base_state(),
             )
-            directives = payload["executor_directives"]
+            directives = payload["post_launch_directives"]
             actions = [d["action"] for d in directives]
             self.assertEqual(
                 actions,
@@ -549,7 +550,7 @@ class LocalExecutionControlAgentTests(unittest.TestCase):
                 mode="plan_local_changeset",
                 state=self._base_state(),
             )
-            directives = payload["executor_directives"]
+            directives = payload["post_launch_directives"]
             by_action = {d["action"]: d for d in directives}
             self.assertIn("result_file", by_action["apply_patch_artifacts"])
             self.assertIn("target_worktree", by_action["apply_patch_artifacts"])
@@ -561,7 +562,7 @@ class LocalExecutionControlAgentTests(unittest.TestCase):
             self.assertIn("command", by_action["run_sanity"])
             self.assertIn("max_duration_seconds", by_action["run_sanity"])
 
-    def test_plan_remediation_has_no_executor_directives(self) -> None:
+    def test_plan_remediation_has_no_directives(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir_str:
             state = self._base_state()
             state["selected_experiment"]["sanity_attempts"] = 1
@@ -592,9 +593,10 @@ class LocalExecutionControlAgentTests(unittest.TestCase):
                     }
                 },
             )
-            self.assertEqual(payload["executor_directives"], [])
+            self.assertEqual(payload.get("pre_launch_directives", []), [])
+            self.assertEqual(payload.get("post_launch_directives", []), [])
 
-    def test_plan_conflict_resolution_has_no_executor_directives(self) -> None:
+    def test_plan_conflict_resolution_has_no_directives(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir_str:
             payload, _, _ = self._run(
                 Path(tempdir_str),
@@ -615,9 +617,10 @@ class LocalExecutionControlAgentTests(unittest.TestCase):
                     }
                 },
             )
-            self.assertEqual(payload["executor_directives"], [])
+            self.assertEqual(payload.get("pre_launch_directives", []), [])
+            self.assertEqual(payload.get("post_launch_directives", []), [])
 
-    def test_gate_diagnosis_launch_has_no_executor_directives(self) -> None:
+    def test_gate_diagnosis_launch_has_no_directives(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir_str:
             payload, _, _ = self._run(
                 Path(tempdir_str),
@@ -633,9 +636,10 @@ class LocalExecutionControlAgentTests(unittest.TestCase):
                     }
                 },
             )
-            self.assertEqual(payload["executor_directives"], [])
+            self.assertEqual(payload.get("pre_launch_directives", []), [])
+            self.assertEqual(payload.get("post_launch_directives", []), [])
 
-    def test_gate_sanity_pass_has_no_executor_directives(self) -> None:
+    def test_gate_sanity_pass_has_no_directives(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir_str:
             payload, _, _ = self._run(
                 Path(tempdir_str),
@@ -664,7 +668,8 @@ class LocalExecutionControlAgentTests(unittest.TestCase):
                     },
                 },
             )
-            self.assertEqual(payload["executor_directives"], [])
+            self.assertEqual(payload.get("pre_launch_directives", []), [])
+            self.assertEqual(payload.get("post_launch_directives", []), [])
 
     # ── Task 4: fail-closed guardrails ────────────────────────────────
 
@@ -701,7 +706,7 @@ class LocalExecutionControlAgentTests(unittest.TestCase):
         """Drift temptation: the local execution control hits a missing
         diagnosis artifact and instead of blocking, invents a fallback code-fix
         lane or auto-retry.  The correct behaviour is BLOCKED_PROTOCOL with no
-        launch_requests and no executor_directives."""
+        launch_requests and no directives."""
         with tempfile.TemporaryDirectory() as tempdir_str:
             state = self._base_state()
             state["selected_experiment"]["sanity_attempts"] = 1
@@ -726,8 +731,10 @@ class LocalExecutionControlAgentTests(unittest.TestCase):
             self.assertEqual(payload["launch_requests"], [],
                 "protocol gap must not spawn any workers")
             # Must not emit executor directives (no ad-hoc retry)
-            self.assertEqual(payload["executor_directives"], [],
-                "protocol gap must not emit executor directives")
+            self.assertEqual(payload.get("pre_launch_directives", []), [],
+                "protocol gap must not emit pre_launch_directives")
+            self.assertEqual(payload.get("post_launch_directives", []), [],
+                "protocol gap must not emit post_launch_directives")
             # Selected experiment state must remain intact (not cleared or modified)
             self.assertEqual(updated_state["selected_experiment"]["sanity_attempts"], 1,
                 "sanity_attempts must not be modified on protocol gap")
@@ -756,13 +763,13 @@ class LocalExecutionControlAgentTests(unittest.TestCase):
             self.assertEqual(lr["mode"], "diagnosis")
             self.assertEqual(lr["worker_ref"], "metaopt-diagnosis-worker")
             self.assertEqual(lr["model_class"], "strong_reasoner")
-            self.assertEqual(lr["preferred_model"], "claude-opus-4.6-fast")
+            self.assertEqual(lr["preferred_model"], "claude-opus-4.6")
 
     def test_agent_profile_exists_and_declares_both_modes(self) -> None:
         self.assertTrue(AGENT_PROFILE.exists(), f"missing {AGENT_PROFILE}")
         content = AGENT_PROFILE.read_text(encoding="utf-8")
         self.assertIn("name: metaopt-local-execution-control", content)
-        self.assertIn("model: gpt-5.4", content)
+        self.assertIn("model: claude-opus-4.6", content)
         self.assertIn("plan_local_changeset", content)
         self.assertIn("gate_local_sanity", content)
         self.assertIn("scripts/local_execution_control_handoff.py", content)
@@ -771,7 +778,7 @@ class LocalExecutionControlAgentTests(unittest.TestCase):
         self.assertTrue(WORKER_PROFILE.exists(), f"missing {WORKER_PROFILE}")
         content = WORKER_PROFILE.read_text(encoding="utf-8")
         self.assertIn("name: metaopt-materialization-worker", content)
-        self.assertIn("model: gpt-5.4", content)
+        self.assertIn("model: claude-opus-4.6", content)
         self.assertIn("Do not launch subagents.", content)
         self.assertIn("Do not mutate `.ml-metaopt/state.json`.", content)
 
@@ -779,7 +786,7 @@ class LocalExecutionControlAgentTests(unittest.TestCase):
         self.assertTrue(DIAGNOSIS_WORKER_PROFILE.exists(), f"missing {DIAGNOSIS_WORKER_PROFILE}")
         content = DIAGNOSIS_WORKER_PROFILE.read_text(encoding="utf-8")
         self.assertIn("name: metaopt-diagnosis-worker", content)
-        self.assertIn("model: gpt-5.4", content)
+        self.assertIn("model: claude-opus-4.6", content)
         self.assertIn("Do not launch subagents.", content)
         self.assertIn("Do not mutate `.ml-metaopt/state.json`.", content)
 
@@ -808,7 +815,7 @@ class LocalExecutionControlAgentTests(unittest.TestCase):
             self.assertEqual(lr["slot_class"], "auxiliary")
             self.assertEqual(lr["mode"], "materialization")
             self.assertEqual(lr["model_class"], "strong_coder")
-            self.assertEqual(lr["preferred_model"], "claude-opus-4.6-fast")
+            self.assertEqual(lr["preferred_model"], "claude-opus-4.6")
 
     def test_plan_mode_remediation_emits_launch_request_for_materialization_worker(self) -> None:
         """plan_local_changeset in remediation mode must also include the materialization

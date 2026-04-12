@@ -165,7 +165,7 @@ When the rollover worker receives `next_proposals`, every proposal has all field
 
 The orchestrator dispatches worker targets in two ways:
 
-**Slot-based dispatch** — used for ideation, maintenance, selection, design, materialization, diagnosis, and analysis. The orchestrator creates an entry in `active_slots` with the appropriate `slot_class`, `mode`, and `model_class`. The slot persists until the subagent completes and the orchestrator harvests its output. Slot-based workers are subject to `dispatch_policy.background_slots` and `dispatch_policy.auxiliary_slots` limits.
+**Slot-based dispatch** — used for ideation, maintenance, selection, design, materialization, diagnosis, and analysis. The orchestrator creates an `active_slots` entry whose semantic fields (`slot_class`, `mode`, `model_class`, `task_file`, `result_file`) come from the control agent's `launch_requests` entry; the orchestrator fills operational fields (`slot_id`, `requested_model`, `resolved_model`, `status`, `attempt`, `task_summary`) mechanically. When task/result paths are already slot-specific, `slot_id` is derived mechanically from the `result_file` stem. The slot persists until the subagent completes and the orchestrator stages its output. Slot-based workers are subject to `dispatch_policy.background_slots` and `dispatch_policy.auxiliary_slots` limits. See `references/control-protocol.md` Orchestrator-Managed Slot Fields for the authoritative field split.
 
 **Inline dispatch** — used for rollover during `ROLL_ITERATION`. The orchestrator launches the subagent synchronously, consumes the output immediately, and advances to the next state. No `active_slots` entry is created and the dispatch does not count against slot limits.
 

@@ -17,13 +17,13 @@ Your scope is limited to `HYDRATE_STATE`.
 # Rules
 
 - Do not reread `ml_metaopt_campaign.yaml`; consume only the Step-1 handoff plus local runtime artifacts.
-- You are authoritative for `.ml-metaopt/state.json` and the `AGENTS.md` resume hook.
+- You are authoritative for the `AGENTS.md` resume hook and the `state_patch` that initializes or resumes `.ml-metaopt/state.json`.
 - Verify worker-skill availability from `agents/worker-skills.json`.
 - Do not dispatch worker skills or backend commands.
 - Your staged handoff output must conform to the universal control-handoff envelope defined in `references/control-protocol.md`.
-- `executor_directives` are the authoritative executor input when executor-side work is needed; the orchestrator executes them mechanically and in order. The orchestrator must not infer missing executor work from prose, summaries, or legacy fields.
-- Write only:
-  - `.ml-metaopt/state.json`
+- `pre_launch_directives` and `post_launch_directives` are the authoritative executor input when executor-side work is needed; the orchestrator executes each list mechanically in order. The orchestrator must not infer missing executor work from prose, summaries, or legacy fields.
+- Do not hand-edit `.ml-metaopt/state.json`. All semantic state initialization and updates must be expressed as `state_patch` in the handoff envelope; in the local script harness, the bundled helper may persist exactly that computed patch for verification, but no agent-authored state edits are allowed.
+- Write only these agent-authored artifacts:
   - `AGENTS.md`
   - `.ml-metaopt/handoffs/hydrate_state.latest.json`
 

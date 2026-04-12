@@ -670,7 +670,8 @@ class HydrateStateHandoffTests(unittest.TestCase):
             self.assertEqual(payload["state_patch"]["campaign_id"], "market-forecast-v3")
             self.assertEqual(payload["state_patch"]["current_iteration"], 1)
             self.assertEqual(payload["state_patch"]["next_action"], "maintain background slot pool")
-            self.assertEqual(payload["executor_directives"], [])
+            self.assertEqual(payload["pre_launch_directives"], [])
+            self.assertEqual(payload["post_launch_directives"], [])
             self.assertIn("summary", payload)
             self.assertIn("warnings", payload)
 
@@ -682,7 +683,8 @@ class HydrateStateHandoffTests(unittest.TestCase):
             self.assertEqual(payload["control_agent"], "metaopt-hydrate-state")
             self.assertEqual(payload["launch_requests"], [])
             self.assertIsNone(payload["state_patch"])
-            self.assertEqual(payload["executor_directives"], [])
+            self.assertEqual(payload["pre_launch_directives"], [])
+            self.assertEqual(payload["post_launch_directives"], [])
 
     def test_identity_mismatch_contains_control_protocol_envelope_keys(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir_str:
@@ -715,7 +717,8 @@ class HydrateStateHandoffTests(unittest.TestCase):
             self.assertEqual(payload["control_agent"], "metaopt-hydrate-state")
             self.assertEqual(payload["launch_requests"], [])
             self.assertIsNone(payload["state_patch"])
-            self.assertEqual(payload["executor_directives"], [])
+            self.assertEqual(payload["pre_launch_directives"], [])
+            self.assertEqual(payload["post_launch_directives"], [])
 
     def test_fresh_init_sets_campaign_started_at(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir_str:
@@ -831,7 +834,7 @@ class HydrateStateHandoffTests(unittest.TestCase):
         content = AGENT_PROFILE.read_text(encoding="utf-8")
 
         self.assertIn("name: metaopt-hydrate-state", content)
-        self.assertIn("model: gpt-5.4", content)
+        self.assertIn("model: claude-opus-4.6", content)
         self.assertIn("tools:", content)
         self.assertIn("user-invocable: false", content)
         self.assertIn("scripts/hydrate_state_handoff.py", content)

@@ -225,7 +225,8 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
         "recommended_next_machine_state",
         "launch_requests",
         "state_patch",
-        "executor_directives",
+        "pre_launch_directives",
+        "post_launch_directives",
         "summary",
         "warnings",
     }
@@ -259,15 +260,16 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
             payload["state_patch"] is None or isinstance(payload["state_patch"], dict),
             f"{label}: state_patch must be dict|null",
         )
-        self.assertIsInstance(payload["executor_directives"], list, f"{label}: executor_directives must be a list")
-        for i, d in enumerate(payload["executor_directives"]):
-            self.assertIsInstance(d, dict, f"{label}: executor_directives[{i}] must be a dict")
-            self.assertIn("action", d, f"{label}: executor_directives[{i}] missing 'action'")
-            self.assertIsInstance(d["action"], str, f"{label}: executor_directives[{i}] action must be str")
-            self.assertTrue(d["action"], f"{label}: executor_directives[{i}] action must be non-empty")
-            self.assertIn("reason", d, f"{label}: executor_directives[{i}] missing 'reason'")
-            self.assertIsInstance(d["reason"], str, f"{label}: executor_directives[{i}] reason must be str")
-            self.assertTrue(d["reason"], f"{label}: executor_directives[{i}] reason must be non-empty")
+        for directive_field in ("pre_launch_directives", "post_launch_directives"):
+            self.assertIsInstance(payload[directive_field], list, f"{label}: {directive_field} must be a list")
+            for i, d in enumerate(payload[directive_field]):
+                self.assertIsInstance(d, dict, f"{label}: {directive_field}[{i}] must be a dict")
+                self.assertIn("action", d, f"{label}: {directive_field}[{i}] missing 'action'")
+                self.assertIsInstance(d["action"], str, f"{label}: {directive_field}[{i}] action must be str")
+                self.assertTrue(d["action"], f"{label}: {directive_field}[{i}] action must be non-empty")
+                self.assertIn("reason", d, f"{label}: {directive_field}[{i}] missing 'reason'")
+                self.assertIsInstance(d["reason"], str, f"{label}: {directive_field}[{i}] reason must be str")
+                self.assertTrue(d["reason"], f"{label}: {directive_field}[{i}] reason must be non-empty")
         self.assertIsInstance(payload["summary"], str, f"{label}: summary must be a string")
         self.assertIsInstance(payload["warnings"], list, f"{label}: warnings must be a list")
 
@@ -343,13 +345,14 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
                 out,
                 {
                     "state_patch": None,
-                    "executor_directives": [
+                    "post_launch_directives": [
                         {
                             "action": "run_sanity",
                             "reason": "r",
                             "worktree": ".ml-metaopt/worktrees/integration",
                             "command": "pytest -q",
                             "max_duration_seconds": 600,
+                            "output_event_path": ".ml-metaopt/executor-events/sanity-1.json",
                         }
                     ]
                 },
@@ -357,7 +360,7 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
                 control_agent="test-agent",
             )
             self.assertEqual(
-                payload["executor_directives"],
+                payload["post_launch_directives"],
                 [
                     {
                         "action": "run_sanity",
@@ -365,6 +368,7 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
                         "worktree": ".ml-metaopt/worktrees/integration",
                         "command": "pytest -q",
                         "max_duration_seconds": 600,
+                        "output_event_path": ".ml-metaopt/executor-events/sanity-1.json",
                     }
                 ],
             )
@@ -374,7 +378,8 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             out = Path(td) / "h.json"
             payload = emit_handoff(out, {"state_patch": None}, handoff_type="TEST", control_agent="test-agent")
-            self.assertEqual(payload["executor_directives"], [])
+            self.assertEqual(payload["pre_launch_directives"], [])
+            self.assertEqual(payload["post_launch_directives"], [])
 
     def test_emit_handoff_rejects_bad_directives(self) -> None:
         from _handoff_utils import emit_handoff
@@ -383,7 +388,7 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
             with self.assertRaises((TypeError, ValueError)):
                 emit_handoff(
                     out,
-                    {"state_patch": None, "executor_directives": [{"action": "a"}]},
+                    {"state_patch": None, "post_launch_directives": [{"action": "a"}]},
                     handoff_type="TEST",
                     control_agent="test-agent",
                 )
@@ -401,12 +406,14 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
             worker_results_dir = tempdir / ".ml-metaopt" / "worker-results"
             slot_events_dir = tempdir / ".ml-metaopt" / "slot-events"
             executor_events_dir = tempdir / ".ml-metaopt" / "executor-events"
+            queue_results_dir = tempdir / ".ml-metaopt" / "queue-results"
             agents_path = tempdir / "AGENTS.md"
             handoffs_dir.mkdir(parents=True, exist_ok=True)
             tasks_dir.mkdir(parents=True, exist_ok=True)
             worker_results_dir.mkdir(parents=True, exist_ok=True)
             slot_events_dir.mkdir(parents=True, exist_ok=True)
             executor_events_dir.mkdir(parents=True, exist_ok=True)
+            queue_results_dir.mkdir(parents=True, exist_ok=True)
             self._write_preflight_artifact(tempdir, campaign_path)
 
             load_output = handoffs_dir / "load_campaign.latest.json"
@@ -474,6 +481,20 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
             self.assertEqual(bg_plan["handoff_type"], "background_control.plan_background_work")
             self.assertEqual(len(bg_plan["launch_requests"]), 2)
             self._assert_envelope(bg_plan, "metaopt-background-control", "plan_background_work")
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            state["active_slots"] = [
+                {
+                    **request,
+                    "slot_id": Path(request["result_file"]).stem,
+                    "requested_model": request["preferred_model"],
+                    "resolved_model": request["preferred_model"],
+                    "status": "running",
+                    "attempt": 1,
+                    "task_summary": f"{request['mode']} background task",
+                }
+                for request in bg_plan["launch_requests"]
+            ]
+            state_path.write_text(json.dumps(state), encoding="utf-8")
 
             ideation_candidates = [
                 {
@@ -490,7 +511,7 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
                 },
             ]
             for request in bg_plan["launch_requests"]:
-                slot_id = request["slot_id"]
+                slot_id = Path(request["result_file"]).stem
                 (slot_events_dir / f"{slot_id}.json").write_text(
                     json.dumps({"slot_id": slot_id, "status": "completed", "result_file": f"{slot_id}.json"}),
                     encoding="utf-8",
@@ -668,8 +689,8 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
             self.assertEqual(local_plan["launch_requests"][0]["worker_ref"], "metaopt-materialization-worker")
             self.assertEqual(local_plan["launch_requests"][0]["slot_class"], "auxiliary")
             self.assertEqual(local_plan["launch_requests"][0]["mode"], "materialization")
-            # ── local plan must carry authoritative executor directives ──
-            local_plan_directives = local_plan["executor_directives"]
+            # ── local plan must carry authoritative post-launch executor directives ──
+            local_plan_directives = local_plan["post_launch_directives"]
             self.assertEqual(
                 [d["action"] for d in local_plan_directives],
                 ["apply_patch_artifacts", "package_code_artifact", "package_data_manifest", "run_sanity"],
@@ -769,6 +790,8 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
                     str(worker_results_dir),
                     "--executor-events-dir",
                     str(executor_events_dir),
+                    "--queue-results-dir",
+                    str(queue_results_dir),
                     "--output",
                     str(remote_output),
                 ],
@@ -776,17 +799,18 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
             )
             self.assertEqual(remote_plan["batch_id"], batch_id)
             self._assert_envelope(remote_plan, "metaopt-remote-execution-control", "plan_remote_batch")
-            # ── remote plan must carry write_manifest + enqueue_batch directives ──
-            remote_plan_directives = remote_plan["executor_directives"]
+            # ── remote plan must carry write_manifest + queue enqueue directives ──
+            remote_plan_directives = remote_plan["pre_launch_directives"]
             self.assertEqual(
                 [d["action"] for d in remote_plan_directives],
-                ["write_manifest", "enqueue_batch"],
+                ["write_manifest", "queue_op"],
             )
             self.assertEqual(remote_plan_directives[0]["batch_id"], batch_id)
             self.assertIn("manifest_path", remote_plan_directives[0])
             self.assertEqual(remote_plan_directives[1]["batch_id"], batch_id)
             self.assertIn("command", remote_plan_directives[1])
-            (executor_events_dir / f"enqueue-{batch_id}.json").write_text(
+            self.assertEqual(remote_plan_directives[1]["operation"], "enqueue")
+            (queue_results_dir / f"enqueue-{batch_id}.json").write_text(
                 json.dumps({"batch_id": batch_id, "queue_ref": "ray-queue-123", "status": "queued"}),
                 encoding="utf-8",
             )
@@ -806,6 +830,8 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
                     str(worker_results_dir),
                     "--executor-events-dir",
                     str(executor_events_dir),
+                    "--queue-results-dir",
+                    str(queue_results_dir),
                     "--output",
                     str(remote_output),
                 ],
@@ -813,15 +839,16 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
             )
             self.assertEqual(remote_gate["recommended_next_machine_state"], "WAIT_FOR_REMOTE_BATCH")
             self._assert_envelope(remote_gate, "metaopt-remote-execution-control", "gate_remote_batch_initial")
-            # ── initial gate must carry poll_batch_status directive ──
-            initial_gate_directives = remote_gate["executor_directives"]
+            # ── initial gate must carry queue status directive ──
+            initial_gate_directives = remote_gate["pre_launch_directives"]
             self.assertEqual(
                 [d["action"] for d in initial_gate_directives],
-                ["poll_batch_status"],
+                ["queue_op"],
             )
             self.assertEqual(initial_gate_directives[0]["batch_id"], batch_id)
             self.assertIn("command", initial_gate_directives[0])
-            (executor_events_dir / f"remote-status-{batch_id}.json").write_text(
+            self.assertEqual(initial_gate_directives[0]["operation"], "status")
+            (queue_results_dir / f"status-{batch_id}.json").write_text(
                 json.dumps(
                     {
                         "batch_id": batch_id,
@@ -831,7 +858,7 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            # ── gate before results exist → must emit fetch_batch_results ──
+            # ── gate before results exist → must emit queue results directive ──
             fetch_handoff = self._run(
                 [
                     "python3",
@@ -848,19 +875,22 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
                     str(worker_results_dir),
                     "--executor-events-dir",
                     str(executor_events_dir),
+                    "--queue-results-dir",
+                    str(queue_results_dir),
                     "--output",
                     str(remote_output),
                 ],
                 remote_output,
             )
-            fetch_directives = fetch_handoff["executor_directives"]
+            fetch_directives = fetch_handoff["pre_launch_directives"]
             self.assertEqual(
                 [d["action"] for d in fetch_directives],
-                ["fetch_batch_results"],
+                ["queue_op"],
             )
             self.assertEqual(fetch_directives[0]["batch_id"], batch_id)
             self.assertIn("command", fetch_directives[0])
-            (executor_events_dir / f"remote-results-{batch_id}.json").write_text(
+            self.assertEqual(fetch_directives[0]["operation"], "results")
+            (queue_results_dir / f"results-{batch_id}.json").write_text(
                 json.dumps(
                     {
                         "batch_id": batch_id,
@@ -889,6 +919,8 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
                     str(worker_results_dir),
                     "--executor-events-dir",
                     str(executor_events_dir),
+                    "--queue-results-dir",
+                    str(queue_results_dir),
                     "--output",
                     str(remote_output),
                 ],
@@ -925,6 +957,8 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
                     str(worker_results_dir),
                     "--executor-events-dir",
                     str(executor_events_dir),
+                    "--queue-results-dir",
+                    str(queue_results_dir),
                     "--output",
                     str(remote_output),
                 ],
@@ -948,6 +982,8 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
                     str(worker_results_dir),
                     "--executor-events-dir",
                     str(executor_events_dir),
+                    "--queue-results-dir",
+                    str(queue_results_dir),
                     "--output",
                     str(remote_output),
                 ],
@@ -1035,7 +1071,7 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
             self.assertFalse(roll_gate["continue_campaign"])
             self.assertEqual(roll_gate["stop_reason"], "target_metric")
             self._assert_envelope(roll_gate, "metaopt-iteration-close-control", "gate_roll_iteration")
-            gate_directives = roll_gate["executor_directives"]
+            gate_directives = roll_gate["pre_launch_directives"]
             self.assertEqual(
                 [directive["action"] for directive in gate_directives],
                 ["emit_iteration_report", "drain_slots", "cancel_slots"],
@@ -1086,7 +1122,7 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
             )
             self.assertEqual(quiesced["recommended_next_machine_state"], "COMPLETE")
             self._assert_envelope(quiesced, "metaopt-iteration-close-control", "quiesce_slots")
-            quiesce_directives = quiesced["executor_directives"]
+            quiesce_directives = quiesced["pre_launch_directives"]
             self.assertEqual(
                 [directive["action"] for directive in quiesce_directives],
                 ["remove_agents_hook", "delete_state_file", "emit_final_report"],
@@ -1121,7 +1157,8 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
             tasks_dir = tempdir / ".ml-metaopt" / "tasks"
             worker_results_dir = tempdir / ".ml-metaopt" / "worker-results"
             executor_events_dir = tempdir / ".ml-metaopt" / "executor-events"
-            for d in (handoffs_dir, tasks_dir, worker_results_dir, executor_events_dir):
+            queue_results_dir = tempdir / ".ml-metaopt" / "queue-results"
+            for d in (handoffs_dir, tasks_dir, worker_results_dir, executor_events_dir, queue_results_dir):
                 d.mkdir(parents=True, exist_ok=True)
             self._write_preflight_artifact(tempdir, campaign_path)
 
@@ -1163,7 +1200,7 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
             state_path.write_text(json.dumps(state), encoding="utf-8")
 
             # Provide raw remote results but deliberately omit analysis worker output
-            (executor_events_dir / "remote-results-batch-20260407-0001.json").write_text(
+            (queue_results_dir / "results-batch-20260407-0001.json").write_text(
                 json.dumps({
                     "batch_id": "batch-20260407-0001", "status": "completed",
                     "per_dataset": {"ds_main": 0.1100, "ds_holdout": 0.1200},
@@ -1176,7 +1213,8 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
                 ["python3", str(REMOTE_SCRIPT), "--mode", "analyze_remote_results",
                  "--load-handoff", str(load_output), "--state-path", str(state_path),
                  "--tasks-dir", str(tasks_dir), "--worker-results-dir", str(worker_results_dir),
-                 "--executor-events-dir", str(executor_events_dir), "--output", str(remote_output)],
+                 "--executor-events-dir", str(executor_events_dir),
+                 "--queue-results-dir", str(queue_results_dir), "--output", str(remote_output)],
                 remote_output,
             )
 
@@ -1208,7 +1246,8 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
             tasks_dir = tempdir / ".ml-metaopt" / "tasks"
             worker_results_dir = tempdir / ".ml-metaopt" / "worker-results"
             executor_events_dir = tempdir / ".ml-metaopt" / "executor-events"
-            for d in (handoffs_dir, tasks_dir, worker_results_dir, executor_events_dir):
+            queue_results_dir = tempdir / ".ml-metaopt" / "queue-results"
+            for d in (handoffs_dir, tasks_dir, worker_results_dir, executor_events_dir, queue_results_dir):
                 d.mkdir(parents=True, exist_ok=True)
             self._write_preflight_artifact(tempdir, campaign_path)
 
@@ -1250,7 +1289,7 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
             state_path.write_text(json.dumps(state), encoding="utf-8")
 
             # Very favourable raw results — tempts the orchestrator to skip analysis
-            (executor_events_dir / "remote-results-batch-20260407-0001.json").write_text(
+            (queue_results_dir / "results-batch-20260407-0001.json").write_text(
                 json.dumps({
                     "batch_id": "batch-20260407-0001", "status": "completed",
                     "best_aggregate_result": {"metric": "rmse", "value": 0.0500},
@@ -1266,7 +1305,8 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
                 ["python3", str(REMOTE_SCRIPT), "--mode", "analyze_remote_results",
                  "--load-handoff", str(load_output), "--state-path", str(state_path),
                  "--tasks-dir", str(tasks_dir), "--worker-results-dir", str(worker_results_dir),
-                 "--executor-events-dir", str(executor_events_dir), "--output", str(remote_output)],
+                 "--executor-events-dir", str(executor_events_dir),
+                 "--queue-results-dir", str(queue_results_dir), "--output", str(remote_output)],
                 remote_output,
             )
 
@@ -1329,6 +1369,21 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
             )
 
             # Verify background plan only emits ideation/maintenance, never code-build
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            state["active_slots"] = [
+                {
+                    **req,
+                    "slot_id": Path(req["result_file"]).stem,
+                    "requested_model": req["preferred_model"],
+                    "resolved_model": req["preferred_model"],
+                    "status": "running",
+                    "attempt": 1,
+                    "task_summary": f"{req['mode']} background task",
+                }
+                for req in bg_plan["launch_requests"]
+            ]
+            state_path.write_text(json.dumps(state), encoding="utf-8")
+
             forbidden_workers = {
                 "metaopt-materialization-worker", "metaopt-diagnosis-worker",
                 "metaopt-analysis-worker", "metaopt-selection-worker",
@@ -1352,7 +1407,7 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
 
             # Now gate with clean ideation results, verify same constraints
             for req in bg_plan["launch_requests"]:
-                sid = req["slot_id"]
+                sid = Path(req["result_file"]).stem
                 (slot_events_dir / f"{sid}.json").write_text(
                     json.dumps({"slot_id": sid, "status": "completed", "result_file": f"{sid}.json"}),
                     encoding="utf-8",

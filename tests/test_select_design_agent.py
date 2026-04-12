@@ -454,7 +454,8 @@ class SelectDesignAgentTests(unittest.TestCase):
         self.assertEqual(payload["control_agent"], control_agent)
         self.assertIsInstance(payload["launch_requests"], list)
         self.assertTrue(payload["state_patch"] is None or isinstance(payload["state_patch"], dict))
-        self.assertIsInstance(payload["executor_directives"], list)
+        self.assertIsInstance(payload["pre_launch_directives"], list)
+        self.assertIsInstance(payload["post_launch_directives"], list)
         self.assertIn("summary", payload)
         self.assertIn("warnings", payload)
         self.assertIn("recommended_next_machine_state", payload)
@@ -530,7 +531,7 @@ class SelectDesignAgentTests(unittest.TestCase):
             self.assertEqual(payload["summary"], "load handoff unreadable")
 
     def test_plan_select_launch_request_includes_preferred_model_for_strong_reasoner(self) -> None:
-        """Selection launch request must carry preferred_model == 'claude-opus-4.6-fast'."""
+        """Selection launch request must carry preferred_model == 'claude-opus-4.6'."""
         with tempfile.TemporaryDirectory() as tempdir_str:
             payload, _, _, _ = self._run(
                 Path(tempdir_str),
@@ -544,10 +545,10 @@ class SelectDesignAgentTests(unittest.TestCase):
             self.assertEqual(sel_lr["mode"], "selection")
             self.assertEqual(sel_lr["worker_ref"], "metaopt-selection-worker")
             self.assertEqual(sel_lr["model_class"], "strong_reasoner")
-            self.assertEqual(sel_lr["preferred_model"], "claude-opus-4.6-fast")
+            self.assertEqual(sel_lr["preferred_model"], "claude-opus-4.6")
 
     def test_gate_select_design_launch_request_includes_preferred_model_for_strong_reasoner(self) -> None:
-        """Design launch request must carry preferred_model == 'claude-opus-4.6-fast'."""
+        """Design launch request must carry preferred_model == 'claude-opus-4.6'."""
         with tempfile.TemporaryDirectory() as tempdir_str:
             tempdir = Path(tempdir_str)
             initial_state = self._base_state()
@@ -571,7 +572,7 @@ class SelectDesignAgentTests(unittest.TestCase):
             self.assertEqual(design_lr["mode"], "design")
             self.assertEqual(design_lr["worker_ref"], "metaopt-design-worker")
             self.assertEqual(design_lr["model_class"], "strong_reasoner")
-            self.assertEqual(design_lr["preferred_model"], "claude-opus-4.6-fast")
+            self.assertEqual(design_lr["preferred_model"], "claude-opus-4.6")
 
     def test_finalize_rejects_design_with_materialization_lane_fields(self) -> None:
         """Design result containing patch_artifacts or apply_results must block to BLOCKED_PROTOCOL."""
@@ -625,7 +626,7 @@ class SelectDesignAgentTests(unittest.TestCase):
         for profile in (CONTROL_AGENT, SELECTION_AGENT, DESIGN_AGENT):
             self.assertTrue(profile.exists(), f"missing {profile}")
             content = profile.read_text(encoding="utf-8")
-            self.assertIn("model: gpt-5.4", content)
+            self.assertIn("model: claude-opus-4.6", content)
             self.assertIn("user-invocable: false", content)
         control_content = CONTROL_AGENT.read_text(encoding="utf-8")
         self.assertIn("name: metaopt-select-design", control_content)

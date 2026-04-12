@@ -81,6 +81,16 @@
       "probe_paths": [
         "/home/jakub/.agents/skills/repo-audit-refactor-optimize/SKILL.md"
       ]
+    },
+    {
+      "name": "hetzner-delegation-worker",
+      "lane": "queue_execution",
+      "worker_kind": "custom_agent",
+      "worker_ref": "hetzner-delegation-worker",
+      "classification": "required",
+      "probe_paths": [
+        "/home/jakub/projects/ml-metaoptimization/.github/agents/hetzner-delegation-worker.agent.md"
+      ]
     }
   ]
 }

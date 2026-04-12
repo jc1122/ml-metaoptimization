@@ -216,6 +216,7 @@ class IterationCloseControlAgentTests(unittest.TestCase):
                 str(executor_events_dir),
                 "--output",
                 str(output_path),
+                "--apply-state",
             ],
             cwd=ROOT,
             text=True,

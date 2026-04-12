@@ -57,7 +57,7 @@ Reference content of the marked block:
 `.ml-metaopt/state.json` exists. Inspect its `status`.
 If `status` is `RUNNING`, invoke the `ml-metaoptimization` skill immediately,
 resume from `machine_state`, and do not ask the user for campaign inputs.
-If `status` is terminal, remove this block, stop auto-resuming, and surface `next_action` to the operator without executing from it.
+If `status` is terminal, invoke the `ml-metaoptimization` skill once so terminal cleanup can run through control-agent directives; do not execute `next_action`.
 <!-- ml-metaoptimization:end -->
 ```
 
@@ -90,7 +90,7 @@ These are system-level constraints the orchestrator validates after applying eac
 **Subagent failure policy:**
 - Relaunch once
 - If the failure is rate-limit related, wait and relaunch once
-- If the same task fails twice, write a failure executor event to `.ml-metaopt/executor-events/failure-<slot_id>.json` and re-invoke the governing control agent; the control agent reads the failure event and emits a `state_patch` that removes the slot and records any abandonment notes under its owned fields
+- If the same task fails twice, the orchestrator writes a failure executor event to `.ml-metaopt/executor-events/failure-<slot_id>.json`, marks/removes the slot mechanically according to `references/control-protocol.md`, and re-invokes the governing control agent. The control agent reads the failure event and may record abandonment notes only under its owned state fields; it must not patch `active_slots` for ordinary slot lifecycle cleanup.
 
 ## Required References
 

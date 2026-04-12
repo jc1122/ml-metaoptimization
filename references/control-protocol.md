@@ -227,6 +227,8 @@ The orchestrator is a mechanical executor. Given a control-handoff envelope, it:
 
 The orchestrator never interprets semantic content (e.g., proposal quality, diagnosis routing, stop condition evaluation). These decisions belong exclusively to control agents.
 
+Control-agent handoff scripts are emit-only by default: they compute `state_patch` and write the handoff artifact, but they do not persist `.ml-metaopt/state.json`. The only allowed persistence path is the orchestrator applying a validated handoff. Local tests may opt into `--apply-state` to simulate that orchestrator application; agent profiles must not use that flag.
+
 ### Secondary Control Agent Invocations
 
 The one-governing-agent rule (one control agent per machine state) has one explicit exception: background slot maintenance during `WAIT_FOR_REMOTE_BATCH`.

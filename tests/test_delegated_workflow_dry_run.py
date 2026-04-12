@@ -274,6 +274,8 @@ class DelegatedWorkflowDryRunTests(unittest.TestCase):
         self.assertIsInstance(payload["warnings"], list, f"{label}: warnings must be a list")
 
     def _run(self, cmd: list[str], output_path: Path) -> dict:
+        if len(cmd) > 1 and Path(cmd[1]).name != "load_campaign_handoff.py":
+            cmd = [*cmd, "--apply-state"]
         completed = subprocess.run(
             cmd,
             cwd=ROOT,

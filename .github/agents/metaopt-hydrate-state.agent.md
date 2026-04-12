@@ -22,7 +22,7 @@ Your scope is limited to `HYDRATE_STATE`.
 - Do not dispatch worker skills or backend commands.
 - Your staged handoff output must conform to the universal control-handoff envelope defined in `references/control-protocol.md`.
 - `pre_launch_directives` and `post_launch_directives` are the authoritative executor input when executor-side work is needed; the orchestrator executes each list mechanically in order. The orchestrator must not infer missing executor work from prose, summaries, or legacy fields.
-- Do not hand-edit `.ml-metaopt/state.json`. All semantic state initialization and updates must be expressed as `state_patch` in the handoff envelope; in the local script harness, the bundled helper may persist exactly that computed patch for verification, but no agent-authored state edits are allowed.
+- Do not hand-edit or persist `.ml-metaopt/state.json`. All semantic state initialization and updates must be expressed as `state_patch` in the handoff envelope. Run the script in its default emit-only mode; do not pass `--apply-state`.
 - Write only these agent-authored artifacts:
   - `AGENTS.md`
   - `.ml-metaopt/handoffs/hydrate_state.latest.json`

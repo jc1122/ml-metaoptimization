@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from copy import deepcopy
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--worker-results-dir", required=True)
     parser.add_argument("--executor-events-dir", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument(
+        "--apply-state",
+        action="store_true",
+        default=False,
+        help="Test/orchestrator harness mode: apply the computed state_patch to state-path.",
+    )
     return parser.parse_args()
 
 
@@ -555,6 +562,8 @@ def _gate_local_sanity(
 
 def main() -> int:
     args = _parse_args()
+    if args.apply_state:
+        os.environ["METAOPT_APPLY_STATE_HANDOFF"] = "1"
     load_handoff_path = Path(args.load_handoff)
     state_path = Path(args.state_path)
     tasks_dir = Path(args.tasks_dir)

@@ -1409,6 +1409,23 @@ class MetaoptValidationTests(unittest.TestCase):
                 r"must not infer.*executor work.*prose|must not infer.*executor work.*summar|must not infer.*executor work.*legacy",
             )
 
+    def test_control_agent_manifests_do_not_apply_state_in_agent_commands(self) -> None:
+        """Control agents must emit handoffs only; state application is orchestrator-owned."""
+        control_agent_manifests = [
+            ".github/agents/metaopt-hydrate-state.agent.md",
+            ".github/agents/metaopt-background-control.agent.md",
+            ".github/agents/metaopt-select-design.agent.md",
+            ".github/agents/metaopt-local-execution-control.agent.md",
+            ".github/agents/metaopt-remote-execution-control.agent.md",
+            ".github/agents/metaopt-iteration-close-control.agent.md",
+        ]
+        for manifest_path in control_agent_manifests:
+            content = _read_text(manifest_path)
+            command_blocks = re.findall(r"```bash\n(.*?)```", content, flags=re.DOTALL)
+            self.assertTrue(command_blocks, f"{manifest_path} must include executable handoff commands")
+            for command in command_blocks:
+                self.assertNotIn("--apply-state", command, f"{manifest_path} agent command must be emit-only")
+
     # ------------------------------------------------------------------
     # Preflight dependency documentation consistency
     # ------------------------------------------------------------------

@@ -183,6 +183,7 @@ class SelectDesignAgentTests(unittest.TestCase):
                 str(results_dir),
                 "--output",
                 str(output_path),
+                "--apply-state",
             ],
             cwd=ROOT,
             text=True,

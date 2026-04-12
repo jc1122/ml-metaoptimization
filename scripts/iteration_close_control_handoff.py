@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from copy import deepcopy
 import json
+import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,6 +33,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--worker-results-dir", required=True)
     parser.add_argument("--executor-events-dir", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument(
+        "--apply-state",
+        action="store_true",
+        default=False,
+        help="Test/orchestrator harness mode: apply the computed state_patch to state-path.",
+    )
     return parser.parse_args()
 
 
@@ -591,6 +598,8 @@ def _quiesce_slots(state_path: Path, executor_events_dir: Path, output_path: Pat
 
 def main() -> int:
     args = _parse_args()
+    if args.apply_state:
+        os.environ["METAOPT_APPLY_STATE_HANDOFF"] = "1"
     load_handoff, _, error = _load_inputs(Path(args.load_handoff), Path(args.state_path))
     if error is not None:
         payload = _runtime_error(

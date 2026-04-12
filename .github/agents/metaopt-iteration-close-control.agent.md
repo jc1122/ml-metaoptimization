@@ -26,6 +26,7 @@ You run in three modes:
 - You are the only component allowed to update proposal carry-over semantics, `selected_experiment` closure, iteration counters, `last_iteration_report`, and continue-vs-complete routing during Steps 12/13.
 - Your staged handoff output must conform to the universal control-handoff envelope defined in `references/control-protocol.md`.
 - `pre_launch_directives` and `post_launch_directives` are the authoritative executor input when executor-side work is needed; the orchestrator executes each list mechanically in order. The orchestrator must not infer missing executor work from prose, summaries, or legacy fields.
+- Do not persist `.ml-metaopt/state.json`; run the handoff script in its default emit-only mode and do not pass `--apply-state`.
 
 # Execution
 

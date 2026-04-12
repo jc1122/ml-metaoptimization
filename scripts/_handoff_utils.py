@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
@@ -244,7 +245,9 @@ def persist_state_handoff(
         payload["state_patch"],
         payload.get("recommended_next_machine_state"),
     )
-    write_json(state_path, persisted_state)
+    payload["state_applied"] = os.environ.get("METAOPT_APPLY_STATE_HANDOFF") == "1"
+    if payload["state_applied"]:
+        write_json(state_path, persisted_state)
     return persisted_state
 
 

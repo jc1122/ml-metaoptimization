@@ -139,6 +139,7 @@ class BackgroundControlAgentTests(unittest.TestCase):
                 str(slot_events_dir),
                 "--output",
                 str(output_path),
+                "--apply-state",
             ],
             cwd=ROOT,
             text=True,

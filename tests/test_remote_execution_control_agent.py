@@ -193,6 +193,7 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
                 str(queue_results_dir),
                 "--output",
                 str(output_path),
+                "--apply-state",
             ],
             cwd=ROOT,
             text=True,

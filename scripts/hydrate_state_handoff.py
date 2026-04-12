@@ -25,7 +25,7 @@ AGENTS_HOOK = """<!-- ml-metaoptimization:begin -->
 `.ml-metaopt/state.json` exists. Inspect its `status`.
 If `status` is `RUNNING`, invoke the `ml-metaoptimization` skill immediately,
 resume from `machine_state`, and do not ask the user for campaign inputs.
-If `status` is terminal, remove this block, stop auto-resuming, and surface `next_action` to the operator without executing from it.
+If `status` is terminal, invoke the `ml-metaoptimization` skill once so terminal cleanup can run through control-agent directives; do not execute `next_action`.
 <!-- ml-metaoptimization:end -->
 """
 AGENTS_HOOK_RE = re.compile(
@@ -64,6 +64,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--agents-path", required=True)
     parser.add_argument("--skills-manifest", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument(
+        "--apply-state",
+        action="store_true",
+        default=False,
+        help="Test/orchestrator harness mode: apply the computed state_patch to state-path.",
+    )
     return parser.parse_args()
 
 
@@ -146,11 +152,6 @@ def _probe_skills(manifest_path: Path) -> dict[str, Any]:
     }
 
 
-def _strip_hook(content: str) -> str:
-    updated = AGENTS_HOOK_RE.sub("", content)
-    return updated.strip() + ("\n" if updated.strip() else "")
-
-
 def _ensure_hook(path: Path) -> str:
     if not path.exists():
         path.write_text(AGENTS_HOOK, encoding="utf-8")
@@ -164,15 +165,12 @@ def _ensure_hook(path: Path) -> str:
     return "updated"
 
 
-def _remove_hook(path: Path) -> str:
-    if not path.exists():
-        return "unchanged"
-    content = path.read_text(encoding="utf-8")
-    updated = _strip_hook(content)
-    if updated == content:
-        return "unchanged"
-    path.write_text(updated, encoding="utf-8")
-    return "removed"
+def _remove_hook_directive() -> dict[str, str]:
+    return {
+        "action": "remove_agents_hook",
+        "reason": "terminal or blocked hydrate outcome; orchestration hook cleanup is orchestrator-owned",
+        "agents_path": "AGENTS.md",
+    }
 
 
 def _validate_existing_state(state: Any) -> dict[str, Any]:
@@ -278,7 +276,6 @@ def build_handoff(
             )
 
         if existing_state["campaign_identity_hash"] != load_handoff["campaign_identity_hash"]:
-            agents_action = _remove_hook(agents_path)
             payload = {
                 "schema_version": 1,
                 "state_path": str(state_path),
@@ -298,8 +295,10 @@ def build_handoff(
                     "missing_skills": runtime_capabilities["missing_skills"],
                     "degraded_lanes": runtime_capabilities["degraded_lanes"],
                 },
-                "agents_hook_action": agents_action,
+                "agents_hook_action": "remove_directive_emitted",
                 "state_patch": None,
+                "pre_launch_directives": [_remove_hook_directive()],
+                "post_launch_directives": [],
                 "warnings": warnings,
                 "summary": "state identity mismatch detected; preserved stale state and blocked resume",
             }
@@ -333,7 +332,12 @@ def build_handoff(
         state["active_slots"] = []
         outcome = "blocked_config"
 
-    agents_action = _ensure_hook(agents_path) if state["status"] == "RUNNING" else _remove_hook(agents_path)
+    if state["status"] == "RUNNING":
+        agents_action = _ensure_hook(agents_path)
+        pre_launch_directives: list[dict[str, str]] = []
+    else:
+        agents_action = "remove_directive_emitted"
+        pre_launch_directives = [_remove_hook_directive()]
 
     payload = {
         "schema_version": 1,
@@ -350,25 +354,28 @@ def build_handoff(
         "recovery_action": None,
         "runtime_capabilities": state["runtime_capabilities"],
         "agents_hook_action": agents_action,
+        "pre_launch_directives": pre_launch_directives,
+        "post_launch_directives": [],
         "warnings": warnings,
         "summary": (
             "fresh orchestrator state initialized"
             if outcome == "initialized"
             else "existing orchestrator state resumed"
             if outcome == "resumed"
-            else f"existing state is terminal ({state['status']}); hook removed"
+            else f"existing state is terminal ({state['status']}); hook removal directive emitted"
             if outcome == "terminal"
-            else "required skill missing; wrote blocked state"
+            else "required skill missing; blocked-state handoff emitted"
         ),
     }
     persist_state_handoff(state_path, previous_state, state, payload, control_agent=_CONTROL_AGENT)
-    state_written = True
-    payload["state_written"] = True
+    payload["state_written"] = payload["state_applied"]
     return emit_handoff(output_path, payload, handoff_type=_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
 
 def main() -> int:
     args = _parse_args()
+    if args.apply_state:
+        os.environ["METAOPT_APPLY_STATE_HANDOFF"] = "1"
     payload = build_handoff(
         load_handoff_path=Path(args.load_handoff),
         state_path=Path(args.state_path),

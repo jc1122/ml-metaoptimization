@@ -62,44 +62,44 @@ class NormalizeLaunchRequestsTests(unittest.TestCase):
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["preferred_model"], "claude-sonnet-4")
 
-    def test_background_slot_accepts_maintenance_mode(self) -> None:
+    def test_background_slot_rejects_analysis_mode(self) -> None:
         request = {
             "slot_id": "bg-1",
             "slot_class": "background",
-            "mode": "maintenance",
-            "worker_kind": "skill",
-            "worker_ref": "repo-audit-refactor-optimize",
+            "mode": "analysis",
+            "worker_kind": "custom_agent",
+            "worker_ref": "metaopt-ideation-worker",
             "model_class": "general_worker",
             "task_file": ".ml-metaopt/tasks/bg-1.md",
             "result_file": ".ml-metaopt/worker-results/bg-1.json",
         }
-        result = normalize_launch_requests([request])
-        self.assertEqual(len(result), 1)
+        with self.assertRaises(ValueError, msg="background slot must reject analysis mode"):
+            normalize_launch_requests([request])
 
     def test_strong_reasoner_gets_preferred_model(self) -> None:
         request = {
-            "slot_id": "sel-1",
+            "slot_id": "ana-1",
             "slot_class": "auxiliary",
-            "mode": "selection",
+            "mode": "analysis",
             "worker_kind": "custom_agent",
-            "worker_ref": "metaopt-selection-worker",
+            "worker_ref": "metaopt-analysis-worker",
             "model_class": "strong_reasoner",
-            "task_file": ".ml-metaopt/tasks/selection.md",
-            "result_file": ".ml-metaopt/worker-results/selection.json",
+            "task_file": ".ml-metaopt/tasks/analysis.md",
+            "result_file": ".ml-metaopt/worker-results/analysis.json",
         }
         result = normalize_launch_requests([request])
         self.assertEqual(result[0]["preferred_model"], "claude-opus-4.6")
 
-    def test_strong_coder_gets_preferred_model(self) -> None:
+    def test_analysis_worker_gets_preferred_model(self) -> None:
         request = {
-            "slot_id": "mat-1",
+            "slot_id": "ana-1",
             "slot_class": "auxiliary",
-            "mode": "materialization",
+            "mode": "analysis",
             "worker_kind": "custom_agent",
-            "worker_ref": "metaopt-materialization-worker",
-            "model_class": "strong_coder",
-            "task_file": ".ml-metaopt/tasks/materialization.md",
-            "result_file": ".ml-metaopt/worker-results/materialization.json",
+            "worker_ref": "metaopt-analysis-worker",
+            "model_class": "strong_reasoner",
+            "task_file": ".ml-metaopt/tasks/analysis.md",
+            "result_file": ".ml-metaopt/worker-results/analysis.json",
         }
         result = normalize_launch_requests([request])
         self.assertEqual(result[0]["preferred_model"], "claude-opus-4.6")
@@ -172,46 +172,47 @@ class NormalizeLaunchRequestsTests(unittest.TestCase):
 
     def test_mode_requires_slot_class(self) -> None:
         request = {
-            "worker_ref": "metaopt-selection-worker",
+            "worker_ref": "metaopt-analysis-worker",
             "model_class": "strong_reasoner",
-            "mode": "selection",
-            "task_file": ".ml-metaopt/tasks/selection.md",
-            "result_file": ".ml-metaopt/worker-results/selection.json",
+            "mode": "analysis",
+            "task_file": ".ml-metaopt/tasks/analysis.md",
+            "result_file": ".ml-metaopt/worker-results/analysis.json",
         }
         with self.assertRaisesRegex(ValueError, "slot_class is required"):
             normalize_launch_requests([request])
 
     def test_slot_class_requires_mode(self) -> None:
         request = {
-            "worker_ref": "metaopt-selection-worker",
+            "worker_ref": "metaopt-analysis-worker",
             "model_class": "strong_reasoner",
             "slot_class": "auxiliary",
-            "task_file": ".ml-metaopt/tasks/selection.md",
-            "result_file": ".ml-metaopt/worker-results/selection.json",
+            "task_file": ".ml-metaopt/tasks/analysis.md",
+            "result_file": ".ml-metaopt/worker-results/analysis.json",
         }
         with self.assertRaisesRegex(ValueError, "mode is required"):
             normalize_launch_requests([request])
 
     def test_worker_mode_mismatch_rejected(self) -> None:
+        # metaopt-ideation-worker in auxiliary slot: wrong slot_class for this worker
         request = {
-            "worker_ref": "metaopt-selection-worker",
-            "model_class": "strong_reasoner",
+            "worker_ref": "metaopt-ideation-worker",
+            "model_class": "general_worker",
             "slot_class": "auxiliary",
-            "mode": "design",
-            "task_file": ".ml-metaopt/tasks/selection.md",
-            "result_file": ".ml-metaopt/worker-results/selection.json",
+            "mode": "analysis",
+            "task_file": ".ml-metaopt/tasks/ideation.md",
+            "result_file": ".ml-metaopt/worker-results/ideation.json",
         }
-        with self.assertRaisesRegex(ValueError, "requires one of"):
+        with self.assertRaises(ValueError):
             normalize_launch_requests([request])
 
     def test_worker_model_class_mismatch_rejected(self) -> None:
         request = {
-            "worker_ref": "metaopt-materialization-worker",
-            "model_class": "strong_reasoner",
+            "worker_ref": "metaopt-analysis-worker",
+            "model_class": "general_worker",
             "slot_class": "auxiliary",
-            "mode": "materialization",
-            "task_file": ".ml-metaopt/tasks/materialization.md",
-            "result_file": ".ml-metaopt/worker-results/materialization.json",
+            "mode": "analysis",
+            "task_file": ".ml-metaopt/tasks/analysis.md",
+            "result_file": ".ml-metaopt/worker-results/analysis.json",
         }
         with self.assertRaisesRegex(ValueError, "model classes"):
             normalize_launch_requests([request])
@@ -227,15 +228,14 @@ class ValidateExecutorPolicyTests(unittest.TestCase):
     def test_allowed_action_passes(self) -> None:
         directives = [
             {
-                "action": "queue_op",
-                "reason": "submit batch",
-                "operation": "enqueue",
-                "command": "enqueue batch",
-                "batch_id": "batch-1",
-                "result_file": ".ml-metaopt/queue-results/enqueue-batch-1.json",
+                "action": "launch_sweep",
+                "reason": "submit sweep",
+                "sweep_config": {"method": "bayes", "parameters": {}},
+                "sky_task_spec": {"accelerator": "A100:1"},
+                "result_file": ".ml-metaopt/worker-results/launch-sweep-iter-1.json",
             }
         ]
-        result = validate_executor_policy("metaopt-remote-execution-control", "PLAN_REMOTE_BATCH", directives)
+        result = validate_executor_policy("metaopt-remote-execution-control", "LAUNCH_SWEEP", directives)
         self.assertEqual(len(result), 1)
 
     def test_remote_control_rejects_ssh_command(self) -> None:
@@ -250,18 +250,14 @@ class ValidateExecutorPolicyTests(unittest.TestCase):
 
     def test_all_known_actions_pass(self) -> None:
         sample_fields = {
-            "apply_patch_artifacts": {"result_file": ".ml-metaopt/worker-results/materialization.json", "target_worktree": ".ml-metaopt/worktrees/integration"},
-            "cancel_slots": {"slot_ids": ["bg-1"]},
+            "launch_sweep": {"sweep_config": {"method": "bayes", "parameters": {}}, "sky_task_spec": {"accelerator": "A100:1"}, "result_file": ".ml-metaopt/worker-results/launch-sweep-iter-1.json"},
+            "poll_sweep": {"sweep_id": "wandb-sweep-abc123", "sky_job_ids": ["sky-job-001"], "result_file": ".ml-metaopt/worker-results/poll-sweep-iter-1.json"},
+            "run_smoke_test": {"command": "python train.py --smoke", "result_file": ".ml-metaopt/worker-results/smoke-test-iter-1.json"},
+            "remove_agents_hook": {"agents_path": "AGENTS.md"},
             "delete_state_file": {"state_path": ".ml-metaopt/state.json"},
-            "drain_slots": {"drain_window_seconds": 60},
             "emit_final_report": {"report_type": "final"},
             "emit_iteration_report": {"report_type": "iteration", "iteration": 3},
-            "package_code_artifact": {"worktree": ".ml-metaopt/worktrees/integration", "code_roots": ["src"], "output_event_path": ".ml-metaopt/executor-events/package-code.json"},
-            "package_data_manifest": {"worktree": ".ml-metaopt/worktrees/integration", "data_roots": ["data"], "output_event_path": ".ml-metaopt/executor-events/package-data.json"},
-            "queue_op": {"operation": "enqueue", "command": "enqueue batch", "batch_id": "batch-1", "result_file": ".ml-metaopt/queue-results/enqueue-batch-1.json"},
-            "remove_agents_hook": {"agents_path": "AGENTS.md"},
-            "run_sanity": {"worktree": ".ml-metaopt/worktrees/integration", "command": "pytest -q", "max_duration_seconds": 600, "output_event_path": ".ml-metaopt/executor-events/sanity.json"},
-            "write_manifest": {"manifest_path": ".ml-metaopt/artifacts/manifests/batch.json", "batch_id": "batch-1"},
+            "none": {},
         }
         for action in sorted(ALLOWED_DIRECTIVE_ACTIONS):
             directives = [{"action": action, "reason": f"testing {action}", **sample_fields[action]}]
@@ -279,9 +275,9 @@ class ValidateExecutorPolicyTests(unittest.TestCase):
             validate_executor_policy("metaopt-remote-execution-control", "PLAN_REMOTE_BATCH", directives)
 
     def test_missing_directive_field_rejected(self) -> None:
-        directives = [{"action": "queue_op", "reason": "submit batch", "operation": "enqueue", "command": "enqueue batch", "batch_id": "batch-1"}]
+        directives = [{"action": "launch_sweep", "reason": "submit sweep", "sweep_config": {"method": "bayes", "parameters": {}}, "sky_task_spec": {"accelerator": "A100:1"}}]
         with self.assertRaisesRegex(ValueError, "result_file"):
-            validate_executor_policy("metaopt-remote-execution-control", "PLAN_REMOTE_BATCH", directives)
+            validate_executor_policy("metaopt-remote-execution-control", "LAUNCH_SWEEP", directives)
 
 
 class ConstantsSanityTests(unittest.TestCase):
@@ -290,11 +286,18 @@ class ConstantsSanityTests(unittest.TestCase):
     def test_allowed_workers_contains_known_agents(self) -> None:
         expected = {
             "metaopt-ideation-worker",
-            "metaopt-materialization-worker",
-            "metaopt-diagnosis-worker",
             "metaopt-analysis-worker",
+            "skypilot-wandb-worker",
         }
-        self.assertTrue(expected.issubset(ALLOWED_WORKERS))
+        self.assertEqual(ALLOWED_WORKERS, expected)
+
+    def test_allowed_directive_actions_contains_v4_actions(self) -> None:
+        expected = {
+            "launch_sweep", "poll_sweep", "run_smoke_test",
+            "remove_agents_hook", "delete_state_file",
+            "emit_final_report", "emit_iteration_report", "none",
+        }
+        self.assertEqual(ALLOWED_DIRECTIVE_ACTIONS, expected)
 
     def test_preferred_model_strong_reasoner(self) -> None:
         self.assertEqual(PREFERRED_MODEL_BY_CLASS["strong_reasoner"], "claude-opus-4.6")
@@ -330,37 +333,74 @@ class ConstantsSanityTests(unittest.TestCase):
             "rollover is inline dispatch and must not appear as an auxiliary slot mode",
         )
 
-    def test_rollover_launch_request_without_slot_class_is_accepted(self) -> None:
-        """Rollover inline dispatch: a launch_requests entry without slot_class or mode
-        must be accepted by normalize_launch_requests and receive preferred_model.
-        """
+
+class ValidateExecutorPolicyV4Tests(unittest.TestCase):
+
+    def test_launch_sweep_passes(self) -> None:
+        directives = [{
+            "action": "launch_sweep",
+            "reason": "launch WandB sweep on Vast.ai",
+            "sweep_config": {"method": "bayes", "parameters": {}},
+            "sky_task_spec": {"accelerator": "A100:1"},
+            "result_file": ".ml-metaopt/worker-results/launch-sweep-iter-2.json",
+        }]
+        result = validate_executor_policy("metaopt-remote-execution-control", "LAUNCH_SWEEP", directives)
+        self.assertEqual(len(result), 1)
+
+    def test_poll_sweep_passes(self) -> None:
+        directives = [{
+            "action": "poll_sweep",
+            "reason": "check sweep status and watchdog",
+            "sweep_id": "wandb-sweep-abc123",
+            "sky_job_ids": ["sky-job-001"],
+            "result_file": ".ml-metaopt/worker-results/poll-sweep-iter-2.json",
+        }]
+        result = validate_executor_policy("metaopt-remote-execution-control", "WAIT_FOR_SWEEP", directives)
+        self.assertEqual(len(result), 1)
+
+    def test_run_smoke_test_passes(self) -> None:
+        directives = [{
+            "action": "run_smoke_test",
+            "reason": "60s crash-detection gate before GPU spend",
+            "command": "python train.py --smoke",
+            "result_file": ".ml-metaopt/worker-results/smoke-test-iter-2.json",
+        }]
+        result = validate_executor_policy("metaopt-remote-execution-control", "LOCAL_SANITY", directives)
+        self.assertEqual(len(result), 1)
+
+    def test_queue_op_blocked(self) -> None:
+        directives = [{"action": "queue_op", "reason": "v3 compat"}]
+        with self.assertRaises(ValueError):
+            validate_executor_policy("any-agent", "SOME_PHASE", directives)
+
+    def test_apply_patch_artifacts_blocked(self) -> None:
+        directives = [{"action": "apply_patch_artifacts", "reason": "v3 compat"}]
+        with self.assertRaises(ValueError):
+            validate_executor_policy("any-agent", "SOME_PHASE", directives)
+
+    def test_skypilot_worker_rejected_in_slot_launch_requests(self) -> None:
         request = {
-            "worker_ref": "metaopt-rollover-worker",
+            "worker_ref": "skypilot-wandb-worker",
+            "model_class": "general_worker",
+            "task_file": ".ml-metaopt/tasks/sky.md",
+            "result_file": ".ml-metaopt/worker-results/sky.json",
+        }
+        with self.assertRaises(ValueError, msg="skypilot-wandb-worker must not appear in launch_requests"):
+            normalize_launch_requests([request])
+
+    def test_analysis_worker_in_auxiliary_slot_accepted(self) -> None:
+        request = {
+            "slot_id": "aux-1",
+            "slot_class": "auxiliary",
+            "mode": "analysis",
+            "worker_ref": "metaopt-analysis-worker",
             "model_class": "strong_reasoner",
-            "task_file": ".ml-metaopt/tasks/rollover-iter-1.md",
-            "result_file": ".ml-metaopt/worker-results/rollover-iter-1.json",
+            "task_file": ".ml-metaopt/tasks/analysis-iter-2.md",
+            "result_file": ".ml-metaopt/worker-results/analysis-iter-2.json",
         }
         result = normalize_launch_requests([request])
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["preferred_model"], "claude-opus-4.6")
-        self.assertNotIn("slot_class", result[0])
-        self.assertNotIn("mode", result[0])
-
-    def test_rollover_launch_request_with_auxiliary_slot_is_rejected(self) -> None:
-        """Dispatching rollover as a slot-based auxiliary worker must be rejected.
-
-        Only inline dispatch (no slot_class) is valid for rollover.
-        """
-        request = {
-            "slot_class": "auxiliary",
-            "mode": "rollover",
-            "worker_ref": "metaopt-rollover-worker",
-            "model_class": "strong_reasoner",
-            "task_file": ".ml-metaopt/tasks/rollover-iter-1.md",
-            "result_file": ".ml-metaopt/worker-results/rollover-iter-1.json",
-        }
-        with self.assertRaises(ValueError, msg="rollover must not be dispatched as an auxiliary slot"):
-            normalize_launch_requests([request])
 
 
 if __name__ == "__main__":

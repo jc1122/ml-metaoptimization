@@ -17,7 +17,7 @@
       "worker_ref": "metaopt-ideation-worker",
       "classification": "required",
       "probe_paths": [
-        "/home/jakub/projects/ml-metaoptimization/.github/agents/metaopt-ideation-worker.agent.md"
+        ".github/agents/metaopt-ideation-worker.agent.md"
       ]
     },
     {
@@ -27,7 +27,7 @@
       "worker_ref": "metaopt-analysis-worker",
       "classification": "required",
       "probe_paths": [
-        "/home/jakub/projects/ml-metaoptimization/.github/agents/metaopt-analysis-worker.agent.md"
+        ".github/agents/metaopt-analysis-worker.agent.md"
       ]
     }
   ]

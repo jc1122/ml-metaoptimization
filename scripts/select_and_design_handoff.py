@@ -14,11 +14,9 @@ from _handoff_utils import (
     read_json,
     write_json,
 )
-from _guardrail_utils import check_lane_drift
 
 _CONTROL_AGENT = "metaopt-select-design"
-_PLAN_HANDOFF_TYPE = "select_design.plan_select_experiment"
-_GATE_HANDOFF_TYPE = "select_design.gate_select_and_plan_design"
+_PLAN_HANDOFF_TYPE = "select_design.plan_select_design"
 _FINALIZE_HANDOFF_TYPE = "select_design.finalize_select_design"
 
 
@@ -28,8 +26,7 @@ def _parse_args() -> argparse.Namespace:
         "--mode",
         required=True,
         choices=(
-            "plan_select_experiment",
-            "gate_select_and_plan_design",
+            "plan_select_design",
             "finalize_select_design",
         ),
     )
@@ -47,14 +44,6 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _read_json(path: Path) -> Any:
-    return read_json(path)
-
-
-def _write_json(path: Path, payload: dict[str, Any]) -> None:
-    write_json(path, payload)
-
-
 def _runtime_error(
     output_path: Path,
     handoff_type: str,
@@ -67,14 +56,8 @@ def _runtime_error(
     payload = {
         "schema_version": 1,
         "proposal_id": proposal_id,
-        "worker_kind": None,
-        "worker_ref": None,
-        "task_file": None,
-        "result_file": None,
         "recommended_next_machine_state": None,
         "recovery_action": recovery_action,
-        "selection_rationale": None,
-        "design_summary": None,
         "state_patch": None,
         "warnings": warnings or [],
         "summary": summary,
@@ -84,7 +67,7 @@ def _runtime_error(
 
 def _load_inputs(load_handoff_path: Path, state_path: Path) -> tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None]:
     try:
-        load_handoff = _read_json(load_handoff_path)
+        load_handoff = read_json(load_handoff_path)
     except Exception as exc:
         return None, None, {
             "action": "repair or replace load_campaign.latest.json",
@@ -99,7 +82,7 @@ def _load_inputs(load_handoff_path: Path, state_path: Path) -> tuple[dict[str, A
         }
 
     try:
-        state = _read_json(state_path)
+        state = read_json(state_path)
     except Exception as exc:
         return load_handoff, None, {
             "action": "repair or replace .ml-metaopt/state.json",
@@ -117,24 +100,17 @@ def _load_inputs(load_handoff_path: Path, state_path: Path) -> tuple[dict[str, A
 
 def _selection_task_paths(iteration: int) -> tuple[str, str]:
     return (
-        str(Path(".ml-metaopt") / "tasks" / f"select-experiment-iter-{iteration}.md"),
-        str(Path(".ml-metaopt") / "worker-results" / f"select-experiment-iter-{iteration}.json"),
-    )
-
-
-def _design_task_paths(iteration: int) -> tuple[str, str]:
-    return (
-        str(Path(".ml-metaopt") / "tasks" / f"design-experiment-iter-{iteration}.md"),
-        str(Path(".ml-metaopt") / "worker-results" / f"design-experiment-iter-{iteration}.json"),
+        str(Path(".ml-metaopt") / "tasks" / f"select-design-iter-{iteration}.md"),
+        str(Path(".ml-metaopt") / "worker-results" / f"select-design-iter-{iteration}.json"),
     )
 
 
 def _selection_task_markdown(load_handoff: dict[str, Any], state: dict[str, Any], result_file: str) -> str:
     objective = state["objective_snapshot"]
-    baseline = state["baseline"]
+    baseline = state.get("baseline") or {}
     return "\n".join(
         [
-            f"# Selection Task: iteration-{state['current_iteration']}",
+            f"# Select & Design Task: iteration-{state['current_iteration']}",
             "",
             "- Worker Kind: `custom_agent`",
             "- Worker Ref: `metaopt-selection-worker`",
@@ -142,112 +118,43 @@ def _selection_task_markdown(load_handoff: dict[str, Any], state: dict[str, Any]
             f"- Result File: `{result_file}`",
             "",
             "## Campaign Context",
-            f"- Goal: `{load_handoff.get('goal', '')}`",
             f"- Metric: `{objective.get('metric', '')}`",
             f"- Direction: `{objective.get('direction', '')}`",
-            f"- Aggregation: `{json.dumps(objective.get('aggregation', {}), sort_keys=True)}`",
             f"- Improvement Threshold: `{objective.get('improvement_threshold')}`",
             "",
             "## Baseline Context",
-            f"- Aggregate Baseline: `{baseline.get('aggregate')}`",
-            f"- Per-Dataset Baselines: `{json.dumps(baseline.get('by_dataset', {}), sort_keys=True)}`",
+            f"- Baseline: `{json.dumps(baseline, sort_keys=True)}`",
             "",
             "## Selection Inputs",
             f"- Frozen Current Proposals: `{json.dumps(state.get('current_proposals', []), sort_keys=True)}`",
-            f"- Proposal Policy: `{json.dumps(load_handoff.get('proposal_policy', {}), sort_keys=True)}`",
             f"- Key Learnings: `{json.dumps(state.get('key_learnings', []), sort_keys=True)}`",
-            f"- Completed Experiments: `{json.dumps(state.get('completed_experiments', []), sort_keys=True)}`",
             "",
             "Execute only this assigned scope. Do not make control-plane decisions.",
-            "Do not launch subagents, generate new proposals, or mutate `.ml-metaopt/state.json`.",
-            "Choose exactly one winner from the frozen proposal pool and write one structured JSON result file.",
+            "Choose exactly one winner from the frozen proposal pool.",
+            "Produce a WandB sweep_config for the selected proposal.",
             "",
             "Expected JSON fields:",
             "- `winning_proposal`",
+            "- `sweep_config`",
             "- `ranking_rationale`",
-            "- optional `ranked_candidates`",
         ]
     ) + "\n"
 
 
-def _design_task_markdown(load_handoff: dict[str, Any], state: dict[str, Any], result_file: str) -> str:
-    objective = state["objective_snapshot"]
-    baseline = state["baseline"]
-    winning_proposal = state["selected_experiment"]["proposal_snapshot"]
-    return "\n".join(
-        [
-            f"# Design Task: iteration-{state['current_iteration']}",
-            "",
-            "- Worker Kind: `custom_agent`",
-            "- Worker Ref: `metaopt-design-worker`",
-            "- Model Class: `strong_reasoner`",
-            f"- Result File: `{result_file}`",
-            "",
-            "## Campaign Context",
-            f"- Goal: `{load_handoff.get('goal', '')}`",
-            f"- Metric: `{objective.get('metric', '')}`",
-            f"- Direction: `{objective.get('direction', '')}`",
-            f"- Aggregation: `{json.dumps(objective.get('aggregation', {}), sort_keys=True)}`",
-            f"- Improvement Threshold: `{objective.get('improvement_threshold')}`",
-            "",
-            "## Winning Proposal",
-            f"- Proposal: `{json.dumps(winning_proposal, sort_keys=True)}`",
-            f"- Selection Rationale: `{state['selected_experiment'].get('selection_rationale', '')}`",
-            "",
-            "## Execution Inputs",
-            f"- Datasets: `{json.dumps(load_handoff.get('datasets', []), sort_keys=True)}`",
-            f"- Execution: `{json.dumps(load_handoff.get('execution', {}), sort_keys=True)}`",
-            f"- Remote Queue: `{json.dumps(load_handoff.get('remote_queue', {}), sort_keys=True)}`",
-            f"- Baseline: `{json.dumps(baseline, sort_keys=True)}`",
-            f"- Key Learnings: `{json.dumps(state.get('key_learnings', []), sort_keys=True)}`",
-            f"- Completed Experiments: `{json.dumps(state.get('completed_experiments', []), sort_keys=True)}`",
-            "",
-            "Execute only this assigned scope. Do not make control-plane decisions.",
-            "Do not launch subagents, generate code, or mutate `.ml-metaopt/state.json`.",
-            "Write one structured JSON experiment design result file.",
-            "",
-            "Expected JSON fields:",
-            "- `proposal_id`",
-            "- `experiment_name`",
-            "- `description`",
-            "- `code_changes`",
-            "- `search_space`",
-            "- `dataset_plan`",
-            "- `artifact_expectations`",
-            "- `success_criteria`",
-            "- `execution_assumptions`",
-            "- `risks`",
-        ]
-    ) + "\n"
-
-
-def _validate_winning_proposal(state: dict[str, Any], selection_result: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
-    winning_proposal = selection_result.get("winning_proposal")
-    if not isinstance(winning_proposal, dict):
-        return None, "selection result missing winning_proposal"
-    proposal_id = winning_proposal.get("proposal_id")
-    if not isinstance(proposal_id, str) or not proposal_id:
-        return None, "winning proposal missing proposal_id"
-    for proposal in state.get("current_proposals", []):
-        if proposal.get("proposal_id") == proposal_id:
-            return proposal, None
-    return None, "winning proposal does not match frozen current_proposals"
-
-
-def _plan_select_experiment(
+def _plan_select_design(
     load_handoff: dict[str, Any],
     state_path: Path,
     tasks_dir: Path,
     output_path: Path,
 ) -> dict[str, Any]:
-    state = _read_json(state_path)
+    state = read_json(state_path)
     previous_state = deepcopy(state)
-    if state.get("selected_experiment") is not None:
+    if state.get("selected_sweep") is not None:
         return _runtime_error(
             output_path,
             _PLAN_HANDOFF_TYPE,
-            "clear stale selected_experiment before re-running selection",
-            "selected_experiment already populated",
+            "clear stale selected_sweep before re-running selection",
+            "selected_sweep already populated",
         )
     if not state.get("current_proposals"):
         return _runtime_error(
@@ -263,25 +170,17 @@ def _plan_select_experiment(
     task_path.write_text(_selection_task_markdown(load_handoff, state, result_file), encoding="utf-8")
 
     state["proposal_cycle"]["current_pool_frozen"] = True
-    state["machine_state"] = "SELECT_EXPERIMENT"
     state["next_action"] = "run selection worker"
 
     payload = {
         "schema_version": 1,
         "proposal_id": None,
-        "worker_kind": "custom_agent",
-        "worker_ref": "metaopt-selection-worker",
-        "task_file": task_file,
-        "result_file": result_file,
-        "recommended_next_machine_state": "SELECT_EXPERIMENT",
-        "selection_rationale": None,
-        "design_summary": None,
+        "recommended_next_machine_state": "SELECT_AND_DESIGN_SWEEP",
         "launch_requests": [
             {
                 "slot_class": "auxiliary",
-                "mode": "selection",
-                "worker_kind": "custom_agent",
-                "worker_ref": "metaopt-selection-worker",
+                "mode": "analysis",
+                "worker_ref": "metaopt-analysis-worker",
                 "model_class": "strong_reasoner",
                 "task_file": task_file,
                 "result_file": result_file,
@@ -294,21 +193,33 @@ def _plan_select_experiment(
     return emit_handoff(output_path, payload, handoff_type=_PLAN_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
 
-def _gate_select_and_plan_design(
+def _validate_winning_proposal(state: dict[str, Any], selection_result: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
+    winning_proposal = selection_result.get("winning_proposal")
+    if not isinstance(winning_proposal, dict):
+        return None, "selection result missing winning_proposal"
+    proposal_id = winning_proposal.get("proposal_id")
+    if not isinstance(proposal_id, str) or not proposal_id:
+        return None, "winning proposal missing proposal_id"
+    for proposal in state.get("current_proposals", []):
+        if proposal.get("proposal_id") == proposal_id:
+            return proposal, None
+    return None, "winning proposal does not match frozen current_proposals"
+
+
+def _finalize_select_design(
     load_handoff: dict[str, Any],
     state_path: Path,
-    tasks_dir: Path,
     worker_results_dir: Path,
     output_path: Path,
 ) -> dict[str, Any]:
-    state = _read_json(state_path)
+    state = read_json(state_path)
     previous_state = deepcopy(state)
-    if state.get("selected_experiment") is not None:
+    if state.get("selected_sweep") is not None:
         return _runtime_error(
             output_path,
-            _GATE_HANDOFF_TYPE,
-            "clear stale selected_experiment before re-running selection",
-            "selected_experiment already populated",
+            _FINALIZE_HANDOFF_TYPE,
+            "clear stale selected_sweep before re-running",
+            "selected_sweep already populated",
         )
 
     _, selection_result_file = _selection_task_paths(state["current_iteration"])
@@ -316,17 +227,17 @@ def _gate_select_and_plan_design(
     if not selection_result_path.exists():
         return _runtime_error(
             output_path,
-            _GATE_HANDOFF_TYPE,
-            "stage selection worker result before gating",
+            _FINALIZE_HANDOFF_TYPE,
+            "stage selection worker result before finalizing",
             "selection result missing",
         )
 
-    selection_result = _read_json(selection_result_path)
+    selection_result = read_json(selection_result_path)
     if not isinstance(selection_result, dict):
         return _runtime_error(
             output_path,
-            _GATE_HANDOFF_TYPE,
-            "repair selection worker result and re-run gating",
+            _FINALIZE_HANDOFF_TYPE,
+            "repair selection worker result and re-run",
             "selection result invalid",
         )
 
@@ -334,159 +245,34 @@ def _gate_select_and_plan_design(
     if error:
         return _runtime_error(
             output_path,
-            _GATE_HANDOFF_TYPE,
-            "repair selection worker result and re-run gating",
+            _FINALIZE_HANDOFF_TYPE,
+            "repair selection worker result and re-run",
             error,
         )
 
-    selection_rationale = selection_result.get("ranking_rationale")
-    if not isinstance(selection_rationale, str) or not selection_rationale:
+    sweep_config = selection_result.get("sweep_config")
+    if not isinstance(sweep_config, dict) or not sweep_config:
         return _runtime_error(
             output_path,
-            _GATE_HANDOFF_TYPE,
-            "repair selection worker result and re-run gating",
-            "selection result missing ranking_rationale",
+            _FINALIZE_HANDOFF_TYPE,
+            "repair selection worker result: sweep_config missing",
+            "selection result missing sweep_config",
             proposal_id=winning_proposal["proposal_id"],
         )
 
-    state["selected_experiment"] = {
+    state["selected_sweep"] = {
         "proposal_id": winning_proposal["proposal_id"],
-        "proposal_snapshot": winning_proposal,
-        "selection_rationale": selection_rationale,
-        "sanity_attempts": 0,
-        "design": None,
-        "diagnosis_history": [],
-        "analysis_summary": None,
+        "sweep_config": sweep_config,
     }
     state["proposal_cycle"]["current_pool_frozen"] = True
-    state["machine_state"] = "DESIGN_EXPERIMENT"
-    state["next_action"] = "run design worker"
-
-    task_file, result_file = _design_task_paths(state["current_iteration"])
-    task_path = tasks_dir / Path(task_file).name
-    task_path.parent.mkdir(parents=True, exist_ok=True)
-    task_path.write_text(_design_task_markdown(load_handoff, state, result_file), encoding="utf-8")
+    state["next_action"] = "run local sanity check"
 
     payload = {
         "schema_version": 1,
         "proposal_id": winning_proposal["proposal_id"],
-        "worker_kind": "custom_agent",
-        "worker_ref": "metaopt-design-worker",
-        "task_file": task_file,
-        "result_file": result_file,
-        "recommended_next_machine_state": "DESIGN_EXPERIMENT",
-        "selection_rationale": selection_rationale,
-        "design_summary": None,
-        "launch_requests": [
-            {
-                "slot_class": "auxiliary",
-                "mode": "design",
-                "worker_kind": "custom_agent",
-                "worker_ref": "metaopt-design-worker",
-                "model_class": "strong_reasoner",
-                "task_file": task_file,
-                "result_file": result_file,
-            },
-        ],
+        "recommended_next_machine_state": "LOCAL_SANITY",
         "warnings": [],
-        "summary": "selection result validated and design worker is ready",
-    }
-    persist_state_handoff(state_path, previous_state, state, payload, control_agent=_CONTROL_AGENT)
-    return emit_handoff(output_path, payload, handoff_type=_GATE_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
-
-
-def _finalize_select_design(state_path: Path, worker_results_dir: Path, output_path: Path) -> dict[str, Any]:
-    state = _read_json(state_path)
-    previous_state = deepcopy(state)
-    selected_experiment = state.get("selected_experiment")
-    if not isinstance(selected_experiment, dict):
-        return _runtime_error(
-            output_path,
-            _FINALIZE_HANDOFF_TYPE,
-            "persist selected_experiment before finalizing design",
-            "selected_experiment missing",
-        )
-    if selected_experiment.get("design") is not None:
-        return _runtime_error(
-            output_path,
-            _FINALIZE_HANDOFF_TYPE,
-            "clear stale design before re-running finalization",
-            "selected_experiment.design already populated",
-            proposal_id=selected_experiment.get("proposal_id"),
-        )
-
-    _, design_result_file = _design_task_paths(state["current_iteration"])
-    design_result_path = worker_results_dir / Path(design_result_file).name
-    if not design_result_path.exists():
-        return _runtime_error(
-            output_path,
-            _FINALIZE_HANDOFF_TYPE,
-            "stage design worker result before finalizing",
-            "design result missing",
-            proposal_id=selected_experiment.get("proposal_id"),
-        )
-
-    design_result = _read_json(design_result_path)
-    if not isinstance(design_result, dict):
-        return _runtime_error(
-            output_path,
-            _FINALIZE_HANDOFF_TYPE,
-            "repair design worker result and re-run finalization",
-            "design result invalid",
-            proposal_id=selected_experiment.get("proposal_id"),
-        )
-
-    proposal_id = selected_experiment.get("proposal_id")
-    if design_result.get("proposal_id") != proposal_id:
-        return _runtime_error(
-            output_path,
-            _FINALIZE_HANDOFF_TYPE,
-            "repair design worker result and re-run finalization",
-            "design result proposal_id does not match selected_experiment",
-            proposal_id=proposal_id,
-        )
-
-    drift_fields = check_lane_drift("design", design_result)
-    if drift_fields:
-        state["status"] = "BLOCKED_PROTOCOL"
-        state["machine_state"] = "BLOCKED_PROTOCOL"
-        state["next_action"] = (
-            "protocol violation: design result contains materialization-lane "
-            f"fields {drift_fields}; manual intervention required"
-        )
-        payload = {
-            "schema_version": 1,
-            "proposal_id": proposal_id,
-            "worker_kind": None,
-            "worker_ref": None,
-            "task_file": None,
-            "result_file": None,
-            "recommended_next_machine_state": "BLOCKED_PROTOCOL",
-            "selection_rationale": selected_experiment.get("selection_rationale"),
-            "design_summary": None,
-            "warnings": [f"lane drift detected in design result: {drift_fields}"],
-            "summary": f"design result contains materialization-lane fields: {drift_fields}",
-        }
-        persist_state_handoff(state_path, previous_state, state, payload, control_agent=_CONTROL_AGENT)
-        return emit_handoff(output_path, payload, handoff_type=_FINALIZE_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
-
-    selected_experiment["design"] = design_result
-    state["proposal_cycle"]["current_pool_frozen"] = True
-    state["machine_state"] = "MATERIALIZE_CHANGESET"
-    state["next_action"] = "materialize selected experiment"
-
-    payload = {
-        "schema_version": 1,
-        "proposal_id": proposal_id,
-        "worker_kind": None,
-        "worker_ref": None,
-        "task_file": None,
-        "result_file": design_result_file,
-        "recommended_next_machine_state": "MATERIALIZE_CHANGESET",
-        "selection_rationale": selected_experiment.get("selection_rationale"),
-        "design_summary": design_result.get("description") or design_result.get("experiment_name"),
-        "warnings": [],
-        "summary": "experiment design finalized and ready for materialization",
+        "summary": "sweep design finalized and ready for local sanity",
     }
     persist_state_handoff(state_path, previous_state, state, payload, control_agent=_CONTROL_AGENT)
     return emit_handoff(output_path, payload, handoff_type=_FINALIZE_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
@@ -507,8 +293,7 @@ def main() -> int:
         payload = _runtime_error(
             output_path,
             {
-                "plan_select_experiment": _PLAN_HANDOFF_TYPE,
-                "gate_select_and_plan_design": _GATE_HANDOFF_TYPE,
+                "plan_select_design": _PLAN_HANDOFF_TYPE,
                 "finalize_select_design": _FINALIZE_HANDOFF_TYPE,
             }[args.mode],
             error["action"],
@@ -518,12 +303,10 @@ def main() -> int:
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
 
-    if args.mode == "plan_select_experiment":
-        payload = _plan_select_experiment(load_handoff, state_path, tasks_dir, output_path)
-    elif args.mode == "gate_select_and_plan_design":
-        payload = _gate_select_and_plan_design(load_handoff, state_path, tasks_dir, worker_results_dir, output_path)
+    if args.mode == "plan_select_design":
+        payload = _plan_select_design(load_handoff, state_path, tasks_dir, output_path)
     else:
-        payload = _finalize_select_design(state_path, worker_results_dir, output_path)
+        payload = _finalize_select_design(load_handoff, state_path, worker_results_dir, output_path)
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0
 

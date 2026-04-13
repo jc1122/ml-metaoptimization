@@ -36,24 +36,20 @@ STATE_REQUIRED_KEYS = {
     "version",
     "campaign_id",
     "campaign_identity_hash",
-    "runtime_config_hash",
     "status",
     "machine_state",
     "current_iteration",
     "next_action",
     "objective_snapshot",
     "proposal_cycle",
-    "active_slots",
     "current_proposals",
     "next_proposals",
-    "selected_experiment",
-    "local_changeset",
-    "remote_batches",
+    "selected_sweep",
+    "current_sweep",
     "baseline",
-    "completed_experiments",
+    "completed_iterations",
     "key_learnings",
     "no_improve_iterations",
-    "runtime_capabilities",
 }
 
 
@@ -93,13 +89,11 @@ def _runtime_error(
         "state_preserved": state_preserved,
         "campaign_id": None,
         "campaign_identity_hash": None,
-        "runtime_config_hash": None,
         "resume_mode": "none",
         "effective_status": None,
         "effective_machine_state": None,
         "recommended_next_machine_state": None,
         "recovery_action": recovery_action,
-        "runtime_capabilities": None,
         "agents_hook_action": "unchanged",
         "state_patch": None,
         "warnings": warnings or [],
@@ -182,44 +176,30 @@ def _validate_existing_state(state: Any) -> dict[str, Any]:
     return state
 
 
-def _fresh_state(load_handoff: dict[str, Any], runtime_capabilities: dict[str, Any]) -> dict[str, Any]:
+def _fresh_state(load_handoff: dict[str, Any]) -> dict[str, Any]:
     return {
-        "version": 3,
+        "version": 4,
         "campaign_id": load_handoff["campaign_id"],
         "campaign_identity_hash": load_handoff["campaign_identity_hash"],
-        "runtime_config_hash": load_handoff["runtime_config_hash"],
         "status": "RUNNING",
-        "machine_state": "MAINTAIN_BACKGROUND_POOL",
+        "machine_state": "IDEATE",
         "current_iteration": 1,
-        "next_action": "maintain background slot pool",
+        "next_action": "maintain background pool",
         "objective_snapshot": load_handoff["objective_snapshot"],
         "proposal_cycle": {
             "cycle_id": "iter-1-cycle-1",
             "current_pool_frozen": False,
-            "ideation_rounds_by_slot": {},
-            "shortfall_reason": "",
-            "pool_saturated_iteration": None,
         },
-        "active_slots": [],
         "current_proposals": [],
         "next_proposals": [],
-        "selected_experiment": None,
-        "local_changeset": None,
-        "remote_batches": [],
-        "baseline": load_handoff["baseline_snapshot"],
-        "completed_experiments": [],
+        "selected_sweep": None,
+        "current_sweep": None,
+        "baseline": None,
+        "completed_iterations": [],
         "key_learnings": [],
         "no_improve_iterations": 0,
-        "maintenance_summary": [],
         "campaign_started_at": timestamp(),
-        "runtime_capabilities": {
-            "verified_at": runtime_capabilities["verified_at"],
-            "available_skills": runtime_capabilities["available_skills"],
-            "missing_skills": runtime_capabilities["missing_skills"],
-            "degraded_lanes": runtime_capabilities["degraded_lanes"],
-        },
     }
-
 
 
 def build_handoff(
@@ -283,22 +263,14 @@ def build_handoff(
                 "state_preserved": True,
                 "campaign_id": load_handoff["campaign_id"],
                 "campaign_identity_hash": load_handoff["campaign_identity_hash"],
-                "runtime_config_hash": load_handoff["runtime_config_hash"],
                 "resume_mode": "none",
                 "effective_status": "BLOCKED_CONFIG",
                 "effective_machine_state": "BLOCKED_CONFIG",
                 "recommended_next_machine_state": "BLOCKED_CONFIG",
                 "recovery_action": "archive or remove the stale state before starting a new campaign",
-                "runtime_capabilities": {
-                    "verified_at": runtime_capabilities["verified_at"],
-                    "available_skills": runtime_capabilities["available_skills"],
-                    "missing_skills": runtime_capabilities["missing_skills"],
-                    "degraded_lanes": runtime_capabilities["degraded_lanes"],
-                },
                 "agents_hook_action": "remove_directive_emitted",
                 "state_patch": None,
-                "pre_launch_directives": [_remove_hook_directive()],
-                "post_launch_directives": [],
+                "directives": [_remove_hook_directive()],
                 "warnings": warnings,
                 "summary": "state identity mismatch detected; preserved stale state and blocked resume",
             }
@@ -306,12 +278,6 @@ def build_handoff(
 
         state = existing_state
         previous_state = deepcopy(existing_state)
-        state["runtime_capabilities"] = {
-            "verified_at": runtime_capabilities["verified_at"],
-            "available_skills": runtime_capabilities["available_skills"],
-            "missing_skills": runtime_capabilities["missing_skills"],
-            "degraded_lanes": runtime_capabilities["degraded_lanes"],
-        }
         state.setdefault("campaign_started_at", timestamp())
         resume_mode = "existing"
         if state["status"] in _TERMINAL_STATUSES:
@@ -319,25 +285,23 @@ def build_handoff(
         else:
             outcome = "resumed"
     else:
-        state = _fresh_state(load_handoff, runtime_capabilities)
+        state = _fresh_state(load_handoff)
         resume_mode = "fresh"
         outcome = "initialized"
         previous_state = {}
 
     if runtime_capabilities["blocking_skill"] and outcome != "terminal":
-        # Preserve all existing campaign data; only update control fields.
         state["status"] = "BLOCKED_CONFIG"
         state["machine_state"] = "BLOCKED_CONFIG"
         state["next_action"] = f"install missing skill: {runtime_capabilities['blocking_skill']}"
-        state["active_slots"] = []
         outcome = "blocked_config"
 
     if state["status"] == "RUNNING":
         agents_action = _ensure_hook(agents_path)
-        pre_launch_directives: list[dict[str, str]] = []
+        directives: list[dict[str, str]] = []
     else:
         agents_action = "remove_directive_emitted"
-        pre_launch_directives = [_remove_hook_directive()]
+        directives = [_remove_hook_directive()]
 
     payload = {
         "schema_version": 1,
@@ -346,16 +310,13 @@ def build_handoff(
         "state_preserved": state_preserved,
         "campaign_id": state["campaign_id"],
         "campaign_identity_hash": state["campaign_identity_hash"],
-        "runtime_config_hash": state["runtime_config_hash"],
         "resume_mode": resume_mode,
         "effective_status": state["status"],
         "effective_machine_state": state["machine_state"],
         "recommended_next_machine_state": state["machine_state"],
         "recovery_action": None,
-        "runtime_capabilities": state["runtime_capabilities"],
         "agents_hook_action": agents_action,
-        "pre_launch_directives": pre_launch_directives,
-        "post_launch_directives": [],
+        "directives": directives,
         "warnings": warnings,
         "summary": (
             "fresh orchestrator state initialized"

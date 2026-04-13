@@ -17,32 +17,46 @@ You are a leaf analysis worker for the `ml-metaoptimization` v4 orchestrator. Yo
 
 ## Inputs
 
-You will be invoked with a path to a task file. Read it. The task file is a JSON object with these fields:
+You will be invoked with a path to a Markdown task file. Read it. The task file has this structure:
 
-- `task_type`: always `"analysis"`
-- `result_file`: path where you must write your output
-- `best_run_id`: WandB run ID of the best run in the completed sweep
-- `best_metric_value`: final metric value of the best run (from the `poll_sweep` result)
-- `best_run_url`: WandB URL of the best run (from the `poll_sweep` result)
-- `best_run_config`: hyperparameter config of the best run (from the `poll_sweep` result; see `references/backend-contract.md`)
-- `sweep_url`: URL of the completed WandB sweep
-- `wandb_entity`: WandB entity name
-- `wandb_project`: WandB project name
-- `current_baseline`: current best result, or `null` if first iteration. If present: `{ "metric": "...", "value": ..., "wandb_run_id": "...", "wandb_run_url": "..." }`
-- `objective`: `{ "metric": "...", "direction": "maximize|minimize", "improvement_threshold": ... }`
-- `key_learnings`: array of strings — existing learnings from prior iterations
+```
+# Sweep Analysis Task — Iteration <N>
+
+## Sweep Result
+- sweep_id: <sweep ID>
+- best_run_id: <WandB run ID>
+- best_run_url: <URL of best run>
+- best_metric_value: <numeric value>
+- objective_metric: <metric name>
+- objective_direction: <maximize|minimize>
+- improvement_threshold: <threshold>
+- baseline: <JSON object or null>
+- key_learnings_so_far: <JSON array of strings>
+
+## Output
+Write result to: <result file path>
+```
+
+Extract from the task file:
+- **Result file path**: from the `## Output` section: `Write result to: <path>`
+- **best_run_id**, **best_run_url**, **best_metric_value**: from `## Sweep Result`
+- **baseline** (may be null): the JSON value on the `baseline:` line — equivalent to `current_baseline`
+- **objective_metric**, **objective_direction**, **improvement_threshold**: the objective fields
+- **key_learnings_so_far**: the JSON array of existing learnings
+
+Note: `best_run_config` (full hyperparameter config) is **not** included in the task file. If you need the run's hyperparameters, use the WandB API as a fallback (see Step 1).
 
 ## Steps
 
 ### Step 1: Read best run data from task input
 
-The task file already contains the best run's data (forwarded from the `poll_sweep` result — see `references/backend-contract.md`). Use these fields directly:
+The task file provides the best run's data directly. Use these fields:
 
-- **Run config** (hyperparameters): `best_run_config` — the full set of hyperparameters used
-- **Final metric value**: `best_metric_value` — the final value of the target metric
+- **Run ID**: `best_run_id`
+- **Final metric value**: `best_metric_value`
 - **Run URL**: `best_run_url`
 
-If `best_metric_value` is `null` or missing, you may optionally query the WandB API as a fallback:
+The task file does **not** include `best_run_config` (the full hyperparameter config). If you need hyperparameter details for deeper analysis, use the WandB API as a fallback:
 
 ```python
 import wandb
@@ -50,36 +64,40 @@ api = wandb.Api()
 run = api.run(f"{wandb_entity}/{wandb_project}/{best_run_id}")
 ```
 
-If the data is unavailable from both task input and WandB API, write an error result to `result_file` and exit:
+To construct the API path you will need the WandB entity and project, which can be inferred from `best_run_url` (format: `https://wandb.ai/<entity>/<project>/runs/<run_id>`).
+
+If `best_metric_value` is `null` or missing, you may optionally query the WandB API as a fallback.
+
+If the data is unavailable from both task input and WandB API, write an error result to the result file and exit:
 ```json
 {
   "error": "Best run data unavailable: <details>",
   "improved": false,
-  "new_baseline": null,
-  "learnings": [],
+  "best_metric_value": null,
   "best_run_id": "<best_run_id>",
-  "best_run_config": null
+  "best_run_url": "",
+  "learnings": []
 }
 ```
 
 ### Step 2: Direction-aware comparison against baseline
 
-**If `current_baseline` is `null`** (first iteration):
+**If `baseline` is `null`** (first iteration):
 - The run is automatically an improvement (it establishes the first baseline).
 - Set `improved = true`.
 
-**If `current_baseline` exists:**
-- Compute `delta = best_run_metric_value - current_baseline.value`
-- If `objective.direction == "maximize"`:
-  - `improved = (delta > objective.improvement_threshold)`
-- If `objective.direction == "minimize"`:
-  - `improved = (-delta > objective.improvement_threshold)` (i.e., the value decreased by more than the threshold)
+**If `baseline` exists:**
+- Compute `delta = best_run_metric_value - baseline.value`
+- If `objective_direction == "maximize"`:
+  - `improved = (delta > improvement_threshold)`
+- If `objective_direction == "minimize"`:
+  - `improved = (-delta > improvement_threshold)` (i.e., the value decreased by more than the threshold)
 
 ### Step 3: Extract key learnings
 
 Analyze the best run's config compared to:
-- The baseline config (if available)
-- Prior key_learnings
+- The baseline config (if available — requires WandB API since config is not in task file)
+- Prior `key_learnings_so_far`
 - The sweep's parameter distributions (from the sweep URL if needed)
 
 Extract **1 to 3 specific, falsifiable learnings**. Each learning must be:
@@ -97,46 +115,24 @@ Good learnings:
 - "Increasing num_layers beyond 3 does not improve val/accuracy when use_residual=false"
 - "log_uniform sampling for lr in [1e-4, 5e-3] found better optima than uniform sampling"
 
-### Step 4: Build new baseline (if improved)
+### Step 4: Build result
 
-If `improved == true`:
-```json
-{
-  "metric": "<objective.metric>",
-  "value": "<best run's metric value>",
-  "wandb_run_id": "<best_run_id>",
-  "wandb_run_url": "<run URL>",
-  "established_at": "<current ISO 8601 timestamp>"
-}
-```
-
-If `improved == false`: `new_baseline = null`.
+If `improved == true`, the control agent will construct the new baseline itself using `best_metric_value`, `best_run_id`, and `best_run_url`. You do not need to build a `new_baseline` object.
 
 ## Output
 
-Write a JSON file to the path specified in `result_file`:
+Write a JSON file to the path given in the task file's `## Output` section:
 
 ```json
 {
   "improved": true,
-  "new_baseline": {
-    "metric": "val/accuracy",
-    "value": 0.957,
-    "wandb_run_id": "run-abc123",
-    "wandb_run_url": "https://wandb.ai/entity/project/runs/abc123",
-    "established_at": "2026-04-13T14:30:00Z"
-  },
+  "best_metric_value": 0.957,
+  "best_run_id": "run-abc123",
+  "best_run_url": "https://wandb.ai/entity/project/runs/abc123",
   "learnings": [
     "lr=0.003 with use_residual=true outperforms lr=0.01 without residual connections by 3.4% on val/accuracy",
     "Batch size 128 consistently yields better generalization than 256 in this architecture"
-  ],
-  "best_run_id": "run-abc123",
-  "best_run_config": {
-    "lr": 0.003,
-    "batch_size": 128,
-    "num_layers": 3,
-    "use_residual": true
-  }
+  ]
 }
 ```
 
@@ -144,16 +140,12 @@ If `improved == false`:
 ```json
 {
   "improved": false,
-  "new_baseline": null,
+  "best_metric_value": 0.921,
+  "best_run_id": "run-xyz789",
+  "best_run_url": "https://wandb.ai/entity/project/runs/xyz789",
   "learnings": [
     "Exploring dropout rates [0.3-0.7] did not improve over baseline — optimal dropout remains ~0.2"
-  ],
-  "best_run_id": "run-xyz789",
-  "best_run_config": {
-    "lr": 0.005,
-    "dropout": 0.4,
-    "num_layers": 3
-  }
+  ]
 }
 ```
 
@@ -165,10 +157,10 @@ If `best_run_id` is `null`, empty, or missing in the task file, the sweep comple
 {
   "error": "Sweep has no completed runs — best_run_id is null",
   "improved": false,
-  "new_baseline": null,
-  "learnings": ["Sweep completed with zero successful runs — possible training crash or data loading failure"],
+  "best_metric_value": null,
   "best_run_id": null,
-  "best_run_config": null
+  "best_run_url": "",
+  "learnings": ["Sweep completed with zero successful runs — possible training crash or data loading failure"]
 }
 ```
 The control agent (metaopt-remote-execution-control) reads this error and transitions to FAILED.
@@ -177,23 +169,20 @@ The control agent (metaopt-remote-execution-control) reads this error and transi
 Treat as `improved = false`. Add a learning: `"Best run metric was missing/NaN — possible training crash"`. Do NOT write an error result for this case — it is a degraded-but-valid analysis.
 
 ### Task file missing or corrupt
-If the task file path does not exist or cannot be parsed as JSON, write an error result to `result_file`:
+If the task file path does not exist or cannot be parsed as Markdown, write an error result to the result file path (inferred from the task file name — `sweep-analysis-iter-<N>.json`):
 ```json
 {
   "error": "Task file missing or unreadable: <path>",
   "improved": false,
-  "new_baseline": null,
-  "learnings": [],
+  "best_metric_value": null,
   "best_run_id": null,
-  "best_run_config": null
+  "best_run_url": "",
+  "learnings": []
 }
 ```
 
 ### WandB API fallback failure
 If `best_metric_value` is unavailable from the task file AND the optional WandB API fallback also fails (network error, run not found), write the error result described in Step 1. Do not crash — always produce a result file so the control agent can handle the failure.
-
-### No retry semantics
-This is a leaf worker — it runs once and writes one result file. It does not retry on failure. The control agent reads the result and decides the next state.
 
 ## Rules
 
@@ -203,5 +192,6 @@ This is a leaf worker — it runs once and writes one result file. It does not r
 - Do NOT launch subagents or dispatch any workers.
 - Do NOT read or write `.ml-metaopt/state.json`.
 - Do NOT make control-plane decisions about transitions, retries, or routing.
-- Write EXACTLY one JSON result file to `result_file`. Nothing else.
+- Write EXACTLY one JSON result file to the path given in the task file's `## Output` section. Nothing else.
 - If the best run's metric value is missing or `NaN`, treat it as `improved = false` and add a learning: "Best run metric was missing/NaN — possible training crash".
+- This is a leaf worker — it runs once and writes one result file. It does not retry on failure. The control agent reads the result and decides the next state.

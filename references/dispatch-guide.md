@@ -142,7 +142,7 @@ For worker lane contracts (inputs, outputs, drift rules), see references/worker-
 1. Invoke metaopt-remote-execution-control as subagent
 2. Read handoff -- it contains launch_requests for metaopt-analysis-worker
 3. Dispatch metaopt-analysis-worker with best run data, baseline, learnings
-4. Worker writes result to .ml-metaopt/worker-results/analysis-iter-<N>.json
+4. Worker writes result to .ml-metaopt/worker-results/sweep-analysis-iter-<N>.json
 5. Re-invoke the control agent with the analysis result
 6. Apply state_patch (updates baseline if improved, appends key_learnings)
 7. Transition to ROLL_ITERATION

@@ -78,31 +78,25 @@ No `strong_coder` class — v4 does not produce code patches.
 - Prior `key_learnings`
 - `objective_snapshot` (for direction-aware comparison)
 
-**Output:** A JSON file written to `.ml-metaopt/worker-results/analysis-iter-<N>.json`:
+**Output:** A JSON file written to `.ml-metaopt/worker-results/sweep-analysis-iter-<N>.json`:
 
 ```json
 {
   "improved": true,
-  "new_baseline": {
-    "metric": "val/accuracy",
-    "value": 0.945,
-    "wandb_run_id": "run-abc",
-    "wandb_run_url": "https://wandb.ai/entity/project/runs/run-abc",
-    "established_at": "2026-04-13T15:00:00Z"
-  },
+  "best_metric_value": 0.945,
+  "best_run_id": "run-abc",
+  "best_run_url": "https://wandb.ai/entity/project/runs/run-abc",
   "learnings": [
     "Bayesian search over learning rate found optimal at 3e-3",
     "Residual connections consistently improve accuracy for 3+ layer models"
-  ],
-  "best_run_id": "run-abc"
+  ]
 }
 ```
 
-When no improvement: `"improved": false`, `"new_baseline": null`.
+When no improvement: `"improved": false`, `"best_metric_value": <value>`, `"best_run_id": "<id>"`, `"best_run_url": "<url>"`.
 
 **Constraints:**
-- Baseline update must use direction-aware comparison from `references/contracts.md` Section 5
-- `new_baseline` must only be non-null when `improved` is true
+- Baseline update comparison must be direction-aware (`objective_direction`)
 - Learnings must be concrete and actionable, not generic
 
 **Lane drift rules — MUST NOT:**

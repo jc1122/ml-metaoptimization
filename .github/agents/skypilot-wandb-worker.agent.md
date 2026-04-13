@@ -90,20 +90,27 @@ If sweep creation fails → write error to `result_file` and stop:
 
 **Step 3: Launch SkyPilot agents**
 
+Use the project's `sky_task.yaml` as the SkyPilot task config. This file defines the full remote environment: Python 3.12 installation, `pip install -e ".[experiments]"`, dep-wheel installation (`deps/*.whl`), MNIST data (git-tracked in `data/`), shared-memory resize, and the `wandb agent` run command. The task file's `workdir: .` directive rsyncs the entire project to the remote node.
+
+Read `WANDB_API_KEY` from the local environment (`os.environ["WANDB_API_KEY"]`). It **must** be set; if absent, write an error result and stop.
+
 For each agent `i` in `1..num_sweep_agents`:
 
 ```bash
-sky launch \
-  --cloud vast \
+sky launch sky_task.yaml \
   --idle-minutes-to-autostop <idle_timeout_minutes> \
-  --gpus <accelerator> \
-  --clone-disk-from <repo> \
   --name metaopt-sweep-<sweep_id>-agent-<i> \
-  -y \
-  -- "wandb agent <wandb_entity>/<wandb_project>/<sweep_id>"
+  --env WANDB_API_KEY=<from local env> \
+  --env WANDB_ENTITY=<wandb_entity> \
+  --env WANDB_PROJECT=<wandb_project> \
+  --env WANDB_SWEEP_ID=<sweep_id> \
+  --env NUM_AGENTS=1 \
+  -y
 ```
 
-Capture the SkyPilot job ID from the output. Collect all job IDs into `sky_job_ids`.
+Each `sky launch` creates one independent cluster running one WandB sweep agent. The GPU type and cloud provider are already specified in `sky_task.yaml`'s `resources:` section — do NOT pass `--cloud` or `--gpus` flags (they would conflict with the task file).
+
+Capture the SkyPilot cluster name from the output. Collect all cluster names into `sky_job_ids`.
 
 **Step 4: Handle launch failure**
 

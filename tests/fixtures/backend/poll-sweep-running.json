@@ -1,0 +1,9 @@
+{
+  "operation": "poll_sweep",
+  "exit_code": 0,
+  "sweep_status": "running",
+  "best_metric_value": 0.941,
+  "best_run_id": "run-iter2-007",
+  "killed_runs": [],
+  "cumulative_spend_usd": 2.40
+}

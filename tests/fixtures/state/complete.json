@@ -1,67 +1,36 @@
 {
-  "version": 3,
-  "campaign_id": "market-forecast-v3",
+  "version": 4,
+  "campaign_id": "gnn-mnist-v4",
   "campaign_identity_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-  "runtime_config_hash": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
   "status": "COMPLETE",
   "machine_state": "COMPLETE",
-  "current_iteration": 7,
-  "next_action": "emit final report and remove orchestration hook",
+  "current_iteration": 5,
+  "next_action": null,
   "objective_snapshot": {
-    "metric": "rmse",
-    "direction": "minimize",
-    "aggregation": {
-      "method": "weighted_mean",
-      "weights": {
-        "ds_main": 0.7,
-        "ds_holdout": 0.3
-      }
-    },
-    "improvement_threshold": 0.0005
+    "metric": "val/accuracy",
+    "direction": "maximize",
+    "improvement_threshold": 0.005
   },
   "proposal_cycle": {
-    "cycle_id": "iter-7-cycle-1",
-    "current_pool_frozen": true,
-    "ideation_rounds_by_slot": {},
-    "shortfall_reason": ""
+    "cycle_id": "iter-5-cycle-1",
+    "current_pool_frozen": true
   },
-  "active_slots": [],
+  "current_sweep": null,
+  "selected_sweep": null,
+  "baseline": {
+    "metric": "val/accuracy",
+    "value": 0.971,
+    "wandb_run_id": "run-best-042",
+    "wandb_run_url": "https://wandb.ai/my-entity/my-project/runs/run-best-042",
+    "established_at": "2026-04-13T18:00:00Z"
+  },
   "current_proposals": [],
   "next_proposals": [],
-  "selected_experiment": null,
-  "local_changeset": {
-    "integration_worktree": ".ml-metaopt/worktrees/iter-7-materialization",
-    "patch_artifacts": [],
-    "apply_results": [],
-    "verification_notes": [
-      "final verification completed before archive"
-    ],
-    "code_artifact_uri": ".ml-metaopt/artifacts/code/batch-20260405-0007.tar.gz",
-    "data_manifest_uri": ".ml-metaopt/artifacts/data/batch-20260405-0007.json"
-  },
-  "remote_batches": [
-    {
-      "batch_id": "batch-20260405-0007",
-      "queue_ref": "ray-queue-999",
-      "status": "completed"
-    }
-  ],
-  "baseline": {
-    "aggregate": 0.1201,
-    "by_dataset": {
-      "ds_main": 0.1198,
-      "ds_holdout": 0.1208
-    }
-  },
-  "completed_experiments": [
-    {
-      "batch_id": "batch-20260405-0007",
-      "aggregate": 0.1201
-    }
-  ],
   "key_learnings": [
-    "Weighted holdout stabilization improved the aggregate metric"
+    "Residual connections critical for num_layers >= 3",
+    "Bayes search finds optimal lr in 8-12 runs"
   ],
-  "no_improve_iterations": 0,
-  "campaign_started_at": "2026-04-01T00:00:00Z"
+  "completed_iterations": [],
+  "no_improve_iterations": 2,
+  "campaign_started_at": "2026-04-13T07:00:00Z"
 }

@@ -1,113 +1,72 @@
 {
-  "version": 3,
-  "campaign_id": "market-forecast-v3",
+  "version": 4,
+  "campaign_id": "gnn-mnist-v4",
   "campaign_identity_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-  "runtime_config_hash": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
   "status": "RUNNING",
-  "machine_state": "WAIT_FOR_REMOTE_BATCH",
-  "current_iteration": 3,
-  "next_action": "poll remote batch status",
+  "machine_state": "WAIT_FOR_SWEEP",
+  "current_iteration": 2,
+  "next_action": "poll WandB sweep status",
   "objective_snapshot": {
-    "metric": "rmse",
-    "direction": "minimize",
-    "aggregation": {
-      "method": "weighted_mean",
-      "weights": {
-        "ds_main": 0.7,
-        "ds_holdout": 0.3
-      }
-    },
-    "improvement_threshold": 0.0005
+    "metric": "val/accuracy",
+    "direction": "maximize",
+    "improvement_threshold": 0.005
   },
   "proposal_cycle": {
-    "cycle_id": "iter-3-cycle-1",
-    "current_pool_frozen": true,
-    "ideation_rounds_by_slot": {
-      "bg-1": 2,
-      "bg-2": 2
-    },
-    "shortfall_reason": ""
+    "cycle_id": "iter-2-cycle-1",
+    "current_pool_frozen": true
   },
-  "active_slots": [
-    {
-      "slot_id": "bg-1",
-      "slot_class": "background",
-      "mode": "maintenance",
-      "model_class": "general_worker",
-      "requested_model": "GPT-5.4",
-      "resolved_model": "GPT-5.4",
-      "status": "running",
-      "attempt": 1,
-      "task_summary": "Read-only maintenance audit while the remote batch runs"
-    },
-    {
-      "slot_id": "aux-1",
-      "slot_class": "auxiliary",
-      "mode": "materialization",
-      "model_class": "strong_coder",
-      "requested_model": "Opus 4.6 fast",
-      "resolved_model": "Opus 4.6 fast",
-      "status": "running",
-      "attempt": 1,
-      "task_summary": "Retain materialization context for the aux-1 patch bundle while the remote batch runs"
+  "current_sweep": {
+    "sweep_id": "wandb-sweep-abc123",
+    "sweep_url": "https://wandb.ai/my-entity/my-project/sweeps/abc123",
+    "sky_job_ids": ["sky-job-001", "sky-job-002"],
+    "launched_at": "2026-04-13T10:00:00Z",
+    "cumulative_spend_usd": 2.40
+  },
+  "selected_sweep": {
+    "proposal_id": "prop-003",
+    "sweep_config": {
+      "method": "bayes",
+      "metric": {"name": "val/accuracy", "goal": "maximize"},
+      "parameters": {
+        "lr": {"distribution": "log_uniform_values", "min": 1e-4, "max": 1e-2},
+        "num_layers": {"values": [2, 3, 4]}
+      }
     }
-  ],
+  },
+  "baseline": {
+    "metric": "val/accuracy",
+    "value": 0.923,
+    "wandb_run_id": "run-baseline-001",
+    "wandb_run_url": "https://wandb.ai/my-entity/my-project/runs/run-baseline-001",
+    "established_at": "2026-04-13T08:00:00Z"
+  },
   "current_proposals": [],
   "next_proposals": [
     {
-      "proposal_id": "p-17",
-      "summary": "Tighten rolling-window validation"
-    }
-  ],
-  "selected_experiment": {
-    "proposal_id": "p-16",
-    "sanity_attempts": 1
-  },
-  "local_changeset": {
-    "integration_worktree": ".ml-metaopt/worktrees/iter-3-materialization",
-    "patch_artifacts": [
-      {
-        "producer_slot_id": "aux-1",
-        "purpose": "candidate patch bundle",
-        "patch_path": ".ml-metaopt/artifacts/patches/batch-20260405-0001/aux-1.patch",
-        "target_worktree": ".ml-metaopt/worktrees/iter-3-materialization"
+      "proposal_id": "prop-004",
+      "rationale": "Try attention pooling based on prior learnings",
+      "sweep_config": {
+        "method": "bayes",
+        "metric": {"name": "val/accuracy", "goal": "maximize"},
+        "parameters": {
+          "pool_type": {"values": ["mean", "attention"]},
+          "hidden_dim": {"values": [64, 128, 256]}
+        }
       }
-    ],
-    "apply_results": [
-      {
-        "patch_path": ".ml-metaopt/artifacts/patches/batch-20260405-0001/aux-1.patch",
-        "status": "applied"
-      }
-    ],
-    "verification_notes": [
-      "local sanity has not rerun yet"
-    ],
-    "code_artifact_uri": ".ml-metaopt/artifacts/code/batch-20260405-0001.tar.gz",
-    "data_manifest_uri": ".ml-metaopt/artifacts/data/batch-20260405-0001.json"
-  },
-  "remote_batches": [
-    {
-      "batch_id": "batch-20260405-0001",
-      "queue_ref": "ray-queue-123",
-      "status": "running"
-    }
-  ],
-  "baseline": {
-    "aggregate": 0.1284,
-    "by_dataset": {
-      "ds_main": 0.1269,
-      "ds_holdout": 0.132
-    }
-  },
-  "completed_experiments": [
-    {
-      "batch_id": "batch-20260401-0004",
-      "aggregate": 0.1279
     }
   ],
   "key_learnings": [
-    "Leakage checks must run in local sanity before enqueue"
+    "Deeper networks (num_layers=4) overfit on MNIST without residual connections"
   ],
-  "no_improve_iterations": 2,
-  "campaign_started_at": "2026-04-01T00:00:00Z"
+  "completed_iterations": [
+    {
+      "iteration": 1,
+      "sweep_id": "wandb-sweep-prev001",
+      "best_metric_value": 0.923,
+      "spend_usd": 3.10,
+      "improved_baseline": true
+    }
+  ],
+  "no_improve_iterations": 0,
+  "campaign_started_at": "2026-04-13T07:00:00Z"
 }

@@ -1,0 +1,8 @@
+{
+  "operation": "launch_sweep",
+  "exit_code": 0,
+  "sweep_id": "wandb-sweep-abc123",
+  "sweep_url": "https://wandb.ai/my-entity/my-project/sweeps/abc123",
+  "sky_job_ids": ["sky-job-001", "sky-job-002", "sky-job-003", "sky-job-004"],
+  "launched_at": "2026-04-13T10:00:00Z"
+}

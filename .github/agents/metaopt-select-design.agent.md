@@ -120,7 +120,7 @@ Write handoff to: `.ml-metaopt/handoffs/metaopt-select-design-SELECT_AND_DESIGN_
 All error paths emit `recommended_next_machine_state: null` with a `recovery_action` string. The orchestrator stays in the current state and can retry on the next session.
 
 ### selected_sweep already populated
-If `state.selected_sweep` is not null at the start of either phase → error with recovery action `"clear stale selected_sweep before re-running selection"`. Prevents double-selection.
+If `state.selected_sweep` is not null at the start of the plan phase → error with recovery action `"clear stale selected_sweep before re-running selection"`. If not null at the start of the finalize phase → error with recovery action `"clear stale selected_sweep before re-running"`. Prevents double-selection.
 
 ### Empty proposal pool
 If `current_proposals` is empty during plan phase → error with recovery action `"rebuild proposal pool before selection"`.

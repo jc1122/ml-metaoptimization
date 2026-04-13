@@ -25,7 +25,7 @@ You are the HYDRATE_STATE agent for the `ml-metaoptimization` v4 orchestrator. Y
 
 ### Step 1: Read LOAD_CAMPAIGN handoff
 
-Parse `.ml-metaopt/handoffs/metaopt-load-campaign-LOAD_CAMPAIGN.json`. Extract `campaign_identity_hash` and `campaign_summary`. If this file is missing or malformed → BLOCKED_PROTOCOL: `"Missing or invalid LOAD_CAMPAIGN handoff"`.
+Parse `.ml-metaopt/handoffs/metaopt-load-campaign-LOAD_CAMPAIGN.json`. Extract `campaign_identity_hash`, `campaign_id`, and `objective_snapshot`. Verify that `campaign_valid` is `true` and `recommended_next_machine_state` is `"HYDRATE_STATE"`. If this file is missing, malformed, or the campaign was not validated → BLOCKED_PROTOCOL: `"Missing or invalid LOAD_CAMPAIGN handoff"`.
 
 ### Step 2: Check for existing state
 
@@ -68,22 +68,18 @@ If the state does NOT have an active sweep, resume from the current `machine_sta
 
 ### Step 4: Initialize fresh state (new campaign only)
 
-Read `ml_metaopt_campaign.yaml` for field values. Construct the full initial state as `state_patch`:
+Use the LOAD_CAMPAIGN handoff fields to construct the full initial state as `state_patch`:
 
 ```json
 {
   "version": 4,
-  "campaign_id": "<campaign.name slugified>-<short-uuid>",
+  "campaign_id": "<campaign_id from LOAD_CAMPAIGN handoff>",
   "campaign_identity_hash": "<from LOAD_CAMPAIGN handoff>",
-  "current_iteration": 0,
-  "next_action": null,
-  "objective_snapshot": {
-    "metric": "<objective.metric>",
-    "direction": "<objective.direction>",
-    "improvement_threshold": "<objective.improvement_threshold>"
-  },
+  "current_iteration": 1,
+  "next_action": "maintain background pool",
+  "objective_snapshot": "<objective_snapshot from LOAD_CAMPAIGN handoff>",
   "proposal_cycle": {
-    "cycle_id": "iter-0-cycle-1",
+    "cycle_id": "iter-1-cycle-1",
     "current_pool_frozen": false
   },
   "current_sweep": null,
@@ -98,35 +94,38 @@ Read `ml_metaopt_campaign.yaml` for field values. Construct the full initial sta
 }
 ```
 
+Note: `current_iteration` starts at `1` (first iteration), and `proposal_cycle.cycle_id` matches as `"iter-1-cycle-1"`. The `status` and `machine_state` fields are derived automatically by the orchestrator from the `recommended_next_machine_state` and are not included in `state_patch`.
+
 Set `recommended_next_machine_state` to `IDEATE`.
 
-### Step 5: Verify skypilot-wandb-worker availability
+### Step 5: Verify worker availability via skills manifest
 
-Check that the `skypilot-wandb-worker` agent is available in the agent registry. This means verifying that `.github/agents/skypilot-wandb-worker.agent.md` exists in the project.
+Read the skills manifest at `agents/worker-skills.json`. For each skill entry, check that at least one of its `probe_paths` exists on disk. Skills are classified as:
 
-If the worker is not available → BLOCKED_CONFIG: `"skypilot-wandb-worker agent not found — install the agent definition at .github/agents/skypilot-wandb-worker.agent.md"`.
+- **`required`**: if any required skill's probe paths are all missing → BLOCKED_CONFIG: `"install missing skill: <skill_name>"`. The first missing required skill blocks.
+- **`degradable`**: if missing, the corresponding lane operates in degraded mode but does not block.
+
+This replaces any direct file-existence check — the manifest is the single source of truth for worker availability.
 
 ### Step 6: Manage AGENTS.md hook
 
 If the state `status` is `"RUNNING"` (either fresh or resumed):
 - Read `AGENTS.md` in the project root.
 - Check if the `<!-- ml-metaoptimization:begin -->` ... `<!-- ml-metaoptimization:end -->` block exists.
-- If the block does NOT exist, append the following to `AGENTS.md`:
+- If the block does NOT exist, append the following orchestrator hook to `AGENTS.md`:
 
 ```markdown
 <!-- ml-metaoptimization:begin -->
-## ml-metaoptimization Campaign
-
-**Status:** RUNNING
-**Campaign:** <campaign.name>
-**Objective:** <objective.direction> <objective.metric>
-**WandB:** <wandb.entity>/<wandb.project>
-
-This section is managed automatically. Do not edit manually.
+## Active task
+`.ml-metaopt/state.json` exists. Inspect its `status`.
+If `status` is `RUNNING`, invoke the `ml-metaoptimization` skill immediately,
+resume from `machine_state`, and do not ask the user for campaign inputs.
+If `status` is terminal, invoke the `ml-metaoptimization` skill once so terminal cleanup can run through control-agent directives; do not execute `next_action`.
 <!-- ml-metaoptimization:end -->
 ```
 
 - If the block already exists, do not modify it. Note this in the handoff summary.
+- If the state is NOT `"RUNNING"` (terminal), emit a `remove_agents_hook` directive instead.
 
 ## Output
 

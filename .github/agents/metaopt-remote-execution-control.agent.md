@@ -84,12 +84,10 @@ The orchestrator dispatches `skypilot-wandb-worker` with this directive. `recomm
       "sweep_config": "<state.selected_sweep.sweep_config>",
       "wandb_entity": "<wandb.entity from campaign>",
       "wandb_project": "<wandb.project from campaign>",
-      "sky_task_spec": {
-        "repo": "<project.repo from campaign>",
-        "accelerator": "<compute.accelerator>",
-        "num_agents": "<compute.num_sweep_agents>",
-        "idle_timeout_minutes": "<compute.idle_timeout_minutes>"
-      },
+      "repo": "<project.repo from campaign>",
+      "accelerator": "<compute.accelerator>",
+      "num_sweep_agents": "<compute.num_sweep_agents>",
+      "idle_timeout_minutes": "<compute.idle_timeout_minutes>",
       "result_file": ".ml-metaopt/worker-results/launch-sweep-iter-<current_iteration>.json"
     }
   }
@@ -147,7 +145,7 @@ The orchestrator dispatches `skypilot-wandb-worker` with this directive. `recomm
       "sky_job_ids": "<state.current_sweep.sky_job_ids>",
       "idle_timeout_minutes": "<compute.idle_timeout_minutes>",
       "max_budget_usd": "<compute.max_budget_usd>",
-      "cumulative_spend_usd_so_far": "<state.current_sweep.cumulative_spend_usd>",
+      "cumulative_spend_usd": "<state.current_sweep.cumulative_spend_usd>",
       "result_file": ".ml-metaopt/executor-events/poll-sweep-iter-<current_iteration>.json"
     }
   }
@@ -295,8 +293,7 @@ Emit handoff:
   "directive": { "type": "none" },
   "launch_requests": [
     {
-      "skill": "metaopt-analysis-worker",
-      "payload": {},
+      "worker_ref": "metaopt-analysis-worker",
       "result_file": ".ml-metaopt/worker-results/analysis-iter-<current_iteration>.json",
       "slot_class": "auxiliary",
       "mode": "analysis",

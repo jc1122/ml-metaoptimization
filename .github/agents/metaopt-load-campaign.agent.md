@@ -119,17 +119,24 @@ Ensure the directory `.ml-metaopt/handoffs/` exists (create it if not).
 ```json
 {
   "recommended_next_machine_state": "HYDRATE_STATE",
-  "state_patch": {},
-  "directive": { "type": "none" },
+  "state_patch": null,
+  "campaign_valid": true,
+  "campaign_id": "<campaign.name>",
   "campaign_identity_hash": "sha256:<64hex>",
-  "campaign_summary": {
-    "name": "<campaign.name>",
-    "objective_metric": "<objective.metric>",
-    "objective_direction": "<objective.direction>",
-    "wandb_project": "<wandb.entity>/<wandb.project>",
-    "max_budget_usd": "<compute.max_budget_usd>",
-    "num_sweep_agents": "<compute.num_sweep_agents>"
-  }
+  "objective_snapshot": {
+    "metric": "<objective.metric>",
+    "direction": "<objective.direction>",
+    "improvement_threshold": "<objective.improvement_threshold>"
+  },
+  "stop_conditions": "<stop_conditions object from campaign YAML>",
+  "proposal_policy": "<proposal_policy object from campaign YAML>",
+  "compute": "<compute object from campaign YAML>",
+  "wandb": "<wandb object from campaign YAML>",
+  "project": "<project object from campaign YAML>",
+  "validation_issues": [],
+  "warnings": [],
+  "preflight_readiness": { "status": "fresh_ready", "..." },
+  "summary": "campaign validated; hand off to HYDRATE_STATE"
 }
 ```
 
@@ -137,11 +144,18 @@ Ensure the directory `.ml-metaopt/handoffs/` exists (create it if not).
 ```json
 {
   "recommended_next_machine_state": "BLOCKED_CONFIG",
-  "state_patch": {},
-  "directive": { "type": "none" },
-  "blocking_reason": "<human-readable description of all validation failures>"
+  "state_patch": null,
+  "campaign_valid": false,
+  "campaign_id": "<campaign.name or null>",
+  "campaign_identity_hash": null,
+  "validation_issues": ["<list of all validation failures>"],
+  "warnings": [],
+  "recovery_action": "<human-readable recovery instruction>",
+  "summary": "campaign invalid; repair ml_metaopt_campaign.yaml before retrying"
 }
 ```
+
+Note: `state_patch` is always `null` for this agent (not `{}`). The `campaign_valid` field is required — downstream agents (hydrate-state) gate on it. The `objective_snapshot`, `proposal_policy`, `compute`, `wandb`, and `project` fields pass through the full campaign YAML sections for downstream consumption.
 
 ## Rules
 
@@ -150,4 +164,4 @@ Ensure the directory `.ml-metaopt/handoffs/` exists (create it if not).
 - Do NOT dispatch workers or emit execution directives.
 - Your ONLY write target is the handoff file.
 - Collect ALL validation failures before writing the handoff — do not stop at the first error. Report every issue so the user can fix them all at once.
-- The `state_patch` is always `{}` for this agent — state initialization is done by `metaopt-hydrate-state`.
+- The `state_patch` is always `null` for this agent — state initialization is done by `metaopt-hydrate-state`.

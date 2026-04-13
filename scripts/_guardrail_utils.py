@@ -141,6 +141,13 @@ def normalize_launch_requests(launch_requests: Any) -> list[dict[str, Any]]:
 
         policy = WORKER_DISPATCH_POLICY[worker_ref]
 
+        # Reject directive-dispatched workers from all slot-based launch_requests
+        if policy["slot_class"] is None:
+            raise ValueError(
+                f"worker {worker_ref!r} is directive-dispatched and must not appear in "
+                "launch_requests; dispatch it via directive instead"
+            )
+
         has_slot_class = "slot_class" in entry
         has_mode = "mode" in entry
 
@@ -156,12 +163,6 @@ def normalize_launch_requests(launch_requests: Any) -> list[dict[str, Any]]:
             if slot_class not in ALLOWED_SLOT_MODES:
                 raise ValueError(
                     f"unknown slot_class {slot_class!r}; allowed: {sorted(ALLOWED_SLOT_MODES)}"
-                )
-
-            if policy["slot_class"] is None:
-                raise ValueError(
-                    f"worker {worker_ref!r} is directive-dispatched and must not appear in "
-                    "slot-based launch_requests"
                 )
 
             if slot_class != policy["slot_class"]:

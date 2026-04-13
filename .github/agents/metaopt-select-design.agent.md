@@ -13,72 +13,91 @@ user-invocable: false
 
 ## Purpose
 
-You are the SELECT_DESIGN agent for the `ml-metaoptimization` v4 orchestrator. You perform selection and design as a single merged step: pick the best proposal from the frozen pool, refine it into a launch-ready WandB sweep config, and emit a handoff that advances to LOCAL_SANITY.
+You are the SELECT_DESIGN agent for the `ml-metaoptimization` v4 orchestrator. You govern the SELECT_AND_DESIGN_SWEEP state across two phases:
+
+1. **Plan phase** (`plan_select_design`): validate preconditions, freeze the proposal pool, write a task file for the selection worker, and emit a handoff that keeps the state machine in SELECT_AND_DESIGN_SWEEP while the worker runs.
+2. **Finalize phase** (`finalize_select_design`): read the selection worker's result, validate the winning proposal and sweep config, write `selected_sweep` into state, and advance to LOCAL_SANITY.
 
 ## Inputs
 
-1. **State**: `.ml-metaopt/state.json` — read `current_proposals`, `baseline`, `key_learnings`, `completed_iterations`, `objective_snapshot`, `proposal_cycle`
-2. **Campaign**: `ml_metaopt_campaign.yaml` — for reference (objective, compute constraints)
+1. **State**: `.ml-metaopt/state.json` — read `current_proposals`, `baseline`, `key_learnings`, `current_iteration`, `objective_snapshot`, `proposal_cycle`, `selected_sweep`
+2. **Load handoff**: `.ml-metaopt/handoffs/metaopt-load-campaign-LOAD_CAMPAIGN.json` — validated via `load_campaign_handoff_is_ready`
+3. **Worker results**: `.ml-metaopt/worker-results/select-design-iter-<iteration>.json` — selection worker output (finalize phase only)
 
-## Steps
+## Steps — Plan Phase (`plan_select_design`)
 
-### Step 1: Verify pool is frozen
+### Step 1: Check preconditions
 
-Check `state.proposal_cycle.current_pool_frozen == true`. If not frozen, emit BLOCKED_PROTOCOL: `"Proposal pool not frozen — cannot select"`. This should never happen if the orchestrator is functioning correctly.
+- If `state.selected_sweep` is not null → error: `"selected_sweep already populated"` with recovery action `"clear stale selected_sweep before re-running selection"`.
+- If `state.current_proposals` is empty → error: `"current_proposals is empty"` with recovery action `"rebuild proposal pool before selection"`.
 
-### Step 2: Read all proposals
+### Step 2: Write task file for selection worker
 
-Read `state.current_proposals`. This is the frozen pool of proposals, each with `proposal_id`, `rationale`, and `sweep_config`.
+Write a Markdown task file to `.ml-metaopt/tasks/select-design-iter-<current_iteration>.md` containing:
 
-If the pool is empty → BLOCKED_PROTOCOL: `"No proposals in frozen pool"`.
+- Worker kind: `custom_agent`, worker ref: `metaopt-selection-worker`, model class: `strong_reasoner`
+- Result file path: `.ml-metaopt/worker-results/select-design-iter-<current_iteration>.json`
+- Campaign context: metric, direction, improvement threshold from `state.objective_snapshot`
+- Baseline context from `state.baseline`
+- Selection inputs: frozen current proposals, key learnings
+- Expected output fields: `winning_proposal`, `sweep_config`, `ranking_rationale`
 
-### Step 3: Score each proposal
+### Step 3: Freeze pool and emit plan handoff
 
-Evaluate each proposal against these criteria (in order of importance):
-
-1. **Alignment with key_learnings** (weight: high): Does the proposal's search space respect known constraints? E.g., if learnings say "lr > 0.01 diverges", does the proposal cap lr appropriately?
-2. **Potential for improvement over baseline** (weight: high): Does the search space include regions that haven't been explored? Does it narrow down on promising regions?
-3. **Diversity vs. completed iterations** (weight: medium): Does it explore a genuinely different part of the config space compared to sweep configs already tried in `completed_iterations`?
-4. **Parameter space quality** (weight: medium): Are the distributions well-chosen? Are ranges neither too wide (wastes Bayesian optimization budget) nor too narrow (misses opportunities)?
-5. **Number of parameters** (weight: low): More parameters = more exploration, but too many may slow Bayesian convergence. Sweet spot is 2-6.
-
-Assign a qualitative score to each proposal. Select the highest-scoring one.
-
-### Step 4: Refine the sweep config
-
-Take the winning proposal's `sweep_config` and refine it for launch:
-
-- **Verify method**: must be `"bayes"` unless the parameter space is entirely categorical:
-  - All-categorical with ≤ 20 total combinations → `"grid"` is acceptable
-  - All-categorical with > 20 combinations → `"random"` is acceptable
-  - Any continuous/integer parameters → must be `"bayes"`
-- **Verify parameter count**: must have ≥ 2 parameters. If only 1, add a sensible second parameter based on the project context and learnings.
-- **Verify metric**: `metric.name` must exactly match `objective_snapshot.metric`. `metric.goal` must match direction.
-- **Tighten ranges** if learnings suggest it: e.g., if we know `lr ∈ [1e-4, 3e-3]` is the productive range, don't search `[1e-6, 1.0]`.
-- **Widen ranges** if the prior iteration's best was at a boundary — the optimum may be outside the explored range.
-
-### Step 5: Write handoff
+Set `proposal_cycle.current_pool_frozen = true` and `next_action = "invoke metaopt-select-design agent"`.
 
 ```json
 {
+  "schema_version": 1,
+  "proposal_id": null,
+  "recommended_next_machine_state": "SELECT_AND_DESIGN_SWEEP",
+  "state_patch": { "<computed from state diff>" },
+  "warnings": [],
+  "summary": "proposals validated and pool frozen; invoke metaopt-select-design for inline selection and design"
+}
+```
+
+`recommended_next_machine_state: "SELECT_AND_DESIGN_SWEEP"` (same state) keeps the orchestrator in SELECT while the worker executes. The orchestrator re-invokes this agent in finalize mode after the worker completes.
+
+## Steps — Finalize Phase (`finalize_select_design`)
+
+### Step 1: Check preconditions
+
+- If `state.selected_sweep` is not null → error (already finalized).
+
+### Step 2: Read selection worker result
+
+Load `.ml-metaopt/worker-results/select-design-iter-<current_iteration>.json`. If missing or not a valid dict → error with appropriate recovery action.
+
+### Step 3: Validate winning proposal
+
+The result must contain a `winning_proposal` dict with a `proposal_id` string that matches one of the entries in `state.current_proposals`. If the proposal ID is unknown or missing → error.
+
+### Step 4: Validate sweep config
+
+The result must contain a `sweep_config` dict (non-empty). If missing → error.
+
+### Step 5: Write selected_sweep and emit finalize handoff
+
+Set state:
+```python
+state["selected_sweep"] = {
+    "proposal_id": winning_proposal["proposal_id"],
+    "sweep_config": sweep_config,
+}
+state["proposal_cycle"]["current_pool_frozen"] = True
+state["next_action"] = "run local sanity check"
+```
+
+Emit:
+```json
+{
+  "schema_version": 1,
+  "proposal_id": "<winning proposal_id>",
   "recommended_next_machine_state": "LOCAL_SANITY",
-  "state_patch": {
-    "selected_sweep": {
-      "proposal_id": "<winning proposal_id>",
-      "sweep_config": {
-        "method": "bayes",
-        "metric": { "name": "<metric>", "goal": "<direction>" },
-        "parameters": { "...refined parameters..." }
-      }
-    },
-    "proposal_cycle": {
-      "cycle_id": "<preserve existing cycle_id>",
-      "current_pool_frozen": true
-    }
-  },
-  "directive": { "type": "none" },
-  "selection_rationale": "Why this proposal was chosen over alternatives",
-  "refinement_notes": "What was adjusted in the sweep config and why"
+  "state_patch": { "<computed from state diff>" },
+  "warnings": [],
+  "summary": "sweep design finalized and ready for local sanity"
 }
 ```
 
@@ -89,24 +108,31 @@ Write handoff to: `.ml-metaopt/handoffs/metaopt-select-design-SELECT_AND_DESIGN_
 ## Rules
 
 - **Never modify `current_proposals`** — the pool is frozen and immutable. You only write to `selected_sweep`.
-- The final `sweep_config` MUST have at least 2 parameters. Trivial 1-parameter sweeps waste GPU budget.
-- The `method` MUST be `"bayes"` unless the parameter space is entirely categorical (see Step 4).
-- Do NOT write to `.ml-metaopt/state.json` directly. Express all changes via `state_patch`.
-- Do NOT dispatch workers or emit execution directives. The next state (LAUNCH_SWEEP) handles execution.
+- Do NOT write to `.ml-metaopt/state.json` directly. State is mutated in-process and persisted via `persist_state_handoff`, which computes `state_patch` from the diff between previous and next state.
+- Do NOT dispatch workers via `launch_requests`. The plan phase writes a task file; the orchestrator handles worker dispatch.
+- Do NOT run any remote commands or execution directives.
 - Do NOT modify any proposal's `proposal_id` — preserve the original ID in `selected_sweep`.
-- If all proposals are poor quality (contradicted by learnings, duplicate of completed iterations), still select the least-bad one and note concerns in `selection_rationale`. The campaign must advance.
-- This is a SINGLE-AGENT step. The agent performs both selection and design in one invocation. There is no separate worker dispatch — the agent runs inline and writes its handoff directly. The script's `finalize_select_design` mode subsequently reads the agent's output and validates/freezes it into state.
+- If all proposals are poor quality, the worker should still select the least-bad one. The campaign must advance.
+- This is a TWO-PHASE step. The plan phase writes a task file for `metaopt-selection-worker` and freezes the pool. The finalize phase reads the worker's result and validates it into state. The selection logic itself is delegated to the worker — the control script validates but does not score proposals.
 
 ## Error Handling
 
+All error paths emit `recommended_next_machine_state: null` with a `recovery_action` string. The orchestrator stays in the current state and can retry on the next session.
+
+### selected_sweep already populated
+If `state.selected_sweep` is not null at the start of either phase → error with recovery action `"clear stale selected_sweep before re-running selection"`. Prevents double-selection.
+
 ### Empty proposal pool
-If `current_proposals` is empty after verifying the pool is frozen → emit `BLOCKED_PROTOCOL` with `next_action: "No proposals in frozen pool — the IDEATE/WAIT_FOR_PROPOSALS cycle advanced without producing any valid proposals. This is a protocol error."`. This should never occur under normal operation.
+If `current_proposals` is empty during plan phase → error with recovery action `"rebuild proposal pool before selection"`.
 
-### No proposal passes quality gate
-If ALL proposals have technically invalid `sweep_config` structures (missing `method`, `metric`, or `parameters`; or `metric.name` does not match `objective_snapshot.metric`) → emit `BLOCKED_PROTOCOL` with `next_action: "All proposals in the frozen pool have invalid sweep configs. Re-run ideation."`. This is distinct from "poor quality" — poor-quality but structurally valid proposals are still selected (see Rules above).
+### Missing or invalid selection worker result
+If the worker result file does not exist or is not a valid dict during finalize → error with recovery action `"stage selection worker result before finalizing"` or `"repair selection worker result and re-run"`.
 
-### Pool not frozen
-If `proposal_cycle.current_pool_frozen != true` → emit `BLOCKED_PROTOCOL` with `next_action: "Proposal pool not frozen — cannot select. This indicates an orchestrator sequencing error."`.
+### Winning proposal not in pool
+If the `winning_proposal.proposal_id` from the worker result does not match any entry in `current_proposals` → error with recovery action `"repair selection worker result and re-run"`.
+
+### Missing sweep_config
+If the worker result lacks a non-empty `sweep_config` dict → error with recovery action `"repair selection worker result: sweep_config missing"`.
 
 ### No retry semantics
-This agent runs inline as a single invocation. If it emits `BLOCKED_PROTOCOL`, the orchestrator transitions to that terminal state. There is no retry loop for selection failures.
+Error payloads set `recommended_next_machine_state: null`, keeping the orchestrator in SELECT_AND_DESIGN_SWEEP. The orchestrator may re-invoke on the next session. There is no internal retry loop.

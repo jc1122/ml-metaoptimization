@@ -21,9 +21,9 @@ You are invoked by the orchestrator in one of two modes (passed as context): `pl
 
 ## Inputs
 
-1. **State**: `.ml-metaopt/state.json` — read `current_proposals`, `next_proposals`, `key_learnings`, `baseline`, `completed_iterations`, `objective_snapshot`, `proposal_cycle`
+1. **State**: `.ml-metaopt/state.json` — read `current_proposals`, `next_proposals`, `key_learnings`, `baseline`, `current_iteration`, `campaign_id`, `objective_snapshot`, `proposal_cycle`
 2. **Load handoff**: `.ml-metaopt/handoffs/metaopt-load-campaign-LOAD_CAMPAIGN.json` — read `proposal_policy.current_target`, `objective_snapshot`
-3. **Worker results**: `.ml-metaopt/worker-results/ideation-*.json` — completed ideation worker outputs
+3. **Worker results**: `.ml-metaopt/worker-results/bg-*.json` — completed ideation worker outputs
 
 ## Steps — Plan Phase (`plan_background_work`)
 
@@ -32,60 +32,47 @@ You are invoked by the orchestrator in one of two modes (passed as context): `pl
 Read `state.current_proposals`. Let `have = len(current_proposals)`.
 Read `proposal_policy.current_target` from campaign YAML. Let `target = current_target`.
 
-### Step 2: Compute shortfall
+### Step 2: Check if pool already meets threshold
 
-Let `need = target - have`. If `need <= 0`, skip to gate behavior — emit a handoff recommending `WAIT_FOR_PROPOSALS`.
+If `have >= target`, the pool is already ready. Emit a handoff with `pool_status: "ready"`, `recommended_next_machine_state: "SELECT_AND_DESIGN_SWEEP"`, empty `launch_requests`, set `next_action = "select experiment"` in state, and return immediately.
 
-### Step 3: Write task files for ideation workers
+### Step 3: Compute shortfall and write task files
 
-For each worker `i` in `1..need`, write a task file to `.ml-metaopt/tasks/ideation-iter-<current_iteration>-<i>.json`:
+Let `need = max(0, target - have)`. For each worker `i` in `1..need`, assign slot ID `bg-<i>` and write a **Markdown** task file to `.ml-metaopt/tasks/bg-<i>.md` containing:
 
-```json
-{
-  "task_type": "ideation",
-  "result_file": ".ml-metaopt/worker-results/ideation-iter-<current_iteration>-<i>.json",
-  "objective": {
-    "metric": "<objective_snapshot.metric>",
-    "direction": "<objective_snapshot.direction>",
-    "improvement_threshold": "<objective_snapshot.improvement_threshold>"
-  },
-  "baseline": "<state.baseline or null>",
-  "key_learnings": "<state.key_learnings>",
-  "existing_proposal_rationales": ["<rationale from each proposal in current_proposals>"],
-  "completed_iterations_summary": "<brief summary of what sweep configs have been tried>"
-}
-```
+- Slot ID, attempt, mode (`ideation`), worker kind (`custom_agent`), worker ref (`metaopt-ideation-worker`), model class (`general_worker`), result file path
+- Campaign context: metric, direction, improvement threshold, baseline, key learnings, current proposal pool, next proposal pool, proposal policy
+- Output schema: `slot_id`, `mode`, `status`, `summary`, `proposal_candidates`, optional `saturated` and `reason`
 
 ### Step 4: Emit launch_requests
 
-Include `launch_requests` in the handoff for the orchestrator to dispatch `metaopt-ideation-worker` agents. Each entry must follow the `WorkerLaunchRequest` schema from `references/contracts.md`:
+Include `launch_requests` in the handoff for the orchestrator to dispatch `metaopt-ideation-worker` agents. Each entry:
 
 ```json
 {
-  "launch_requests": [
-    {
-      "worker_ref": "metaopt-ideation-worker",
-      "result_file": ".ml-metaopt/worker-results/ideation-iter-<N>-<i>.json",
-      "slot_class": "background",
-      "mode": "ideation",
-      "model_class": "general_worker",
-      "task_file": ".ml-metaopt/tasks/ideation-iter-<N>-<i>.json"
-    }
-  ]
+  "slot_class": "background",
+  "mode": "ideation",
+  "worker_ref": "metaopt-ideation-worker",
+  "model_class": "general_worker",
+  "task_file": ".ml-metaopt/tasks/bg-<i>.md",
+  "result_file": ".ml-metaopt/worker-results/bg-<i>.json"
 }
 ```
 
-Note: the field is `worker_ref` (not `skill`). The `payload` field is not used for slot-based workers — the task file contains all context.
+Note: the field is `worker_ref` (not `skill`). The task file contains all context.
 
-### Step 5: Write plan handoff
+### Step 5: Update state and write plan handoff
+
+Set `proposal_cycle.current_pool_frozen = false`. On iteration 1 with no existing `cycle_id`, set `cycle_id = "iter-1-cycle-1"`. Set `next_action = "execute planned background work"`.
 
 ```json
 {
+  "schema_version": 1,
+  "pool_status": "building",
   "recommended_next_machine_state": "WAIT_FOR_PROPOSALS",
-  "state_patch": {},
-  "directive": { "type": "none" },
   "launch_requests": [ "..." ],
-  "summary": "Dispatching <need> ideation workers (have <have>/<target> proposals)"
+  "state_patch": { "<computed from state diff>" },
+  "summary": "background slots planned for continued proposal accumulation"
 }
 ```
 
@@ -95,78 +82,51 @@ Note: the field is `worker_ref` (not `skill`). The `payload` field is not used f
 
 ### Step 1: Read completed ideation results
 
-Scan `.ml-metaopt/worker-results/ideation-iter-<current_iteration>-*.json` for result files that were not yet processed (compare against proposals already in `current_proposals` by `proposal_id`).
+Scan `.ml-metaopt/worker-results/bg-*.json` for result files that were not yet processed. Deduplication is by result file basename — if a proposal in `current_proposals` or `next_proposals` already has a matching `source_file`, skip that result file.
 
-### Step 2: Validate each result
+### Step 2: Extract proposal candidates from valid results
 
-For each result file, check:
-1. `status` field equals `"completed"` (exact string match — silently drop results that omit it or use a different value)
-2. Has required fields: `proposal_id`, `rationale`, `sweep_config`
-3. `sweep_config` has `method`, `metric`, `parameters`
-4. `sweep_config.metric.name` matches `objective_snapshot.metric`
-5. `sweep_config.metric.goal` matches the objective direction (`"maximize"` or `"minimize"`)
-6. `sweep_config.parameters` has at least 2 parameters (single-parameter sweeps waste GPU budget and will be rejected at selection)
-7. Each parameter uses a valid WandB distribution type: `values`, `uniform`, `log_uniform_values`, `int_uniform`, `normal`, `log_normal`, `categorical`, `constant`
+For each result file where `status == "completed"`, extract the `proposal_candidates` list (an array of candidate objects). For each candidate, create an enriched proposal with these added fields:
 
-### Step 3: Lane drift detection
+- `proposal_id`: `<campaign_id>-p<sequence>` (sequence auto-increments across both pools)
+- `source_slot_id`: the result file stem (e.g. `bg-1`)
+- `source_file`: the result file basename (e.g. `bg-1.json`)
+- `creation_iteration`: `state.current_iteration`
+- `created_at`: UTC ISO 8601 timestamp
 
-**REJECT** any result that contains ANY of these fields at any nesting level:
-- `patch_artifacts`
-- `code_patches`
-- `code_changes`
-- `file_diffs`
-- `modified_files`
+Results without `status: "completed"` are silently skipped.
 
-These indicate the worker drifted into code-change mode, which is forbidden in v4. Log a warning and discard the result entirely.
+### Step 3: Route proposals to correct pool
 
-### Step 4: Append valid proposals
+Append enriched proposals to `current_proposals` when `proposal_cycle.current_pool_frozen` is false, or to `next_proposals` when it is true.
 
-Build a `state_patch` that appends all valid proposals to `current_proposals`:
-
-```json
-{
-  "state_patch": {
-    "current_proposals": "<existing current_proposals + newly validated proposals>"
-  }
-}
-```
-
-### Step 5: Check threshold
+### Step 4: Check threshold
 
 Let `total = len(current_proposals after append)`.
 
 - If `total >= proposal_policy.current_target`:
-  - Set `recommended_next_machine_state: "SELECT_AND_DESIGN_SWEEP"`
+  - Set `next_action = "select experiment"`, `recommended_next_machine_state: "SELECT_AND_DESIGN_SWEEP"`, `pool_status: "ready"`
 - Else:
-  - Set `recommended_next_machine_state: "IDEATE"` (dispatch more workers).
+  - Set `next_action = "plan more background work"`, `recommended_next_machine_state: "IDEATE"`, `pool_status: "building"`
 
-### Step 6: Write gate handoff
+### Step 5: Write gate handoff
 
 ```json
 {
+  "schema_version": 1,
+  "pool_status": "ready" or "building",
   "recommended_next_machine_state": "SELECT_AND_DESIGN_SWEEP" or "IDEATE",
-  "state_patch": { "current_proposals": ["..."] },
-  "directive": { "type": "none" },
-  "summary": "Validated <N> proposals, pool at <total>/<target>",
-  "rejected_count": "<number of rejected results>",
-  "rejection_reasons": ["<reason for each rejected result>"]
+  "current_proposal_count": "<count>",
+  "next_proposal_count": "<count>",
+  "processed_results": ["bg-1", "bg-2"],
+  "state_patch": { "<computed from state diff>" },
+  "summary": "proposal pool satisfies selection gate" or "proposal pool still below threshold"
 }
 ```
 
 ## WAIT_FOR_PROPOSALS Gate
 
-When invoked in `machine_state == WAIT_FOR_PROPOSALS`:
-
-1. Verify `len(current_proposals) >= proposal_policy.current_target`.
-2. If threshold met, emit:
-   ```json
-   {
-     "recommended_next_machine_state": "SELECT_AND_DESIGN_SWEEP",
-     "state_patch": { "proposal_cycle": { "cycle_id": "<preserve existing cycle_id>", "current_pool_frozen": true } },
-     "directive": { "type": "none" }
-   }
-   ```
-3. If threshold NOT met (proposals were invalidated after entering WAIT), emit `recommended_next_machine_state: "IDEATE"` to go back and get more.
+The gate phase (`gate_background_work`) serves both IDEATE-gate and WAIT_FOR_PROPOSALS states. The same logic applies: scan worker results, enrich and append proposals, then check the threshold. No separate behavior is needed — the threshold check naturally emits either `SELECT_AND_DESIGN_SWEEP` (pool ready) or `IDEATE` (need more).
 
 ## Output
 
@@ -175,24 +135,20 @@ Write handoff to: `.ml-metaopt/handoffs/metaopt-background-control-<machine_stat
 ## Error Handling
 
 ### All ideation workers fail or return invalid proposals
-During the gate phase, if every result file is either missing, has `status != "completed"`, fails validation (Steps 2–3), or is rejected for lane drift, the pool does not grow. The agent emits `recommended_next_machine_state: null` (stay in IDEATE) so the orchestrator dispatches a fresh batch of workers on the next session. This loop continues across sessions.
-
-If the orchestrator's reinvocation counter for the IDEATE↔WAIT_FOR_PROPOSALS cycle exceeds the protocol's attempt limit (tracked externally by the orchestrator), the orchestrator should transition to `BLOCKED_PROTOCOL` with `next_action: "All ideation workers failed repeatedly — check worker agent availability, model availability, and objective configuration"`.
+During the gate phase, if every result file is either missing or has `status != "completed"`, the pool does not grow. The agent emits `recommended_next_machine_state: "IDEATE"` to loop back for more workers. There is no timeout within this agent — the IDEATE↔WAIT_FOR_PROPOSALS loop can repeat across sessions. Budget and iteration limits in ROLL_ITERATION provide the outer bound.
 
 ### Pool never reaches threshold
-If the pool remains below `proposal_policy.current_target` after workers complete, the gate phase emits `recommended_next_machine_state: null` (back to IDEATE) to request more workers. There is no timeout within this agent — the IDEATE↔WAIT_FOR_PROPOSALS loop can repeat across sessions. Budget and iteration limits in ROLL_ITERATION provide the outer bound. If the orchestrator detects the cycle has looped without any valid proposals being added for multiple consecutive sessions, it should escalate to `BLOCKED_PROTOCOL`.
+If the pool remains below `proposal_policy.current_target` after workers complete, the gate phase emits `recommended_next_machine_state: "IDEATE"` to request more workers. If the orchestrator detects the cycle has looped without progress for multiple sessions, it should escalate to `BLOCKED_PROTOCOL`.
 
 ### Partial pool (mix of valid and invalid results)
-Valid proposals are appended to `current_proposals`; invalid results are silently dropped (logged in `rejection_reasons`). The gate re-evaluates the pool size. If the valid subset meets the threshold, the campaign advances. If not, the cycle loops for more workers. This is the normal path — partial success is expected when some workers produce low-quality output.
-
-### Missing or unreadable result files
-If a result file referenced by a launch request does not exist or cannot be parsed as JSON, treat it as an invalid result — skip it and log the path in `rejection_reasons`. Do not emit an error state for individual missing files.
+Valid proposals (those with `status: "completed"` and `proposal_candidates`) are appended; incomplete results are silently skipped. The gate re-evaluates the pool size. If the valid subset meets the threshold, the campaign advances. If not, the cycle loops for more workers.
 
 ## Rules
 
-- Do NOT write to `.ml-metaopt/state.json` directly. All changes go through `state_patch`.
+- Do NOT write to `.ml-metaopt/state.json` directly. State is mutated in-process and persisted via `persist_state_handoff`, which computes `state_patch` from the diff between previous and next state. The handoff payload always includes the computed `state_patch`.
 - Do NOT dispatch workers yourself. Emit `launch_requests` for the orchestrator.
 - Do NOT run any remote commands or execution directives.
 - There is NO maintenance mode in v4. Background agents do ideation ONLY.
 - Never modify proposals that are already in `current_proposals` — only append new ones.
 - The orchestrator interprets `launch_requests` mechanically; you own all semantic decisions about what to dispatch.
+- The `--secondary` flag suppresses `recommended_next_machine_state` (sets it to null) for auxiliary invocations.

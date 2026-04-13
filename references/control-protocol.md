@@ -63,18 +63,18 @@ Dispatch the governing control agent as a subagent. Wait for it to write its han
 ### Step 5 -- Execute directive
 
 Execute directives mechanically:
-- launch_sweep: dispatch skypilot-wandb-worker, write result to .ml-metaopt/worker-results/launch-sweep.json
-- poll_sweep: dispatch skypilot-wandb-worker, write result to .ml-metaopt/worker-results/poll-sweep.json
-- run_smoke_test: dispatch skypilot-wandb-worker, write result to .ml-metaopt/worker-results/smoke-test.json
+- launch_sweep: dispatch skypilot-wandb-worker, write result to .ml-metaopt/worker-results/launch-sweep-iter-<N>.json
+- poll_sweep: dispatch skypilot-wandb-worker, write result to .ml-metaopt/executor-events/poll-sweep-iter-<N>.json
+- run_smoke_test: dispatch skypilot-wandb-worker, write result to .ml-metaopt/executor-events/smoke-test-iter-<N>.json
 - remove_agents_hook: remove the ml-metaoptimization marked block from AGENTS.md
-- delete_state_file: delete .ml-metaopt/state.json
+- delete_state_file: delete .ml-metaopt/state.json (reserved; currently handled by the orchestrator, not emitted by control agents)
 - emit_final_report: write .ml-metaopt/final_report.md
 - emit_iteration_report: write iteration report for the completed iteration
 - none: no operation
 
-Terminal cleanup actions (remove_agents_hook, delete_state_file, emit_final_report, emit_iteration_report) are emitted as directives by control agents when transitioning to terminal states. The orchestrator executes them like any other directive. Specifically:
+Terminal cleanup actions (remove_agents_hook, emit_final_report, emit_iteration_report) are emitted as directives by control agents when transitioning to terminal states. The orchestrator executes them like any other directive. Specifically:
 - On any terminal state: remove_agents_hook — remove the ml-metaoptimization marked block from AGENTS.md
-- On COMPLETE only: emit_final_report — write .ml-metaopt/final_report.md, then delete_state_file — delete .ml-metaopt/state.json
+- On COMPLETE and BLOCKED_CONFIG: also emit emit_final_report — write .ml-metaopt/final_report.md
 
 ### Step 6 -- Apply state patch
 

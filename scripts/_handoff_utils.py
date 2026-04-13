@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from _guardrail_utils import validate_executor_policy
+from _guardrail_utils import normalize_launch_requests, validate_executor_policy
 
 
 TERMINAL_MACHINE_STATES = frozenset({"BLOCKED_CONFIG", "BLOCKED_PROTOCOL", "COMPLETE", "FAILED"})
@@ -22,7 +22,6 @@ LEGACY_HANDOFF_FIELDS = frozenset({
     "executor_directives",
     "pre_launch_directives",
     "post_launch_directives",
-    "launch_requests",
 })
 
 # Allowed patch ownership prefixes per control agent.
@@ -283,6 +282,8 @@ def emit_handoff(
     payload["directives"] = validate_executor_policy(
         control_agent, payload["handoff_type"], payload["directives"]
     )
+    payload.setdefault("launch_requests", [])
+    payload["launch_requests"] = normalize_launch_requests(payload["launch_requests"])
     payload.setdefault("summary", "")
     payload.setdefault("warnings", [])
     write_json(output_path, payload)

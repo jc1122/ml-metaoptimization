@@ -57,6 +57,7 @@ That is all. Two reads per turn. Total context overhead: ~3 KB per turn.
 | `references/contracts.md` | Internal schema used by Python scripts; you never validate JSON manually |
 | `references/worker-lanes.md` | Worker-internal; describes what workers do, not what you do |
 | `references/backend-contract.md` | Worker-internal; SkyPilot/WandB API shapes for the executor, not you |
+| `.ml-metaopt/preflight-readiness.json` | Read by `load_campaign_handoff.py` internally; you never parse this artifact directly |
 | `references/dependencies.md` | Used only during HYDRATE_STATE preflight; already done |
 | `.ml-metaopt/tasks/*.md` | Worker task files — written by control scripts, consumed by workers, not you |
 | `.ml-metaopt/worker-results/*.json` | Read by control scripts internally; you never parse these |

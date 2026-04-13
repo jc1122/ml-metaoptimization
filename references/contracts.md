@@ -192,3 +192,33 @@ When improvement is detected:
 When no improvement:
 - Increment `no_improve_iterations` by `1`
 - Preserve existing `baseline` unchanged
+
+## Section 6 — Preflight Readiness Artifact
+
+Path: `.ml-metaopt/preflight-readiness.json`
+
+Produced by `metaopt-preflight`, consumed by `_evaluate_preflight()` in `load_campaign_handoff.py` during `LOAD_CAMPAIGN`.
+
+| Field | Type | Consumed by v4 |
+|-------|------|----------------|
+| `schema_version` | integer | Yes — must be in `RECOGNIZED_PREFLIGHT_SCHEMA_VERSIONS` (currently `{1}`) |
+| `status` | string | Yes — `"READY"` or `"FAILED"` |
+| `campaign_identity_hash` | string | Yes — must match the orchestrator's computed hash for binding freshness |
+| `failures` | array | Yes — surfaced in handoff when status is `"FAILED"` |
+| `next_action` | string | Yes — surfaced as `artifact_next_action` in handoff |
+| `runtime_config_hash` | string | No — emitted by preflight for forward compatibility; **not validated by v4** |
+| `campaign_id` | string | No — informational |
+| `emitted_at` | string | No — informational |
+| `preflight_duration_seconds` | number | No — informational |
+| `checks_summary` | object | No — informational aggregate counts |
+| `diagnostics` | string or null | No — informational |
+
+### `checks_summary` object
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `total` | integer | Total checks evaluated |
+| `passed` | integer | Checks that passed without bootstrap |
+| `failed` | integer | Checks that remain failed after bootstrap |
+| `bootstrapped` | integer | Checks that passed after bootstrap mutation |
+| `warnings` | integer | Non-blocking warning count |

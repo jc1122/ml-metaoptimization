@@ -1,81 +1,127 @@
 # Dependencies
 
-## Preflight Prerequisite
+## Environment Dependencies
 
-The one-shot `metaopt-preflight` skill must run before the orchestrator loop begins.
-It validates environment readiness (backend connectivity, tool availability, campaign coherence)
-and emits `.ml-metaopt/preflight-readiness.json`. `LOAD_CAMPAIGN` gates on this artifact:
-if it is missing, stale, or records a failed status the orchestrator blocks with `BLOCKED_CONFIG`.
+The following must be available in the execution environment before the campaign can start.
 
-## Hard Runtime Dependencies
+### SkyPilot
+
+SkyPilot must be installed and configured for Vast.ai:
+- `sky check` must pass for the Vast.ai provider
+- SkyPilot version must support `--idle-minutes-to-autostop`
+- The `sky launch` and `sky down` commands must be available on the PATH
+
+### WandB API Key
+
+WandB access must be configured:
+- Either `wandb login` has been run interactively, or
+- `WANDB_API_KEY` environment variable is set
+- The API key must have permissions to create sweeps and manage runs in the configured `wandb.entity` and `wandb.project`
+
+### `skypilot-wandb-worker` Agent
+
+The `skypilot-wandb-worker` custom agent must be available in the runtime. Verified during `HYDRATE_STATE`. If missing, transition to `BLOCKED_CONFIG` with `next_action = "install missing agent: skypilot-wandb-worker"`.
+
+### Project Repository Access
+
+- `project.repo` must be accessible (SSH key or HTTPS credentials for the git URL)
+- The repository must contain a training entrypoint that reads hyperparameters from `wandb.config` and logs metrics via `wandb.log(...)`
+
+### Smoke Test Command
+
+- `project.smoke_test_command` must be a valid shell command that exists in the repo root
+- It must be runnable locally and complete (or crash) within 60 seconds
+
+### Additional Runtime Dependencies
 
 - GitHub Copilot agent runtime with subagent dispatch
-- `git` with worktree support
-- unified-diff-compatible mechanical patch application capability
-- host reinvocation mechanism compatible with the `AGENTS.md` resume hook
-- target repository files:
+- `git` available on the PATH
+- Host reinvocation mechanism compatible with the `AGENTS.md` resume hook
+- Target repository files:
   - `ml_metaopt_campaign.yaml`
   - `AGENTS.md`
   - `.ml-metaopt/preflight-readiness.json` (emitted by `metaopt-preflight`; prerequisite before `LOAD_CAMPAIGN` proceeds)
   - `.ml-metaopt/state.json` (created on first run if absent, then reused for resume)
-- skill repo assets:
+- Skill repo assets:
   - `SKILL.md`
   - `references/contracts.md`
   - `references/state-machine.md`
   - `references/worker-lanes.md`
   - `references/dispatch-guide.md`
   - `references/backend-contract.md`
-  - `ml_metaopt_campaign.example.yaml`
-- PyYAML for the validation suite
+  - `references/control-protocol.md`
+  - `references/dependencies.md`
 
-## Queue Backend Dependency
+## Campaign YAML Validation Rules
 
-The skill requires a queue backend compatible with `references/backend-contract.md`.
+Enforced by `metaopt-load-campaign` during `LOAD_CAMPAIGN`. Any violation transitions to `BLOCKED_CONFIG`.
 
-Current implementation:
-- `ray-hetzner`
+### `compute` section
 
-The backend must expose enqueue, status, and results commands and must accept immutable batch manifests.
+| Field | Constraint |
+|-------|------------|
+| `compute.provider` | Must be `vast_ai` |
+| `compute.accelerator` | Non-empty string (e.g. `A100:1`) |
+| `compute.num_sweep_agents` | Integer, `1 <= value <= 16` |
+| `compute.idle_timeout_minutes` | Integer, `5 <= value <= 60` |
+| `compute.max_budget_usd` | Float, `0 < value <= 100` (hard ceiling; larger values require manual override) |
 
-## Campaign-Provided Dependencies
+### `objective` section
 
-These come from `ml_metaopt_campaign.yaml`:
-- objective metric and direction
-- aggregation rule
-- datasets with stable IDs and fingerprints
-- local sanity command
-- artifact roots and exclusions
-- queue backend commands
-- remote execution entrypoint
+| Field | Constraint |
+|-------|------------|
+| `objective.metric` | Non-empty string |
+| `objective.direction` | Must be `maximize` or `minimize` |
+| `objective.improvement_threshold` | Float, `> 0` |
 
-If any required campaign field is missing or invalid, transition to `BLOCKED_CONFIG`.
+### `wandb` section
+
+| Field | Constraint |
+|-------|------------|
+| `wandb.entity` | Non-empty string, no whitespace |
+| `wandb.project` | Non-empty string, no whitespace |
+
+### `proposal_policy` section
+
+| Field | Constraint |
+|-------|------------|
+| `proposal_policy.current_target` | Integer, `>= 1` |
+
+### `stop_conditions` section
+
+| Field | Constraint |
+|-------|------------|
+| `stop_conditions.max_iterations` | Integer, `>= 1` |
+| `stop_conditions.target_metric` | Float |
+| `stop_conditions.max_no_improve_iterations` | Integer, `>= 1` |
+
+### `project` section
+
+| Field | Constraint |
+|-------|------------|
+| `project.repo` | Non-empty string, valid git URL |
+| `project.smoke_test_command` | Non-empty string, valid shell command |
+
+### `campaign` section
+
+| Field | Constraint |
+|-------|------------|
+| `campaign.name` | Non-empty string |
+| `campaign.description` | Non-empty string |
 
 ## Worker-Target Dependencies
 
-The orchestrator dispatches these named worker targets during the campaign. Each must be available in the agent runtime.
+Required worker targets (block on missing):
+- `metaopt-ideation-worker` — background ideation lane
+- `metaopt-analysis-worker` — analysis lane
+- `skypilot-wandb-worker` — execution lane (directive-dispatched)
 
-Required worker targets:
-- `metaopt-ideation-worker` — background ideation lane custom agent
-- `metaopt-selection-worker` — auxiliary selection lane
-- `metaopt-design-worker` — auxiliary design lane
-- `metaopt-materialization-worker` — auxiliary materialization lane custom agent
-- `metaopt-diagnosis-worker` — auxiliary diagnosis lane custom agent
-- `metaopt-analysis-worker` — auxiliary analysis lane custom agent
-- `metaopt-rollover-worker` — inline rollover during `ROLL_ITERATION`
-- `repo-audit-refactor-optimize` — background maintenance lane (required by default; may fall back to findings-only if incompatible)
-
-When a required worker target is unavailable, see the Skill Availability section in `SKILL.md` for degradation behavior.
-
-## Optional Enhancement Dependencies
-
-- additional audit or optimization skills invoked indirectly by `repo-audit-refactor-optimize`
-- backend-specific tooling required by the selected queue backend
-
-Missing optional dependencies may degrade worker quality, but they do not block the state machine unless a required lane becomes impossible to execute safely.
+These are verified during `HYDRATE_STATE`. If any is missing, transition to `BLOCKED_CONFIG`.
 
 ## Failure Behavior
 
-- Missing hard runtime dependency: stop and surface a terminal error
-- Missing campaign-provided dependency: `BLOCKED_CONFIG`
-- Missing required backend capability: stop before `ENQUEUE_REMOTE_BATCH`
-- Missing required maintenance-worker subskill: treat the maintenance lane as incompatible, fall back to findings-only maintenance, and record the reason explicitly before continuing
+- Missing environment dependency (SkyPilot, WandB key): `BLOCKED_CONFIG`
+- Missing campaign field or invalid value: `BLOCKED_CONFIG`
+- Missing required worker target: `BLOCKED_CONFIG`
+- Identity hash mismatch on resume: `BLOCKED_CONFIG`
+- Protocol violation during execution: `BLOCKED_PROTOCOL`

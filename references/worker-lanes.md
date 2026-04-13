@@ -1,184 +1,126 @@
 # Worker Lanes
 
-This document describes the **leaf worker lanes** — the individual worker targets that perform concrete work (ideation, selection, design, materialization, diagnosis, analysis, rollover, and maintenance). Each lane specifies the worker's inputs, outputs, and dispatch contract.
+This document describes the **leaf worker lanes** — the individual worker targets that perform concrete work. Each lane specifies the worker's inputs, outputs, dispatch contract, and lane drift rules.
 
-For the higher-level orchestration layer — control agents, the plan/gate protocol, staged task files, and handoff envelopes — see `references/control-protocol.md`. For per-state dispatch details including which control agent governs each phase, see `references/dispatch-guide.md`.
-
-## Slot Classes
-
-Background slots:
-- `ideation`
-- `maintenance`
-
-Auxiliary slots:
-- `selection`
-- `design`
-- `materialization`
-- `diagnosis`
-- `analysis`
+For the control-agent handoff protocol, see `references/control-protocol.md`. For per-state dispatch details, see `references/dispatch-guide.md`.
 
 ## Model Classes
 
 Model resolution is deterministic:
-- `strong_coder`: code changes, debugging, conflict resolution
-- `strong_reasoner`: selection, experiment design, diagnosis, result analysis
-- `general_worker`: ideation and findings-only maintenance work
+- `strong_reasoner`: selection, analysis, result interpretation. Resolution: `claude-opus-4.6` (or any opus >= 4.6), then `gpt-5.4` (or any gpt >= 5.4)
+- `general_worker`: ideation, execution. Resolution: `claude-sonnet-4`, then `gpt-5.4` (or any gpt >= 5.4)
 
-Fallback order:
-- `strong_coder`: `claude-opus-4.6` (or any opus ≥ 4.6 if available), then `gpt-5.4` (or any gpt ≥ 5.4 if available)
-- `strong_reasoner`: `claude-opus-4.6` (or any opus ≥ 4.6 if available), then `gpt-5.4` (or any gpt ≥ 5.4 if available)
-- `general_worker`: `claude-sonnet-4`, then `gpt-5.4` (or any gpt ≥ 5.4 if available)
+No `strong_coder` class — v4 does not produce code patches.
 
 ## Ideation Lane
 
-**Worker target:** `metaopt-ideation-worker` (`custom_agent`)
+**Worker target:** `metaopt-ideation-worker` (custom agent)
 
-Purpose:
-- generate and refine non-overlapping experiment proposals
+**Slot class:** `background`
 
-Inputs:
-- goal
-- metric
-- aggregate baseline
-- key learnings
-- completed experiments
-- current and next proposal pool context
+**Mode:** `ideation`
 
-Outputs:
-- distinct proposal candidates with short rationale
-- one staged JSON result file consumed by the background-control gate
+**Model class:** `general_worker`
 
-## Maintenance Lane
+**Inputs:**
+- Campaign objective (`metric`, `direction`, `improvement_threshold`)
+- Prior `key_learnings`
+- `baseline` (if established)
+- `completed_iterations` history
+- Current and next proposal pool context (to avoid duplication)
+- Rejected proposals and their reasons (if any)
 
-**Skill:** `repo-audit-refactor-optimize`
+**Output:** A JSON file written to `.ml-metaopt/worker-results/<worker-id>.json`:
 
-Purpose:
-- audit and improve the local repo while proposals accumulate or proposal pools saturate
+```json
+{
+  "proposal_id": "prop-001",
+  "rationale": "Exploring residual connections based on prior learning that deeper networks overfit",
+  "sweep_config": {
+    "method": "bayes",
+    "metric": { "name": "val/accuracy", "goal": "maximize" },
+    "parameters": {
+      "lr": { "distribution": "log_uniform_values", "min": 1e-4, "max": 1e-2 },
+      "use_residual": { "values": [true, false] },
+      "num_layers": { "values": [2, 3, 4] }
+    }
+  }
+}
+```
 
-Default requirement:
-- maintenance workers must invoke `repo-audit-refactor-optimize`
+**Constraints:**
+- `sweep_config` must be a valid WandB sweep config
+- `sweep_config.metric.name` must match `objective_snapshot.metric`
+- `sweep_config.metric.goal` must match `objective_snapshot.direction`
+- Parameters must be within declared domains — no invented metrics or nonexistent config keys
+- Each proposal must be meaningfully different from existing proposals in the pool
 
-Expected maintenance focus areas:
-- leakage audit
-- test gaps and determinism
-- pipeline correctness
-- data loading efficiency
-- code quality issues
-- profiling and speed risks
-
-Execution rules:
-- all maintenance slots dispatch in parallel, subject to the global background-slot count
-- use isolated worktrees
-- do not interfere with the orchestrator working tree
-- findings-only maintenance may use `general_worker`
-- code-modifying maintenance must use `strong_coder`
-- return either findings-only output or one patch artifact plus verification notes
-- maintenance patch artifacts are deferred to `QUIESCE_SLOTS`; `metaopt-iteration-close-control` emits `apply_patch_artifacts` directives for each pending patch and the orchestrator applies them mechanically in a dedicated integration worktree
-- if patch application conflicts or requires a non-trivial merge, the orchestrator writes the conflict outcome as an executor event; `metaopt-iteration-close-control` reads the event in its next gate phase and emits conflict-resolution `launch_requests` targeting `metaopt-materialization-worker`
-
-Metaoptimization bridge requirements:
-- `metaopt-background-control` must embed the patch artifact contract (format, metadata fields, and integration path) in the staged maintenance task file it writes, because `repo-audit-refactor-optimize` does not natively encode these requirements
-- The staged task file must instruct the maintenance worker to emit one unified diff patch artifact with `producer_slot_id`, `purpose`, `patch_path`, and `target_worktree` metadata when producing code-modifying output
-- If the maintenance worker does not produce a patch artifact in the expected format, the `metaopt-background-control` gate phase must treat the output as findings-only and record the format mismatch in `key_learnings`
-
-Patch artifact contract:
-- code-modifying maintenance and materialization workers must emit one unified diff patch artifact
-- each unified diff patch artifact must record `producer_slot_id`, `purpose`, `patch_path`, and `target_worktree`
-
-Compatibility rule:
-- only bypass `repo-audit-refactor-optimize` when the worker task is explicitly incompatible with that skill or with the repository state
-- when bypassing, fall back to findings-only maintenance and record the incompatibility reason in output and state
-
-## Selection Lane
-
-**Worker target:** `metaopt-selection-worker` (`custom_agent`)
-
-Purpose:
-- rank eligible proposals and choose one winning proposal
-
-Output:
-- exactly one winning proposal
-- short ranking rationale
-
-## Design Lane
-
-**Worker target:** `metaopt-design-worker` (`custom_agent`)
-
-Purpose:
-- transform the winning proposal into an experiment batch design suitable for the backend contract
-
-Output:
-- concrete experiment specification
-- execution assumptions
-- artifact expectations
-
-## Materialization Lane
-
-**Worker target:** `metaopt-materialization-worker` (`custom_agent`)
-
-Purpose:
-- turn the designed experiment into concrete code changes, packageable artifacts, and a manifest-ready local changeset
-
-Output:
-- one unified diff patch artifact suitable for mechanical integration
-- immutable artifact inputs for the batch manifest
-- local verification notes for `LOCAL_SANITY`
-
-Modes:
-- **standard** (`materialization_mode: "standard"`): implement an experiment design from scratch (dispatched during `MATERIALIZE_CHANGESET`)
-- **remediation** (`materialization_mode: "remediation"`): apply diagnosis-guided code fixes to an existing patch (dispatched during `LOCAL_SANITY` after diagnosis)
-- **conflict-resolution** (`materialization_mode: "conflict_resolution"`): resolve non-trivial merge conflicts between patches (dispatched when mechanical patch integration fails)
-
-All modes produce the same output shape (unified diff patch artifact + metadata). The orchestrator passes mode-specific context (experiment design for standard, diagnosis guidance for remediation, conflicting patches for conflict-resolution).
-
-## Diagnosis Lane
-
-**Worker target:** `metaopt-diagnosis-worker` (`custom_agent`)
-
-Purpose:
-- explain sanity failures, code failures, or remote failure payloads
-
-Output:
-- root-cause summary
-- concrete fix recommendation or patch plan
-
-Artifact precondition for downstream remediation: the diagnosis-worker output artifact is a required precondition for dispatching `metaopt-materialization-worker` in remediation mode. If the orchestrator or control agent attempts remediation without a completed diagnosis-worker output, the control agent must fail closed to `BLOCKED_PROTOCOL`. The orchestrator must never improvise remediation without structured diagnosis guidance.
+**Lane drift rules — MUST NOT:**
+- Produce code patches, file diffs, or architecture change instructions
+- Emit commands to run or install anything
+- Suggest changes to the training script code
+- Reference files outside the campaign configuration
 
 ## Analysis Lane
 
-**Worker target:** `metaopt-analysis-worker` (`custom_agent`)
+**Worker target:** `metaopt-analysis-worker` (custom agent)
 
-Purpose:
-- compare completed batch results against the aggregate baseline and extract learnings
+**Slot class:** `auxiliary`
 
-Output:
-- improvement or regression judgment
-- updated learnings
-- proposal invalidations or carry-over candidates
+**Mode:** `analysis`
 
-Artifact precondition for result judgment: the analysis-worker output artifact is a required precondition for semantic result judgment and baseline updates during `ANALYZE_RESULTS`. If the control agent attempts to judge results or update baseline without a completed analysis-worker output, it must fail closed to `BLOCKED_PROTOCOL`. The orchestrator must never perform semantic result interpretation directly.
+**Model class:** `strong_reasoner`
 
-## Rollover Lane
+**Inputs:**
+- WandB best run result: metric value, hyperparameters, run URL, run ID
+- Current `baseline` (if established)
+- Prior `key_learnings`
+- `objective_snapshot` (for direction-aware comparison)
 
-**Worker target:** `metaopt-rollover-worker` (`custom_agent`)
+**Output:** A JSON file written to `.ml-metaopt/worker-results/analysis-iter-<N>.json`:
 
-**Dispatch type:** Inline — `metaopt-iteration-close-control` emits a `launch_requests` entry for the rollover worker without `slot_class` or `mode` (the absence of `slot_class` signals inline dispatch). The orchestrator launches the worker synchronously, no `active_slots` entry is created, and the subagent returns before the orchestrator advances to `QUIESCE_SLOTS`. Because rollover is inline, `mode = "rollover"` is not a valid auxiliary slot mode and is rejected by the guardrail.
+```json
+{
+  "improved": true,
+  "new_baseline": {
+    "metric": "val/accuracy",
+    "value": 0.945,
+    "wandb_run_id": "run-abc",
+    "wandb_run_url": "https://wandb.ai/entity/project/runs/run-abc",
+    "established_at": "2026-04-13T15:00:00Z"
+  },
+  "learnings": [
+    "Bayesian search over learning rate found optimal at 3e-3",
+    "Residual connections consistently improve accuracy for 3+ layer models"
+  ],
+  "best_run_id": "run-abc"
+}
+```
 
-Purpose:
-- filter, merge, and discard proposals from `next_proposals` to produce a clean `current_proposals` pool for the next iteration
+When no improvement: `"improved": false`, `"new_baseline": null`.
 
-Inputs:
-- `next_proposals` pool
-- results analysis output (judgment, learnings, invalidations, carry-over candidates)
-- cumulative `key_learnings`
-- `completed_experiments` history
-- campaign goal context (`objective.metric`, `objective.direction`, `objective.aggregation`)
-- `proposal_policy`
-- stop conditions progress
+**Constraints:**
+- Baseline update must use direction-aware comparison from `references/contracts.md` Section 5
+- `new_baseline` must only be non-null when `improved` is true
+- Learnings must be concrete and actionable, not generic
 
-Outputs:
-- filtered carry-over proposals (moved into `current_proposals`)
-- discard reasons for removed proposals
-- merge rationale for merged proposals
-- pool health flag (`needs_fresh_ideation` when below `current_floor`)
-- summary statistics (carried_over, discarded, merged, final_pool_size)
+**Lane drift rules — MUST NOT:**
+- Emit sweep configs or parameter suggestions (that is the ideation lane's job)
+- Produce code changes or patches
+- Make recommendations about what to try next (only report what happened)
+
+## Execution Lane
+
+**Worker target:** `skypilot-wandb-worker` (custom agent)
+
+**Dispatch:** Directive-dispatched only — not a slot-based worker.
+
+**Model class:** `general_worker`
+
+The execution lane is not managed by slot accounting. It is dispatched by the orchestrator when a control agent emits a `launch_sweep`, `poll_sweep`, or `run_smoke_test` directive. See `references/backend-contract.md` for the full operation contract.
+
+**Lane drift rules — MUST NOT:**
+- Analyze results or make semantic judgments about sweep quality
+- Propose new sweep configurations
+- Modify the training script or repository
+- Call any API not documented in `references/backend-contract.md`

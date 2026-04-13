@@ -96,3 +96,17 @@ Write handoff to: `.ml-metaopt/handoffs/metaopt-select-design-SELECT_AND_DESIGN_
 - Do NOT modify any proposal's `proposal_id` — preserve the original ID in `selected_sweep`.
 - If all proposals are poor quality (contradicted by learnings, duplicate of completed iterations), still select the least-bad one and note concerns in `selection_rationale`. The campaign must advance.
 - This is a SINGLE-AGENT step. The agent performs both selection and design in one invocation. There is no separate worker dispatch — the agent runs inline and writes its handoff directly. The script's `finalize_select_design` mode subsequently reads the agent's output and validates/freezes it into state.
+
+## Error Handling
+
+### Empty proposal pool
+If `current_proposals` is empty after verifying the pool is frozen → emit `BLOCKED_PROTOCOL` with `next_action: "No proposals in frozen pool — the IDEATE/WAIT_FOR_PROPOSALS cycle advanced without producing any valid proposals. This is a protocol error."`. This should never occur under normal operation.
+
+### No proposal passes quality gate
+If ALL proposals have technically invalid `sweep_config` structures (missing `method`, `metric`, or `parameters`; or `metric.name` does not match `objective_snapshot.metric`) → emit `BLOCKED_PROTOCOL` with `next_action: "All proposals in the frozen pool have invalid sweep configs. Re-run ideation."`. This is distinct from "poor quality" — poor-quality but structurally valid proposals are still selected (see Rules above).
+
+### Pool not frozen
+If `proposal_cycle.current_pool_frozen != true` → emit `BLOCKED_PROTOCOL` with `next_action: "Proposal pool not frozen — cannot select. This indicates an orchestrator sequencing error."`.
+
+### No retry semantics
+This agent runs inline as a single invocation. If it emits `BLOCKED_PROTOCOL`, the orchestrator transitions to that terminal state. There is no retry loop for selection failures.

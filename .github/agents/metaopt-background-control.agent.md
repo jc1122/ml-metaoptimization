@@ -173,6 +173,22 @@ When invoked in `machine_state == WAIT_FOR_PROPOSALS`:
 
 Write handoff to: `.ml-metaopt/handoffs/metaopt-background-control-<machine_state>.json`
 
+## Error Handling
+
+### All ideation workers fail or return invalid proposals
+During the gate phase, if every result file is either missing, has `status != "completed"`, fails validation (Steps 2–3), or is rejected for lane drift, the pool does not grow. The agent emits `recommended_next_machine_state: null` (stay in IDEATE) so the orchestrator dispatches a fresh batch of workers on the next session. This loop continues across sessions.
+
+If the orchestrator's reinvocation counter for the IDEATE↔WAIT_FOR_PROPOSALS cycle exceeds the protocol's attempt limit (tracked externally by the orchestrator), the orchestrator should transition to `BLOCKED_PROTOCOL` with `next_action: "All ideation workers failed repeatedly — check worker agent availability, model availability, and objective configuration"`.
+
+### Pool never reaches threshold
+If the pool remains below `proposal_policy.current_target` after workers complete, the gate phase emits `recommended_next_machine_state: null` (back to IDEATE) to request more workers. There is no timeout within this agent — the IDEATE↔WAIT_FOR_PROPOSALS loop can repeat across sessions. Budget and iteration limits in ROLL_ITERATION provide the outer bound. If the orchestrator detects the cycle has looped without any valid proposals being added for multiple consecutive sessions, it should escalate to `BLOCKED_PROTOCOL`.
+
+### Partial pool (mix of valid and invalid results)
+Valid proposals are appended to `current_proposals`; invalid results are silently dropped (logged in `rejection_reasons`). The gate re-evaluates the pool size. If the valid subset meets the threshold, the campaign advances. If not, the cycle loops for more workers. This is the normal path — partial success is expected when some workers produce low-quality output.
+
+### Missing or unreadable result files
+If a result file referenced by a launch request does not exist or cannot be parsed as JSON, treat it as an invalid result — skip it and log the path in `rejection_reasons`. Do not emit an error state for individual missing files.
+
 ## Rules
 
 - Do NOT write to `.ml-metaopt/state.json` directly. All changes go through `state_patch`.

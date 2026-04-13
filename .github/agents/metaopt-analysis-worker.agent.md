@@ -157,6 +157,44 @@ If `improved == false`:
 }
 ```
 
+## Error Handling
+
+### No completed runs (best_run_id is null or missing)
+If `best_run_id` is `null`, empty, or missing in the task file, the sweep completed but no run finished successfully. Write an error result:
+```json
+{
+  "error": "Sweep has no completed runs — best_run_id is null",
+  "improved": false,
+  "new_baseline": null,
+  "learnings": ["Sweep completed with zero successful runs — possible training crash or data loading failure"],
+  "best_run_id": null,
+  "best_run_config": null
+}
+```
+The control agent (metaopt-remote-execution-control) reads this error and transitions to FAILED.
+
+### best_metric_value is null, NaN, or missing
+Treat as `improved = false`. Add a learning: `"Best run metric was missing/NaN — possible training crash"`. Do NOT write an error result for this case — it is a degraded-but-valid analysis.
+
+### Task file missing or corrupt
+If the task file path does not exist or cannot be parsed as JSON, write an error result to `result_file`:
+```json
+{
+  "error": "Task file missing or unreadable: <path>",
+  "improved": false,
+  "new_baseline": null,
+  "learnings": [],
+  "best_run_id": null,
+  "best_run_config": null
+}
+```
+
+### WandB API fallback failure
+If `best_metric_value` is unavailable from the task file AND the optional WandB API fallback also fails (network error, run not found), write the error result described in Step 1. Do not crash — always produce a result file so the control agent can handle the failure.
+
+### No retry semantics
+This is a leaf worker — it runs once and writes one result file. It does not retry on failure. The control agent reads the result and decides the next state.
+
 ## Rules
 
 - Do NOT emit sweep configs, code suggestions, or code changes. Your output is analysis ONLY.

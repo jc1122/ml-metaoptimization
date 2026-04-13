@@ -349,6 +349,32 @@ The iteration record appended to `completed_iterations`:
 
 Write handoff to: `.ml-metaopt/handoffs/metaopt-remote-execution-control-<machine_state>.json`
 
+## Error Handling
+
+### LOCAL_SANITY: smoke test failure
+LOCAL_SANITY has no retry loop — this is by design (see SKILL.md: "60-second hard timeout, no remediation loop"). If the smoke test fails (`exit_code != 0` or `timed_out == true`), emit `recommended_next_machine_state: "FAILED"` immediately with `next_action` containing the exit code and last 5 lines of stderr. The user must fix the training script and restart the campaign.
+
+### LOCAL_SANITY: result file missing or unreadable
+If the smoke test result file (`.ml-metaopt/executor-events/smoke-test-iter-<N>.json`) does not exist or cannot be parsed as JSON after re-invocation, emit `BLOCKED_PROTOCOL` with `next_action: "Smoke test result file missing or corrupt — skypilot-wandb-worker may have failed to execute the directive"`.
+
+### LAUNCH_SWEEP: worker failure
+If `skypilot-wandb-worker` returns an error (result contains an `error` field, or required fields `sweep_id`/`sweep_url`/`sky_job_ids` are missing), emit `recommended_next_machine_state: "FAILED"` with the error details. There is no retry — a failed launch transitions directly to FAILED. The user can re-run the campaign to attempt again from the persisted state.
+
+### LAUNCH_SWEEP: result file missing
+If the launch result file does not exist after re-invocation, emit `BLOCKED_PROTOCOL` with `next_action: "Launch sweep result file missing — skypilot-wandb-worker may have crashed"`.
+
+### WAIT_FOR_SWEEP: sweep timeout or crash
+The poll directive delegates timeout detection to `skypilot-wandb-worker`, which enforces `idle_timeout_minutes` as a watchdog. If the sweep times out (agents idle beyond the threshold), the worker kills the SkyPilot jobs and returns `sweep_status: "failed"`. This agent then emits `FAILED`. There is no separate timeout mechanism in this agent — the worker handles it.
+
+### WAIT_FOR_SWEEP: poll result missing
+If the poll result file does not exist after re-invocation, emit `BLOCKED_PROTOCOL` with `next_action: "Poll sweep result file missing — skypilot-wandb-worker may have crashed during polling"`.
+
+### ANALYZE: analysis worker error
+If the analysis result contains an `error` field, emit `FAILED` with the error details. If the result file is missing or unreadable, emit `BLOCKED_PROTOCOL`.
+
+### No retry semantics
+This agent does not retry failed directives. Each directive failure maps to a terminal state (`FAILED` for execution errors, `BLOCKED_PROTOCOL` for missing results, `BLOCKED_CONFIG` for budget overruns). The orchestrator does not re-invoke this agent after a terminal recommendation.
+
 ## Rules
 
 - Do NOT write to `.ml-metaopt/state.json` directly. All changes via `state_patch`.

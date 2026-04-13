@@ -157,6 +157,26 @@ Ensure the directory `.ml-metaopt/handoffs/` exists (create it if not).
 
 Note: `state_patch` is always `null` for this agent (not `{}`). The `campaign_valid` field is required — downstream agents (hydrate-state) gate on it. The `objective_snapshot`, `proposal_policy`, `compute`, `wandb`, and `project` fields pass through the full campaign YAML sections for downstream consumption.
 
+## Error Handling
+
+This agent is the first line of defense for configuration problems. Every failure path emits `BLOCKED_CONFIG` with actionable `recovery_action` text.
+
+### YAML missing or invalid
+If `ml_metaopt_campaign.yaml` does not exist, is empty, or contains unparseable YAML → emit `BLOCKED_CONFIG` with `recovery_action: "Create or fix ml_metaopt_campaign.yaml — see ml_metaopt_campaign.example.yaml for the required schema"`.
+
+### Preflight artifact missing (skill not installed)
+If `.ml-metaopt/preflight-readiness.json` does not exist, the most likely cause is that the `metaopt-preflight` skill has never been run (or is not installed). Emit `BLOCKED_CONFIG` with `recovery_action: "Run metaopt-preflight to verify environment readiness. If the skill is not installed, install it first."`.
+
+### Preflight stale or failed
+- **`stale`** (hash mismatch, unrecognized schema_version, or invalid status) → `BLOCKED_CONFIG`: `"Campaign config changed or preflight artifact is invalid — re-run metaopt-preflight"`.
+- **`fresh_failed`** (hash matches, `status == "FAILED"`) → `BLOCKED_CONFIG` surfacing the artifact's `failures` array and `next_action` in the handoff so the user sees exactly what preflight checks failed.
+
+### Multiple validation failures
+Collect ALL validation failures across Steps 2–7 before writing the handoff. The `validation_issues` array must list every problem so the user can fix them in one pass, not iteratively.
+
+### No retry semantics
+This agent has no retry loop. It is invoked once per orchestrator session. If it emits `BLOCKED_CONFIG`, the orchestrator transitions to that terminal state. The user must fix the config and restart the campaign. The orchestrator does not re-invoke this agent automatically after a `BLOCKED_CONFIG`.
+
 ## Rules
 
 - Do NOT mutate `.ml-metaopt/state.json` — you have no authority over state.

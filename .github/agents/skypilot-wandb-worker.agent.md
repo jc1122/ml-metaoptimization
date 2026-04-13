@@ -22,7 +22,7 @@ You are NEVER invoked directly by users. The orchestrator dispatches you via dir
 
 ## Inputs
 
-You will be invoked with a handoff file from `.ml-metaopt/handoffs/`. The handoff contains a `directive` object with:
+You will be invoked with a task file from `.ml-metaopt/tasks/`. The task file contains a `directive` object with:
 - `directive.type`: one of `launch_sweep`, `poll_sweep`, or `run_smoke_test` — determines which operation to execute
 - `directive.payload`: operation-specific parameters (described per-operation below)
 
@@ -39,13 +39,11 @@ From `directive.payload`:
   "sweep_config": { "method": "bayes", "metric": {...}, "parameters": {...} },
   "wandb_entity": "my-entity",
   "wandb_project": "my-project",
-  "sky_task_spec": {
-    "repo": "git@github.com:user/project.git",
-    "accelerator": "A100:1",
-    "num_agents": 4,
-    "idle_timeout_minutes": 15
-  },
-  "result_file": ".ml-metaopt/worker-results/launch-sweep-iter-1.json"
+  "repo": "git@github.com:user/project.git",
+  "accelerator": "A100:1",
+  "num_sweep_agents": 4,
+  "idle_timeout_minutes": 15,
+  "result_file": ".ml-metaopt/worker-results/launch-sweep.json"
 }
 ```
 
@@ -92,7 +90,7 @@ If sweep creation fails → write error to `result_file` and stop:
 
 **Step 3: Launch SkyPilot agents**
 
-For each agent `i` in `1..num_agents`:
+For each agent `i` in `1..num_sweep_agents`:
 
 ```bash
 sky launch \
@@ -144,8 +142,8 @@ From `directive.payload`:
   "sky_job_ids": ["job-1", "job-2"],
   "idle_timeout_minutes": 15,
   "max_budget_usd": 10,
-  "cumulative_spend_usd_so_far": 3.40,
-  "result_file": ".ml-metaopt/executor-events/poll-sweep-iter-1.json"
+  "cumulative_spend_usd": 3.40,
+  "result_file": ".ml-metaopt/worker-results/poll-sweep.json"
 }
 ```
 
@@ -207,7 +205,7 @@ sky cost --all 2>/dev/null
 
 Parse the output to compute total spend for jobs matching `sky_job_ids`. Calculate:
 ```
-cumulative_spend = cumulative_spend_usd_so_far + new_spend_from_sky_cost
+cumulative_spend = cumulative_spend_usd + new_spend_from_sky_cost
 ```
 
 If `cumulative_spend >= max_budget_usd`:
@@ -228,10 +226,11 @@ Map WandB sweep state to our status enum:
 
 ```json
 {
-  "operation": "poll_sweep",
   "sweep_status": "running|completed|failed|budget_exceeded",
   "best_metric_value": 0.934,
   "best_run_id": "wandb-run-abc",
+  "best_run_url": "https://wandb.ai/entity/project/runs/wandb-run-abc",
+  "best_run_config": {"learning_rate": 0.001, "batch_size": 64, "hidden_dim": 256},
   "killed_runs": ["run-xyz"],
   "cumulative_spend_usd": 3.40
 }
@@ -248,7 +247,7 @@ From `directive.payload`:
 ```json
 {
   "command": "python train.py --smoke",
-  "result_file": ".ml-metaopt/executor-events/smoke-test-iter-0.json"
+  "result_file": ".ml-metaopt/worker-results/smoke-test.json"
 }
 ```
 
@@ -301,7 +300,7 @@ Remove `.ml-metaopt/smoke-stdout.log` and `.ml-metaopt/smoke-stderr.log` if they
 
 - **Never mutate `.ml-metaopt/state.json`**. You are a leaf worker with no state authority.
 - **Never re-enqueue a failed sweep**. If launch fails, report the error and stop.
-- **Never run more agents than `num_agents`** specified in the directive. Each `sky launch` creates exactly one WandB agent process.
+- **Never run more agents than `num_sweep_agents`** specified in the directive. Each `sky launch` creates exactly one WandB agent process.
 - **If the WandB API is unreachable**, write an error result to `result_file` and exit non-zero. Do NOT retry — the orchestrator decides retry policy.
 - **If SkyPilot commands fail**, write an error result and exit non-zero. Include the full error output.
 - Every `sky launch` MUST include `--idle-minutes-to-autostop <idle_timeout_minutes>` as a safety net — instances self-terminate even if the skill crashes.

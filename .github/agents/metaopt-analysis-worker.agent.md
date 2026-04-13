@@ -22,6 +22,9 @@ You will be invoked with a path to a task file. Read it. The task file is a JSON
 - `task_type`: always `"analysis"`
 - `result_file`: path where you must write your output
 - `best_run_id`: WandB run ID of the best run in the completed sweep
+- `best_metric_value`: final metric value of the best run (from the `poll_sweep` result)
+- `best_run_url`: WandB URL of the best run (from the `poll_sweep` result)
+- `best_run_config`: hyperparameter config of the best run (from the `poll_sweep` result; see `references/backend-contract.md`)
 - `sweep_url`: URL of the completed WandB sweep
 - `wandb_entity`: WandB entity name
 - `wandb_project`: WandB project name
@@ -31,9 +34,15 @@ You will be invoked with a path to a task file. Read it. The task file is a JSON
 
 ## Steps
 
-### Step 1: Query WandB API for the best run
+### Step 1: Read best run data from task input
 
-Use the WandB API to fetch the best run's details:
+The task file already contains the best run's data (forwarded from the `poll_sweep` result — see `references/backend-contract.md`). Use these fields directly:
+
+- **Run config** (hyperparameters): `best_run_config` — the full set of hyperparameters used
+- **Final metric value**: `best_metric_value` — the final value of the target metric
+- **Run URL**: `best_run_url`
+
+If `best_metric_value` is `null` or missing, you may optionally query the WandB API as a fallback:
 
 ```python
 import wandb
@@ -41,15 +50,10 @@ api = wandb.Api()
 run = api.run(f"{wandb_entity}/{wandb_project}/{best_run_id}")
 ```
 
-Extract:
-- **Run config** (hyperparameters): `run.config` — this is the full set of hyperparameters used
-- **Final metric value**: `run.summary.get(objective.metric)` — the final value of the target metric
-- **Run URL**: `run.url`
-
-If the WandB API call fails, write an error result to `result_file` and exit:
+If the data is unavailable from both task input and WandB API, write an error result to `result_file` and exit:
 ```json
 {
-  "error": "WandB API unreachable or run not found: <details>",
+  "error": "Best run data unavailable: <details>",
   "improved": false,
   "new_baseline": null,
   "learnings": [],

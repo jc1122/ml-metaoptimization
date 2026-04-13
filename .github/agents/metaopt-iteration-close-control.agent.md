@@ -56,7 +56,7 @@ Evaluate ALL stop conditions. The FIRST matching condition determines the outcom
    - If `no_improve_iterations >= stop_conditions.max_no_improve_iterations` → COMPLETE
 
 4. **Budget exhausted**:
-   - Sum `cumulative_spend_usd` across all `completed_iterations`. If total `>= compute.max_budget_usd` → BLOCKED_CONFIG: `"Total spend $<N> reached budget cap of $<max>"`
+   - Sum `spend_usd` across all `completed_iterations`. If total `>= compute.max_budget_usd` → BLOCKED_CONFIG: `"Total spend $<N> reached budget cap of $<max>"`
 
 If NO stop condition is met → continue to next iteration.
 
@@ -96,20 +96,28 @@ If NO stop condition is met → continue to next iteration.
 }
 ```
 
-### Step 5: Write iteration report (in-process)
+### Step 5: Emit directives
 
-Always write an iteration report as an in-process action using the `execute` tool (even when stopping). This is NOT a directive — the agent writes it directly:
+Build the `directives` array (an ordered list of cleanup actions for the orchestrator to execute):
 
-Write to `.ml-metaopt/iteration-report-<current_iteration>.md` with content summarizing:
-- Iteration number
-- Best metric value (`baseline.value`)
-- Spend this iteration (`current_sweep.cumulative_spend_usd`)
-- Sweep URL (`current_sweep.sweep_url`)
-- Selected proposal rationale
+**Always emit:**
+- `emit_iteration_report` — the orchestrator writes the iteration summary:
+  ```json
+  { "action": "emit_iteration_report", "report_type": "iteration", "iteration": "<current_iteration>" }
+  ```
 
-### Step 6: Cleanup on stop (orchestrator-internal)
+**If stopping (COMPLETE — target met, max iterations, or no-improvement plateau), also emit:**
+- `remove_agents_hook` — remove the ml-metaoptimization block from `AGENTS.md`:
+  ```json
+  { "action": "remove_agents_hook", "agents_path": "AGENTS.md" }
+  ```
+- `emit_final_report` — write `.ml-metaopt/final_report.md`:
+  ```json
+  { "action": "emit_final_report", "report_type": "final" }
+  ```
 
-If the campaign is stopping (COMPLETE or BLOCKED_CONFIG), terminal cleanup (removing the AGENTS.md hook, deleting the state file, writing the final report) is orchestrator-internal bookkeeping triggered by transitioning to COMPLETE. The agent does NOT emit directives for these — the orchestrator performs them directly after seeing the terminal `recommended_next_machine_state`.
+**If stopping (BLOCKED_CONFIG — budget exhausted), also emit:**
+- `remove_agents_hook` (same as above)
 
 ## Output
 
@@ -120,7 +128,9 @@ Write handoff to: `.ml-metaopt/handoffs/metaopt-iteration-close-control-ROLL_ITE
 {
   "recommended_next_machine_state": "IDEATE",
   "state_patch": { "...from Step 4..." },
-  "directive": { "type": "none" },
+  "directives": [
+    { "action": "emit_iteration_report", "report_type": "iteration", "iteration": "<N>" }
+  ],
   "summary": "Iteration <N> complete. Improved: <yes/no>. Continuing to iteration <N+1>.",
   "filtered_proposals": { "kept": "<count>", "discarded": "<count>", "discard_reasons": ["..."] }
 }
@@ -136,7 +146,11 @@ Write handoff to: `.ml-metaopt/handoffs/metaopt-iteration-close-control-ROLL_ITE
     "selected_sweep": null,
     "next_action": "Campaign complete. <stop reason>. Best metric: <baseline.value>. See .ml-metaopt/final_report.md"
   },
-  "directive": { "type": "none" },
+  "directives": [
+    { "action": "emit_iteration_report", "report_type": "iteration", "iteration": "<N>" },
+    { "action": "remove_agents_hook", "agents_path": "AGENTS.md" },
+    { "action": "emit_final_report", "report_type": "final" }
+  ],
   "stop_reason": "<which condition triggered>",
   "summary": "Campaign complete after <N> iterations. Stop reason: <reason>. Best: <metric>=<value>"
 }
@@ -150,7 +164,10 @@ Write handoff to: `.ml-metaopt/handoffs/metaopt-iteration-close-control-ROLL_ITE
   "state_patch": {
     "next_action": "Budget cap exceeded: <amount> USD spent of <max> USD limit. Increase compute.max_budget_usd or reduce num_sweep_agents."
   },
-  "directive": { "type": "none" },
+  "directives": [
+    { "action": "emit_iteration_report", "report_type": "iteration", "iteration": "<N>" },
+    { "action": "remove_agents_hook", "agents_path": "AGENTS.md" }
+  ],
   "stop_reason": "budget_exhausted",
   "summary": "Budget exhausted after <N> iterations. Total spend: $<amount> of $<max> cap."
 }
@@ -164,4 +181,4 @@ Write handoff to: `.ml-metaopt/handoffs/metaopt-iteration-close-control-ROLL_ITE
 - Increment `current_iteration` ONLY when the campaign will continue. Do not increment on stop.
 - Stop condition checks are direction-aware: `>=` for maximize, `<=` for minimize.
 - When discarding proposals, log the reason for each discard in the handoff for auditability.
-- The iteration report is ALWAYS written (in-process via `execute` tool), whether continuing or stopping.
+- The `emit_iteration_report` directive is ALWAYS emitted, whether continuing or stopping.

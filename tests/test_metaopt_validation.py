@@ -13,17 +13,14 @@ ROOT = Path(__file__).resolve().parents[1]
 VALID_MACHINE_STATES = {
     "LOAD_CAMPAIGN",
     "HYDRATE_STATE",
-    "MAINTAIN_BACKGROUND_POOL",
-    "WAIT_FOR_PROPOSAL_THRESHOLD",
-    "SELECT_EXPERIMENT",
-    "DESIGN_EXPERIMENT",
-    "MATERIALIZE_CHANGESET",
+    "IDEATE",
+    "WAIT_FOR_PROPOSALS",
+    "SELECT_AND_DESIGN_SWEEP",
     "LOCAL_SANITY",
-    "ENQUEUE_REMOTE_BATCH",
-    "WAIT_FOR_REMOTE_BATCH",
-    "ANALYZE_RESULTS",
+    "LAUNCH_SWEEP",
+    "WAIT_FOR_SWEEP",
+    "ANALYZE",
     "ROLL_ITERATION",
-    "QUIESCE_SLOTS",
     "COMPLETE",
     "BLOCKED_CONFIG",
     "BLOCKED_PROTOCOL",
@@ -31,32 +28,8 @@ VALID_MACHINE_STATES = {
 }
 TERMINAL_MACHINE_STATES = {"COMPLETE", "BLOCKED_CONFIG", "BLOCKED_PROTOCOL", "FAILED"}
 VALID_STATE_STATUSES = {"RUNNING", "BLOCKED_CONFIG", "BLOCKED_PROTOCOL", "FAILED", "COMPLETE"}
-VALID_SLOT_CLASSES = {"background", "auxiliary"}
-VALID_SLOT_MODES = {
-    "ideation",
-    "maintenance",
-    "selection",
-    "design",
-    "materialization",
-    "diagnosis",
-    "analysis",
-}
-VALID_MODEL_CLASSES = {"strong_coder", "strong_reasoner", "general_worker"}
-VALID_REMOTE_BATCH_STATUSES = {"queued", "running", "completed", "failed"}
-PRE_SELECTION_MACHINE_STATES = {
-    "LOAD_CAMPAIGN",
-    "HYDRATE_STATE",
-    "MAINTAIN_BACKGROUND_POOL",
-    "WAIT_FOR_PROPOSAL_THRESHOLD",
-    "SELECT_EXPERIMENT",
-}
-POST_SELECTION_CLEARED_MACHINE_STATES = {"ROLL_ITERATION", "QUIESCE_SLOTS", "COMPLETE"}
-PRE_MATERIALIZATION_MACHINE_STATES = PRE_SELECTION_MACHINE_STATES | {
-    "DESIGN_EXPERIMENT",
-    "MATERIALIZE_CHANGESET",
-}
+VALID_SWEEP_STATUSES = {"running", "completed", "failed", "budget_exceeded"}
 SHA256_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
-LEGACY_MAX_BATCH_RETRIES_KEY = "max_batch_" "retries"
 
 
 def _read_text(relative_path: str) -> str:
@@ -91,66 +64,27 @@ def _require_sha256_digest(value: object, message: str) -> None:
 
 def _validate_backend_payload(kind: str, payload: dict) -> None:
     assert isinstance(payload, dict), "backend payload must be an object"
-    assert isinstance(payload.get("batch_id"), str) and payload["batch_id"], "batch_id is required"
+    assert isinstance(payload.get("operation"), str) and payload["operation"], "operation is required"
+    assert type(payload.get("exit_code")) is int, "exit_code must be an integer"
 
-    if kind == "enqueue":
-        assert payload.get("status") == "queued", "enqueue payload must report queued status"
-        assert isinstance(payload.get("queue_ref"), str) and payload["queue_ref"], "queue_ref is required"
+    if kind == "launch_sweep":
+        assert payload.get("operation") == "launch_sweep", "launch_sweep payload must declare correct operation"
+        assert isinstance(payload.get("sweep_id"), str) and payload["sweep_id"], "sweep_id is required"
+        assert isinstance(payload.get("sweep_url"), str) and payload["sweep_url"], "sweep_url is required"
+        assert isinstance(payload.get("sky_job_ids"), list), "sky_job_ids must be a list"
+        assert isinstance(payload.get("launched_at"), str) and payload["launched_at"], "launched_at is required"
         return
 
-    if kind == "status":
-        assert payload.get("status") in VALID_REMOTE_BATCH_STATUSES, "invalid batch lifecycle status"
-        timestamps = payload.get("timestamps")
-        assert isinstance(timestamps, dict) and timestamps, "timestamps map is required"
-        return
-
-    if kind == "results":
-        assert payload.get("status") == "completed", "results payload must be completed"
-        aggregate = payload.get("best_aggregate_result")
-        assert isinstance(aggregate, dict), "best_aggregate_result is required"
-        assert isinstance(aggregate.get("metric"), str) and aggregate["metric"], "aggregate metric is required"
-        _require_number(aggregate.get("value"), "aggregate value must be numeric")
-        per_dataset = payload.get("per_dataset")
-        assert isinstance(per_dataset, dict) and per_dataset, "per_dataset results are required"
-        artifact_locations = payload.get("artifact_locations")
-        assert isinstance(artifact_locations, dict) and artifact_locations, "artifact_locations are required"
-        assert isinstance(artifact_locations.get("code"), str) and artifact_locations["code"], "artifact_locations.code is required"
-        assert isinstance(artifact_locations.get("data_manifest"), str) and artifact_locations["data_manifest"], "artifact_locations.data_manifest is required"
-        assert isinstance(payload.get("logs_location"), str) and payload["logs_location"], "logs_location is required"
+    if kind == "poll_sweep":
+        assert payload.get("operation") == "poll_sweep", "poll_sweep payload must declare correct operation"
+        assert payload.get("sweep_status") in VALID_SWEEP_STATUSES, "invalid sweep_status"
+        _require_number(payload.get("best_metric_value"), "best_metric_value must be numeric")
+        assert isinstance(payload.get("best_run_id"), str) and payload["best_run_id"], "best_run_id is required"
+        assert isinstance(payload.get("killed_runs"), list), "killed_runs must be a list"
+        _require_number(payload.get("cumulative_spend_usd"), "cumulative_spend_usd must be numeric")
         return
 
     raise AssertionError(f"unsupported payload kind: {kind}")
-
-
-def _validate_batch_manifest(payload: dict) -> None:
-    assert isinstance(payload, dict), "batch manifest must be an object"
-    assert payload.get("version") == 3, "batch manifest must use v3"
-    _require_non_empty_string(payload.get("campaign_id"), "campaign_id is required")
-    assert type(payload.get("iteration")) is int and payload["iteration"] > 0, "iteration is required"
-    _require_non_empty_string(payload.get("batch_id"), "batch_id is required")
-    experiment = payload.get("experiment")
-    assert isinstance(experiment, dict) and experiment, "experiment is required"
-    _require_non_empty_string(experiment.get("proposal_id"), "experiment.proposal_id is required")
-
-    retry_policy = payload.get("retry_policy")
-    assert isinstance(retry_policy, dict) and retry_policy, "retry_policy is required"
-    assert type(retry_policy.get("max_attempts")) is int and retry_policy["max_attempts"] > 0, (
-        "retry_policy.max_attempts is required"
-    )
-
-    artifacts = payload.get("artifacts")
-    assert isinstance(artifacts, dict), "artifacts is required"
-    code_artifact = artifacts.get("code_artifact")
-    assert isinstance(code_artifact, dict), "artifacts.code_artifact is required"
-    _require_non_empty_string(code_artifact.get("uri"), "artifacts.code_artifact.uri is required")
-
-    data_manifest = artifacts.get("data_manifest")
-    assert isinstance(data_manifest, dict), "artifacts.data_manifest is required"
-    _require_non_empty_string(data_manifest.get("uri"), "artifacts.data_manifest.uri is required")
-
-    execution = payload.get("execution")
-    assert isinstance(execution, dict), "execution is required"
-    _require_non_empty_string(execution.get("entrypoint"), "execution.entrypoint is required")
 
 
 def _validate_state_payload(payload: dict) -> None:
@@ -158,36 +92,32 @@ def _validate_state_payload(payload: dict) -> None:
         "version",
         "campaign_id",
         "campaign_identity_hash",
-        "runtime_config_hash",
         "status",
         "machine_state",
         "current_iteration",
         "next_action",
         "objective_snapshot",
-        "active_slots",
+        "proposal_cycle",
+        "current_sweep",
+        "selected_sweep",
         "current_proposals",
         "next_proposals",
-        "selected_experiment",
-        "local_changeset",
-        "remote_batches",
         "baseline",
-        "completed_experiments",
+        "completed_iterations",
         "key_learnings",
         "no_improve_iterations",
         "campaign_started_at",
     }
     missing = required_keys - payload.keys()
     assert not missing, f"missing required state keys: {sorted(missing)}"
-    assert payload["version"] == 3, "state fixture must use v3"
+    assert payload["version"] == 4, "state fixture must use v4"
     _require_non_empty_string(payload["campaign_id"], "campaign_id is required")
     _require_sha256_digest(payload["campaign_identity_hash"], "campaign_identity_hash must be a sha256 digest")
-    _require_sha256_digest(payload["runtime_config_hash"], "runtime_config_hash must be a sha256 digest")
     assert payload["status"] in VALID_STATE_STATUSES, "invalid coarse status"
     assert payload["machine_state"] in VALID_MACHINE_STATES, "invalid machine state"
     assert type(payload["current_iteration"]) is int and payload["current_iteration"] > 0, (
         "current_iteration must be a positive integer"
     )
-    _require_non_empty_string(payload["next_action"], "next_action is required")
 
     objective_snapshot = payload["objective_snapshot"]
     assert isinstance(objective_snapshot, dict), "objective_snapshot must be an object"
@@ -195,7 +125,6 @@ def _validate_state_payload(payload: dict) -> None:
     assert objective_snapshot.get("direction") in {"minimize", "maximize"}, (
         "objective_snapshot.direction must be minimize or maximize"
     )
-    assert isinstance(objective_snapshot.get("aggregation"), dict), "objective_snapshot.aggregation must be an object"
     _require_number(
         objective_snapshot.get("improvement_threshold"),
         "objective_snapshot.improvement_threshold must be numeric",
@@ -206,37 +135,34 @@ def _validate_state_payload(payload: dict) -> None:
     assert isinstance(proposal_cycle, dict), "proposal_cycle must be an object"
     assert isinstance(proposal_cycle.get("cycle_id"), str) and proposal_cycle["cycle_id"], "proposal_cycle.cycle_id is required"
     assert isinstance(proposal_cycle.get("current_pool_frozen"), bool), "proposal_cycle.current_pool_frozen is required"
-    ideation_rounds_by_slot = proposal_cycle.get("ideation_rounds_by_slot")
-    assert isinstance(ideation_rounds_by_slot, dict), "proposal_cycle.ideation_rounds_by_slot is required"
-    for slot_id, rounds in ideation_rounds_by_slot.items():
-        _require_non_empty_string(slot_id, "proposal_cycle.ideation_rounds_by_slot keys must be non-empty strings")
-        assert type(rounds) is int and rounds >= 0, (
-            "proposal_cycle.ideation_rounds_by_slot values must be non-negative integers"
-        )
-    assert "shortfall_reason" in proposal_cycle, "proposal_cycle.shortfall_reason is required"
 
     if payload["status"] == "RUNNING":
         assert payload["machine_state"] not in TERMINAL_MACHINE_STATES, "running state cannot point at a terminal machine state"
     else:
         assert payload["machine_state"] == payload["status"], "terminal status must mirror machine_state"
-        assert payload["active_slots"] == [], "terminal states must have no active slots"
+        assert payload["current_sweep"] is None, "terminal states must have current_sweep = null"
 
-    assert isinstance(payload["active_slots"], list), "active_slots must be a list"
-    for slot in payload["active_slots"]:
-        assert isinstance(slot, dict), "active_slots entries must be objects"
-        _require_non_empty_string(slot.get("slot_id"), "slot_id is required")
-        assert slot.get("slot_class") in VALID_SLOT_CLASSES, "invalid slot_class"
-        assert slot.get("mode") in VALID_SLOT_MODES, "invalid slot mode"
-        assert slot.get("model_class") in VALID_MODEL_CLASSES, "invalid model_class"
-        if slot["mode"] == "materialization":
-            assert slot["model_class"] == "strong_coder", (
-                "materialization slots must use model_class strong_coder"
-            )
-        assert isinstance(slot.get("requested_model"), str) and slot["requested_model"], "requested_model is required"
-        assert isinstance(slot.get("resolved_model"), str) and slot["resolved_model"], "resolved_model is required"
-        _require_non_empty_string(slot.get("status"), "slot status is required")
-        assert type(slot.get("attempt")) is int and slot["attempt"] > 0, "slot attempt must be a positive integer"
-        assert isinstance(slot.get("task_summary"), str) and slot["task_summary"], "slot must have task_summary"
+    # current_sweep: None in terminal states, object when a sweep is active
+    current_sweep = payload["current_sweep"]
+    if current_sweep is not None:
+        assert isinstance(current_sweep, dict), "current_sweep must be an object"
+        _require_non_empty_string(current_sweep.get("sweep_id"), "current_sweep.sweep_id is required")
+        _require_non_empty_string(current_sweep.get("sweep_url"), "current_sweep.sweep_url is required")
+        assert isinstance(current_sweep.get("sky_job_ids"), list), "current_sweep.sky_job_ids must be a list"
+        _require_non_empty_string(current_sweep.get("launched_at"), "current_sweep.launched_at is required")
+        _require_number(current_sweep.get("cumulative_spend_usd"), "current_sweep.cumulative_spend_usd must be numeric")
+
+    # selected_sweep: None in terminal states (and pre-selection states), object after SELECT_AND_DESIGN_SWEEP
+    selected_sweep = payload["selected_sweep"]
+    if selected_sweep is not None:
+        assert isinstance(selected_sweep, dict), "selected_sweep must be an object"
+        _require_non_empty_string(
+            selected_sweep.get("proposal_id"),
+            "selected_sweep.proposal_id is required",
+        )
+
+    if payload["machine_state"] in TERMINAL_MACHINE_STATES:
+        assert payload["current_sweep"] is None, "terminal states must have current_sweep = null"
 
     assert isinstance(payload["current_proposals"], list), "current_proposals must be a list"
     for proposal in payload["current_proposals"]:
@@ -246,98 +172,21 @@ def _validate_state_payload(payload: dict) -> None:
     for proposal in payload["next_proposals"]:
         assert isinstance(proposal, dict), "next_proposals entries must be objects"
 
-    selected_experiment = payload["selected_experiment"]
-    if selected_experiment is None:
-        assert payload["machine_state"] in PRE_SELECTION_MACHINE_STATES | POST_SELECTION_CLEARED_MACHINE_STATES | {"BLOCKED_CONFIG", "BLOCKED_PROTOCOL"}, (
-            "selected_experiment must be populated once SELECT_EXPERIMENT completes"
-        )
-    else:
-        assert isinstance(selected_experiment, dict), "selected_experiment must be an object"
-        _require_non_empty_string(
-            selected_experiment.get("proposal_id"),
-            "selected_experiment.proposal_id is required",
-        )
-        assert type(selected_experiment.get("sanity_attempts")) is int and selected_experiment["sanity_attempts"] >= 0, (
-            "selected_experiment.sanity_attempts must be a non-negative integer"
-        )
-
     baseline = payload["baseline"]
     assert isinstance(baseline, dict), "baseline must be an object"
-    _require_number(baseline.get("aggregate"), "baseline.aggregate must be numeric")
-    by_dataset = baseline.get("by_dataset")
-    assert isinstance(by_dataset, dict) and by_dataset, "baseline.by_dataset must be a non-empty object"
-    for dataset_id, aggregate in by_dataset.items():
-        _require_non_empty_string(dataset_id, "baseline.by_dataset keys must be non-empty strings")
-        _require_number(aggregate, "baseline.by_dataset values must be numeric")
+    _require_non_empty_string(baseline.get("metric"), "baseline.metric is required")
+    _require_number(baseline.get("value"), "baseline.value must be numeric")
 
-    local_changeset = payload["local_changeset"]
-    if local_changeset is None:
-        assert payload["machine_state"] in PRE_MATERIALIZATION_MACHINE_STATES | {"BLOCKED_CONFIG", "BLOCKED_PROTOCOL"}, (
-            "local_changeset must be populated once MATERIALIZE_CHANGESET completes"
-        )
-    else:
-        assert isinstance(local_changeset, dict), "local_changeset must be an object"
-        assert isinstance(local_changeset.get("integration_worktree"), str) and local_changeset["integration_worktree"], "integration_worktree is required"
-        assert isinstance(local_changeset.get("patch_artifacts"), list), "patch_artifacts list is required"
-        assert isinstance(local_changeset.get("apply_results"), list), "apply_results list is required"
-        assert isinstance(local_changeset.get("verification_notes"), list), "verification_notes list is required"
-        assert isinstance(local_changeset.get("code_artifact_uri"), str) and local_changeset["code_artifact_uri"], "code_artifact_uri is required"
-        assert isinstance(local_changeset.get("data_manifest_uri"), str) and local_changeset["data_manifest_uri"], "data_manifest_uri is required"
-        for patch_artifact in local_changeset["patch_artifacts"]:
-            assert isinstance(patch_artifact, dict), "patch_artifacts entries must be objects"
-            _require_non_empty_string(
-                patch_artifact.get("producer_slot_id"),
-                "patch_artifacts entries must include non-empty producer_slot_id",
-            )
-            _require_non_empty_string(
-                patch_artifact.get("purpose"),
-                "patch_artifacts entries must include non-empty purpose",
-            )
-            _require_non_empty_string(
-                patch_artifact.get("patch_path"),
-                "patch_artifacts entries must include non-empty patch_path",
-            )
-            _require_non_empty_string(
-                patch_artifact.get("target_worktree"),
-                "patch_artifacts entries must include non-empty target_worktree",
-            )
-        for apply_result in local_changeset["apply_results"]:
-            assert isinstance(apply_result, dict), "apply_results entries must be objects"
-            _require_non_empty_string(
-                apply_result.get("patch_path"),
-                "apply_results entries must include non-empty patch_path",
-            )
-            _require_non_empty_string(
-                apply_result.get("status"),
-                "apply_results entries must include non-empty status",
-            )
-
-    assert isinstance(payload["remote_batches"], list), "remote_batches must be a list"
-    for remote_batch in payload["remote_batches"]:
-        assert isinstance(remote_batch, dict), "remote_batches entries must be objects"
-        _require_non_empty_string(
-            remote_batch.get("batch_id"),
-            "remote_batches entries must include non-empty batch_id",
-        )
-        _require_non_empty_string(
-            remote_batch.get("queue_ref"),
-            "remote_batches entries must include non-empty queue_ref",
-        )
-        assert remote_batch.get("status") in VALID_REMOTE_BATCH_STATUSES, (
-            "remote_batches entries must include valid status"
-        )
-
-    completed_experiments = payload["completed_experiments"]
-    assert isinstance(completed_experiments, list), "completed_experiments must be a list"
-    for completed_experiment in completed_experiments:
-        assert isinstance(completed_experiment, dict), "completed_experiments entries must be objects"
-        _require_non_empty_string(
-            completed_experiment.get("batch_id"),
-            "completed_experiments entries must include non-empty batch_id",
+    completed_iterations = payload["completed_iterations"]
+    assert isinstance(completed_iterations, list), "completed_iterations must be a list"
+    for completed_iteration in completed_iterations:
+        assert isinstance(completed_iteration, dict), "completed_iterations entries must be objects"
+        assert type(completed_iteration.get("iteration")) is int and completed_iteration["iteration"] > 0, (
+            "completed_iterations entries must include positive iteration"
         )
         _require_number(
-            completed_experiment.get("aggregate"),
-            "completed_experiments aggregate must be numeric",
+            completed_iteration.get("best_metric_value"),
+            "completed_iterations best_metric_value must be numeric",
         )
 
     key_learnings = payload["key_learnings"]
@@ -351,25 +200,35 @@ def _validate_state_payload(payload: dict) -> None:
 
 
 class MetaoptValidationTests(unittest.TestCase):
-    def test_example_campaign_is_v3_and_free_of_sentinel_values(self) -> None:
+    def test_example_campaign_has_required_v4_top_level_keys(self) -> None:
         campaign = _read_yaml("ml_metaopt_campaign.example.yaml")
 
-        self.assertEqual(campaign["version"], 3)
-        self.assertEqual(campaign["remote_queue"]["backend"], "ray-hetzner")
+        required_top_level = {
+            "campaign",
+            "project",
+            "wandb",
+            "compute",
+            "objective",
+            "proposal_policy",
+            "stop_conditions",
+        }
+        for key in required_top_level:
+            self.assertIn(key, campaign, f"ml_metaopt_campaign.example.yaml must have top-level key '{key}'")
 
-        retry_policy = campaign["remote_queue"]["retry_policy"]
-        self.assertEqual(retry_policy["max_attempts"], 2)
+        for removed_key in ("datasets", "dispatch_policy", "sanity", "artifacts", "remote_queue", "execution"):
+            self.assertNotIn(removed_key, campaign, f"v4 campaign must not have v3 key '{removed_key}'")
 
-        for command_name in ("enqueue_command", "status_command", "results_command"):
-            command = campaign["remote_queue"][command_name]
-            self.assertNotRegex(command, r"[<>]")
-            self.assertNotIn("YOUR_", command)
+        compute = campaign.get("compute", {})
+        for compute_key in ("provider", "accelerator", "num_sweep_agents", "idle_timeout_minutes", "max_budget_usd"):
+            self.assertIn(compute_key, compute, f"compute must have key '{compute_key}'")
 
-        for dataset in campaign["datasets"]:
-            self.assertRegex(dataset["fingerprint"], r"^sha256:[0-9a-f]{64}$")
+        wandb = campaign.get("wandb", {})
+        for wandb_key in ("entity", "project"):
+            self.assertIn(wandb_key, wandb, f"wandb must have key '{wandb_key}'")
 
-        self.assertNotIn(LEGACY_MAX_BATCH_RETRIES_KEY, campaign["execution"])
-        self.assertNotIn("/root/project/", campaign["execution"]["entrypoint"])
+        objective = campaign.get("objective", {})
+        for obj_key in ("metric", "direction", "improvement_threshold"):
+            self.assertIn(obj_key, objective, f"objective must have key '{obj_key}'")
 
     def test_backend_contract_defines_stdout_json_wire_format(self) -> None:
         contract = _read_text("references/backend-contract.md")
@@ -599,82 +458,64 @@ class MetaoptValidationTests(unittest.TestCase):
         )
 
     def test_backend_and_state_fixtures_validate(self) -> None:
-        _validate_backend_payload("enqueue", _read_json("tests/fixtures/backend/enqueue-valid.json"))
-        _validate_backend_payload("status", _read_json("tests/fixtures/backend/status-valid.json"))
-        _validate_backend_payload("results", _read_json("tests/fixtures/backend/results-valid.json"))
+        _validate_backend_payload("launch_sweep", _read_json("tests/fixtures/backend/launch-sweep-valid.json"))
+        _validate_backend_payload("poll_sweep", _read_json("tests/fixtures/backend/poll-sweep-completed.json"))
+        _validate_backend_payload("poll_sweep", _read_json("tests/fixtures/backend/poll-sweep-running.json"))
+        _validate_backend_payload("poll_sweep", _read_json("tests/fixtures/backend/poll-sweep-budget-exceeded.json"))
         _validate_state_payload(_read_json("tests/fixtures/state/running.json"))
         _validate_state_payload(_read_json("tests/fixtures/state/complete.json"))
-        _validate_state_payload(_read_json("tests/fixtures/state/blocked-protocol.json"))
-        _validate_batch_manifest(_read_json("tests/fixtures/manifest/valid.json"))
 
-    def test_v3_state_fixtures_require_resume_and_changeset_metadata(self) -> None:
+    def test_v4_state_fixtures_have_sweep_fields_and_proposal_cycle(self) -> None:
         running = _read_json("tests/fixtures/state/running.json")
         complete = _read_json("tests/fixtures/state/complete.json")
 
         for fixture in (running, complete):
-            self.assertEqual(fixture["version"], 3)
+            self.assertEqual(fixture["version"], 4)
             self.assertIn("proposal_cycle", fixture)
-            self.assertIn("integration_worktree", fixture["local_changeset"])
-            self.assertIn("data_manifest_uri", fixture["local_changeset"])
+            self.assertIn("current_sweep", fixture)
+            self.assertIn("selected_sweep", fixture)
 
-        for slot in running["active_slots"]:
-            self.assertIn("model_class", slot)
-            self.assertIn("requested_model", slot)
-            self.assertIn("resolved_model", slot)
+        # running fixture must have a non-null current_sweep
+        self.assertIsNotNone(running["current_sweep"])
+        self.assertIn("sweep_id", running["current_sweep"])
+        self.assertIn("sky_job_ids", running["current_sweep"])
 
-        materialization_slots = [slot for slot in running["active_slots"] if slot["mode"] == "materialization"]
-        self.assertEqual(len(materialization_slots), 1)
-        self.assertEqual(materialization_slots[0]["model_class"], "strong_coder")
+        # complete fixture must have null current_sweep (terminal state)
+        self.assertIsNone(complete["current_sweep"])
+        self.assertIsNone(complete["selected_sweep"])
 
     def test_invalid_fixtures_are_rejected(self) -> None:
         with self.assertRaises(AssertionError):
-            _validate_backend_payload("enqueue", _read_json("tests/fixtures/backend/enqueue-invalid-missing-batch-id.json"))
-
-        with self.assertRaises(AssertionError):
-            _validate_backend_payload("status", _read_json("tests/fixtures/backend/status-invalid-lifecycle.json"))
-
-        with self.assertRaises(AssertionError):
             _validate_state_payload(_read_json("tests/fixtures/state/invalid-status-pair.json"))
 
-        with self.assertRaisesRegex(AssertionError, r"proposal_cycle is required"):
+        with self.assertRaisesRegex(AssertionError, r"missing required state keys.*proposal_cycle"):
             _validate_state_payload(_read_json("tests/fixtures/state/invalid-missing-proposal-cycle.json"))
 
-        with self.assertRaisesRegex(AssertionError, r"resolved_model is required"):
-            _validate_state_payload(_read_json("tests/fixtures/state/invalid-missing-slot-model-resolution.json"))
+    def test_launch_sweep_payload_rejects_missing_sweep_id(self) -> None:
+        fixture = dict(_read_json("tests/fixtures/backend/launch-sweep-valid.json"))
 
-        with self.assertRaisesRegex(AssertionError, r"data_manifest_uri is required"):
-            _validate_state_payload(_read_json("tests/fixtures/state/invalid-missing-local-changeset-metadata.json"))
+        missing_sweep_id = dict(fixture)
+        del missing_sweep_id["sweep_id"]
+        with self.assertRaisesRegex(AssertionError, r"sweep_id is required"):
+            _validate_backend_payload("launch_sweep", missing_sweep_id)
 
-        with self.assertRaisesRegex(AssertionError, r"artifacts.data_manifest is required"):
-            _validate_batch_manifest(_read_json("tests/fixtures/manifest/invalid-missing-data-manifest.json"))
+        blank_sweep_url = dict(fixture)
+        blank_sweep_url["sweep_url"] = ""
+        with self.assertRaisesRegex(AssertionError, r"sweep_url is required"):
+            _validate_backend_payload("launch_sweep", blank_sweep_url)
 
-    def test_batch_manifest_requires_minimal_nested_contract_fields(self) -> None:
-        fixture = _read_json("tests/fixtures/manifest/valid.json")
+    def test_poll_sweep_payload_rejects_invalid_status(self) -> None:
+        fixture = dict(_read_json("tests/fixtures/backend/poll-sweep-running.json"))
 
-        missing_proposal_id = dict(fixture)
-        missing_proposal_id["experiment"] = {"slot_id": "bg-1"}
-        with self.assertRaisesRegex(AssertionError, r"experiment.proposal_id is required"):
-            _validate_batch_manifest(missing_proposal_id)
+        invalid_status = dict(fixture)
+        invalid_status["sweep_status"] = "pending"
+        with self.assertRaisesRegex(AssertionError, r"invalid sweep_status"):
+            _validate_backend_payload("poll_sweep", invalid_status)
 
-        blank_proposal_id = dict(fixture)
-        blank_proposal_id["experiment"] = {"proposal_id": ""}
-        with self.assertRaisesRegex(AssertionError, r"experiment.proposal_id is required"):
-            _validate_batch_manifest(blank_proposal_id)
-
-        missing_max_attempts = dict(fixture)
-        missing_max_attempts["retry_policy"] = {"strategy": "retry"}
-        with self.assertRaisesRegex(AssertionError, r"retry_policy.max_attempts is required"):
-            _validate_batch_manifest(missing_max_attempts)
-
-        zero_max_attempts = dict(fixture)
-        zero_max_attempts["retry_policy"] = {"max_attempts": 0}
-        with self.assertRaisesRegex(AssertionError, r"retry_policy.max_attempts is required"):
-            _validate_batch_manifest(zero_max_attempts)
-
-        boolean_max_attempts = dict(fixture)
-        boolean_max_attempts["retry_policy"] = {"max_attempts": True}
-        with self.assertRaisesRegex(AssertionError, r"retry_policy.max_attempts is required"):
-            _validate_batch_manifest(boolean_max_attempts)
+        boolean_metric = dict(fixture)
+        boolean_metric["best_metric_value"] = True
+        with self.assertRaisesRegex(AssertionError, r"best_metric_value must be numeric"):
+            _validate_backend_payload("poll_sweep", boolean_metric)
 
     def test_state_validator_rejects_malformed_nested_sections_with_clear_messages(self) -> None:
         fixture = _read_json("tests/fixtures/state/running.json")
@@ -684,194 +525,87 @@ class MetaoptValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, r"proposal_cycle must be an object"):
             _validate_state_payload(malformed_proposal_cycle)
 
-        malformed_active_slots = dict(fixture)
-        malformed_active_slots["active_slots"] = [[]]
-        with self.assertRaisesRegex(AssertionError, r"active_slots entries must be objects"):
-            _validate_state_payload(malformed_active_slots)
+        malformed_current_sweep = dict(fixture)
+        malformed_current_sweep["current_sweep"] = []
+        with self.assertRaisesRegex(AssertionError, r"current_sweep must be an object"):
+            _validate_state_payload(malformed_current_sweep)
 
-        malformed_local_changeset = dict(fixture)
-        malformed_local_changeset["local_changeset"] = []
-        with self.assertRaisesRegex(AssertionError, r"local_changeset must be an object"):
-            _validate_state_payload(malformed_local_changeset)
+        malformed_selected_sweep = dict(fixture)
+        malformed_selected_sweep["selected_sweep"] = []
+        with self.assertRaisesRegex(AssertionError, r"selected_sweep must be an object"):
+            _validate_state_payload(malformed_selected_sweep)
 
-        malformed_rounds = dict(fixture)
-        malformed_rounds["proposal_cycle"] = dict(fixture["proposal_cycle"])
-        malformed_rounds["proposal_cycle"]["ideation_rounds_by_slot"] = {"": 1}
-        with self.assertRaisesRegex(
-            AssertionError, r"proposal_cycle.ideation_rounds_by_slot keys must be non-empty strings"
-        ):
-            _validate_state_payload(malformed_rounds)
-
-        negative_rounds = dict(fixture)
-        negative_rounds["proposal_cycle"] = dict(fixture["proposal_cycle"])
-        negative_rounds["proposal_cycle"]["ideation_rounds_by_slot"] = {"bg-1": -1}
-        with self.assertRaisesRegex(
-            AssertionError, r"proposal_cycle.ideation_rounds_by_slot values must be non-negative integers"
-        ):
-            _validate_state_payload(negative_rounds)
-
-        boolean_rounds = dict(fixture)
-        boolean_rounds["proposal_cycle"] = dict(fixture["proposal_cycle"])
-        boolean_rounds["proposal_cycle"]["ideation_rounds_by_slot"] = {"bg-1": False}
-        with self.assertRaisesRegex(
-            AssertionError, r"proposal_cycle.ideation_rounds_by_slot values must be non-negative integers"
-        ):
-            _validate_state_payload(boolean_rounds)
-
-        malformed_patch_artifacts = dict(fixture)
-        malformed_patch_artifacts["local_changeset"] = dict(fixture["local_changeset"])
-        malformed_patch_artifacts["local_changeset"]["patch_artifacts"] = [
-            {
-                "producer_slot_id": "",
-                "purpose": "review",
-                "patch_path": "artifacts/patch.diff",
-                "target_worktree": ".ml-metaopt/worktrees/iter-3-materialization",
-            }
-        ]
-        with self.assertRaisesRegex(
-            AssertionError, r"patch_artifacts entries must include non-empty producer_slot_id"
-        ):
-            _validate_state_payload(malformed_patch_artifacts)
-
-        malformed_apply_results = dict(fixture)
-        malformed_apply_results["local_changeset"] = dict(fixture["local_changeset"])
-        malformed_apply_results["local_changeset"]["apply_results"] = [
-            {"patch_path": "", "status": "applied"}
-        ]
-        with self.assertRaisesRegex(
-            AssertionError, r"apply_results entries must include non-empty patch_path"
-        ):
-            _validate_state_payload(malformed_apply_results)
-
-    def test_state_validator_rejects_malformed_slot_baseline_and_selected_experiment_shapes(self) -> None:
+    def test_state_validator_rejects_malformed_baseline_and_selected_sweep_shapes(self) -> None:
         fixture = _read_json("tests/fixtures/state/running.json")
 
-        blank_slot_id = copy.deepcopy(fixture)
-        blank_slot_id["active_slots"][0]["slot_id"] = ""
-        with self.assertRaisesRegex(AssertionError, r"slot_id is required"):
-            _validate_state_payload(blank_slot_id)
+        boolean_baseline_value = copy.deepcopy(fixture)
+        boolean_baseline_value["baseline"]["value"] = True
+        with self.assertRaisesRegex(AssertionError, r"baseline.value must be numeric"):
+            _validate_state_payload(boolean_baseline_value)
 
-        blank_slot_status = copy.deepcopy(fixture)
-        blank_slot_status["active_slots"][0]["status"] = ""
-        with self.assertRaisesRegex(AssertionError, r"slot status is required"):
-            _validate_state_payload(blank_slot_status)
+        blank_baseline_metric = copy.deepcopy(fixture)
+        blank_baseline_metric["baseline"] = dict(fixture["baseline"])
+        blank_baseline_metric["baseline"]["metric"] = ""
+        with self.assertRaisesRegex(AssertionError, r"baseline.metric is required"):
+            _validate_state_payload(blank_baseline_metric)
 
-        invalid_slot_attempt = copy.deepcopy(fixture)
-        invalid_slot_attempt["active_slots"][0]["attempt"] = False
-        with self.assertRaisesRegex(AssertionError, r"slot attempt must be a positive integer"):
-            _validate_state_payload(invalid_slot_attempt)
+        malformed_selected_sweep = copy.deepcopy(fixture)
+        malformed_selected_sweep["selected_sweep"] = []
+        with self.assertRaisesRegex(AssertionError, r"selected_sweep must be an object"):
+            _validate_state_payload(malformed_selected_sweep)
 
-        zero_slot_attempt = copy.deepcopy(fixture)
-        zero_slot_attempt["active_slots"][0]["attempt"] = 0
-        with self.assertRaisesRegex(AssertionError, r"slot attempt must be a positive integer"):
-            _validate_state_payload(zero_slot_attempt)
+        blank_selected_sweep_proposal = copy.deepcopy(fixture)
+        blank_selected_sweep_proposal["selected_sweep"] = {"proposal_id": ""}
+        with self.assertRaisesRegex(AssertionError, r"selected_sweep.proposal_id is required"):
+            _validate_state_payload(blank_selected_sweep_proposal)
 
-        boolean_baseline_aggregate = copy.deepcopy(fixture)
-        boolean_baseline_aggregate["baseline"]["aggregate"] = True
-        with self.assertRaisesRegex(AssertionError, r"baseline.aggregate must be numeric"):
-            _validate_state_payload(boolean_baseline_aggregate)
-
-        empty_baseline_by_dataset = copy.deepcopy(fixture)
-        empty_baseline_by_dataset["baseline"]["by_dataset"] = {}
-        with self.assertRaisesRegex(AssertionError, r"baseline.by_dataset must be a non-empty object"):
-            _validate_state_payload(empty_baseline_by_dataset)
-
-        blank_baseline_dataset_key = copy.deepcopy(fixture)
-        blank_baseline_dataset_key["baseline"]["by_dataset"] = {"": 0.1269}
-        with self.assertRaisesRegex(AssertionError, r"baseline.by_dataset keys must be non-empty strings"):
-            _validate_state_payload(blank_baseline_dataset_key)
-
-        boolean_baseline_dataset_value = copy.deepcopy(fixture)
-        boolean_baseline_dataset_value["baseline"]["by_dataset"] = {"ds_main": False}
-        with self.assertRaisesRegex(AssertionError, r"baseline.by_dataset values must be numeric"):
-            _validate_state_payload(boolean_baseline_dataset_value)
-
-        malformed_selected_experiment = copy.deepcopy(fixture)
-        malformed_selected_experiment["selected_experiment"] = []
-        with self.assertRaisesRegex(AssertionError, r"selected_experiment must be an object"):
-            _validate_state_payload(malformed_selected_experiment)
-
-        blank_selected_experiment_proposal = copy.deepcopy(fixture)
-        blank_selected_experiment_proposal["selected_experiment"]["proposal_id"] = ""
-        with self.assertRaisesRegex(AssertionError, r"selected_experiment.proposal_id is required"):
-            _validate_state_payload(blank_selected_experiment_proposal)
-
-        invalid_selected_experiment_attempts = copy.deepcopy(fixture)
-        invalid_selected_experiment_attempts["selected_experiment"]["sanity_attempts"] = True
-        with self.assertRaisesRegex(
-            AssertionError, r"selected_experiment.sanity_attempts must be a non-negative integer"
-        ):
-            _validate_state_payload(invalid_selected_experiment_attempts)
-
-    def test_state_validator_enforces_selected_experiment_and_local_changeset_lifecycle(self) -> None:
+    def test_state_validator_enforces_terminal_current_sweep_null_invariant(self) -> None:
         fixture = _read_json("tests/fixtures/state/running.json")
 
-        pre_selection = copy.deepcopy(fixture)
-        pre_selection["machine_state"] = "WAIT_FOR_PROPOSAL_THRESHOLD"
-        pre_selection["selected_experiment"] = None
-        pre_selection["local_changeset"] = None
-        _validate_state_payload(pre_selection)
+        # Running state with current_sweep is valid
+        _validate_state_payload(fixture)
 
-        post_selection_pre_materialization = copy.deepcopy(fixture)
-        post_selection_pre_materialization["machine_state"] = "DESIGN_EXPERIMENT"
-        post_selection_pre_materialization["local_changeset"] = None
-        _validate_state_payload(post_selection_pre_materialization)
+        # Terminal state with null current_sweep is valid
+        complete = _read_json("tests/fixtures/state/complete.json")
+        self.assertIsNone(complete["current_sweep"])
+        _validate_state_payload(complete)
 
+        # Terminal state with non-null current_sweep must be rejected
+        bad_terminal = copy.deepcopy(complete)
+        bad_terminal["current_sweep"] = fixture["current_sweep"]
+        with self.assertRaisesRegex(AssertionError, r"terminal states must have current_sweep = null"):
+            _validate_state_payload(bad_terminal)
+
+        # Blocked-config terminal with null current_sweep is valid
         blocked_config = copy.deepcopy(fixture)
         blocked_config["status"] = "BLOCKED_CONFIG"
         blocked_config["machine_state"] = "BLOCKED_CONFIG"
-        blocked_config["active_slots"] = []
-        blocked_config["selected_experiment"] = None
-        blocked_config["local_changeset"] = None
+        blocked_config["current_sweep"] = None
         _validate_state_payload(blocked_config)
 
+        # Blocked-protocol terminal with null current_sweep is valid
         blocked_protocol = copy.deepcopy(fixture)
         blocked_protocol["status"] = "BLOCKED_PROTOCOL"
         blocked_protocol["machine_state"] = "BLOCKED_PROTOCOL"
-        blocked_protocol["active_slots"] = []
-        blocked_protocol["selected_experiment"] = None
-        blocked_protocol["local_changeset"] = None
+        blocked_protocol["current_sweep"] = None
         _validate_state_payload(blocked_protocol)
 
-        missing_selected_experiment = copy.deepcopy(fixture)
-        missing_selected_experiment["selected_experiment"] = None
-        with self.assertRaisesRegex(
-            AssertionError, r"selected_experiment must be populated once SELECT_EXPERIMENT completes"
-        ):
-            _validate_state_payload(missing_selected_experiment)
-
-        rollover_cleared_selected_experiment = copy.deepcopy(fixture)
-        rollover_cleared_selected_experiment["machine_state"] = "ROLL_ITERATION"
-        rollover_cleared_selected_experiment["selected_experiment"] = None
-        _validate_state_payload(rollover_cleared_selected_experiment)
-
-        quiesce_cleared_selected_experiment = copy.deepcopy(fixture)
-        quiesce_cleared_selected_experiment["machine_state"] = "QUIESCE_SLOTS"
-        quiesce_cleared_selected_experiment["selected_experiment"] = None
-        _validate_state_payload(quiesce_cleared_selected_experiment)
-
-        complete_cleared_selected_experiment = _read_json("tests/fixtures/state/complete.json")
-        complete_cleared_selected_experiment["selected_experiment"] = None
-        _validate_state_payload(complete_cleared_selected_experiment)
-
-        missing_local_changeset = copy.deepcopy(fixture)
-        missing_local_changeset["local_changeset"] = None
-        with self.assertRaisesRegex(
-            AssertionError, r"local_changeset must be populated once MATERIALIZE_CHANGESET completes"
-        ):
-            _validate_state_payload(missing_local_changeset)
-
-    def test_state_validator_rejects_non_strong_coder_materialization_slot(self) -> None:
+    def test_state_validator_rejects_invalid_current_sweep_shape(self) -> None:
         fixture = _read_json("tests/fixtures/state/running.json")
 
-        invalid_materialization_slot = copy.deepcopy(fixture)
-        invalid_materialization_slot["active_slots"][1]["model_class"] = "strong_reasoner"
-        with self.assertRaisesRegex(
-            AssertionError, r"materialization slots must use model_class strong_coder"
-        ):
-            _validate_state_payload(invalid_materialization_slot)
+        missing_sweep_id = copy.deepcopy(fixture)
+        missing_sweep_id["current_sweep"] = dict(fixture["current_sweep"])
+        del missing_sweep_id["current_sweep"]["sweep_id"]
+        with self.assertRaisesRegex(AssertionError, r"current_sweep.sweep_id is required"):
+            _validate_state_payload(missing_sweep_id)
 
-    def test_state_validator_rejects_invalid_hash_format_and_remote_batches(self) -> None:
+        boolean_spend = copy.deepcopy(fixture)
+        boolean_spend["current_sweep"] = dict(fixture["current_sweep"])
+        boolean_spend["current_sweep"]["cumulative_spend_usd"] = True
+        with self.assertRaisesRegex(AssertionError, r"current_sweep.cumulative_spend_usd must be numeric"):
+            _validate_state_payload(boolean_spend)
+
+    def test_state_validator_rejects_invalid_hash_format(self) -> None:
         fixture = _read_json("tests/fixtures/state/running.json")
 
         invalid_campaign_hash = copy.deepcopy(fixture)
@@ -879,58 +613,35 @@ class MetaoptValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, r"campaign_identity_hash must be a sha256 digest"):
             _validate_state_payload(invalid_campaign_hash)
 
-        invalid_runtime_hash = copy.deepcopy(fixture)
-        invalid_runtime_hash["runtime_config_hash"] = "not-a-digest"
-        with self.assertRaisesRegex(AssertionError, r"runtime_config_hash must be a sha256 digest"):
-            _validate_state_payload(invalid_runtime_hash)
+        short_hash = copy.deepcopy(fixture)
+        short_hash["campaign_identity_hash"] = "sha256:abcdef"
+        with self.assertRaisesRegex(AssertionError, r"campaign_identity_hash must be a sha256 digest"):
+            _validate_state_payload(short_hash)
 
-        blank_remote_batch_id = copy.deepcopy(fixture)
-        blank_remote_batch_id["remote_batches"] = [
-            {"batch_id": "", "queue_ref": "queue-20260405-0001", "status": "running"}
-        ]
-        with self.assertRaisesRegex(AssertionError, r"remote_batches entries must include non-empty batch_id"):
-            _validate_state_payload(blank_remote_batch_id)
-
-        malformed_remote_batch = copy.deepcopy(fixture)
-        malformed_remote_batch["remote_batches"] = [{"batch_id": "batch-20260405-0001", "queue_ref": "", "status": "running"}]
-        with self.assertRaisesRegex(AssertionError, r"remote_batches entries must include non-empty queue_ref"):
-            _validate_state_payload(malformed_remote_batch)
-
-        invalid_remote_batch_status = copy.deepcopy(fixture)
-        invalid_remote_batch_status["remote_batches"] = [
-            {
-                "batch_id": "batch-20260405-0001",
-                "queue_ref": "queue-20260405-0001",
-                "status": "waiting",
-            }
-        ]
-        with self.assertRaisesRegex(AssertionError, r"remote_batches entries must include valid status"):
-            _validate_state_payload(invalid_remote_batch_status)
-
-    def test_state_validator_rejects_malformed_completed_experiments(self) -> None:
+    def test_state_validator_rejects_malformed_completed_iterations(self) -> None:
         fixture = _read_json("tests/fixtures/state/running.json")
 
-        malformed_completed_experiments = copy.deepcopy(fixture)
-        malformed_completed_experiments["completed_experiments"] = {}
-        with self.assertRaisesRegex(AssertionError, r"completed_experiments must be a list"):
-            _validate_state_payload(malformed_completed_experiments)
+        malformed_completed_iterations = copy.deepcopy(fixture)
+        malformed_completed_iterations["completed_iterations"] = {}
+        with self.assertRaisesRegex(AssertionError, r"completed_iterations must be a list"):
+            _validate_state_payload(malformed_completed_iterations)
 
-        non_object_completed_experiment = copy.deepcopy(fixture)
-        non_object_completed_experiment["completed_experiments"] = ["batch-20260401-0004"]
-        with self.assertRaisesRegex(AssertionError, r"completed_experiments entries must be objects"):
-            _validate_state_payload(non_object_completed_experiment)
+        non_object_completed_iteration = copy.deepcopy(fixture)
+        non_object_completed_iteration["completed_iterations"] = ["iter-1"]
+        with self.assertRaisesRegex(AssertionError, r"completed_iterations entries must be objects"):
+            _validate_state_payload(non_object_completed_iteration)
 
-        blank_completed_experiment_batch_id = copy.deepcopy(fixture)
-        blank_completed_experiment_batch_id["completed_experiments"][0]["batch_id"] = ""
+        invalid_iteration_number = copy.deepcopy(fixture)
+        invalid_iteration_number["completed_iterations"] = [{"iteration": 0, "best_metric_value": 0.9}]
         with self.assertRaisesRegex(
-            AssertionError, r"completed_experiments entries must include non-empty batch_id"
+            AssertionError, r"completed_iterations entries must include positive iteration"
         ):
-            _validate_state_payload(blank_completed_experiment_batch_id)
+            _validate_state_payload(invalid_iteration_number)
 
-        boolean_completed_experiment_aggregate = copy.deepcopy(fixture)
-        boolean_completed_experiment_aggregate["completed_experiments"][0]["aggregate"] = True
-        with self.assertRaisesRegex(AssertionError, r"completed_experiments aggregate must be numeric"):
-            _validate_state_payload(boolean_completed_experiment_aggregate)
+        boolean_metric = copy.deepcopy(fixture)
+        boolean_metric["completed_iterations"] = [{"iteration": 1, "best_metric_value": True}]
+        with self.assertRaisesRegex(AssertionError, r"completed_iterations best_metric_value must be numeric"):
+            _validate_state_payload(boolean_metric)
 
     def test_state_validator_rejects_invalid_required_top_level_field_shapes(self) -> None:
         fixture = _read_json("tests/fixtures/state/running.json")
@@ -945,11 +656,6 @@ class MetaoptValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, r"current_iteration must be a positive integer"):
             _validate_state_payload(invalid_current_iteration)
 
-        blank_next_action = copy.deepcopy(fixture)
-        blank_next_action["next_action"] = ""
-        with self.assertRaisesRegex(AssertionError, r"next_action is required"):
-            _validate_state_payload(blank_next_action)
-
         blank_objective_metric = copy.deepcopy(fixture)
         blank_objective_metric["objective_snapshot"] = dict(fixture["objective_snapshot"])
         blank_objective_metric["objective_snapshot"]["metric"] = ""
@@ -961,12 +667,6 @@ class MetaoptValidationTests(unittest.TestCase):
         invalid_objective_direction["objective_snapshot"]["direction"] = "sideways"
         with self.assertRaisesRegex(AssertionError, r"objective_snapshot.direction must be minimize or maximize"):
             _validate_state_payload(invalid_objective_direction)
-
-        invalid_objective_aggregation = copy.deepcopy(fixture)
-        invalid_objective_aggregation["objective_snapshot"] = dict(fixture["objective_snapshot"])
-        invalid_objective_aggregation["objective_snapshot"]["aggregation"] = []
-        with self.assertRaisesRegex(AssertionError, r"objective_snapshot.aggregation must be an object"):
-            _validate_state_payload(invalid_objective_aggregation)
 
         invalid_objective_threshold = copy.deepcopy(fixture)
         invalid_objective_threshold["objective_snapshot"] = dict(fixture["objective_snapshot"])
@@ -994,26 +694,13 @@ class MetaoptValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, r"no_improve_iterations must be a non-negative integer"):
             _validate_state_payload(invalid_no_improve_iterations)
 
-    def test_batch_manifest_rejects_non_positive_or_boolean_iteration(self) -> None:
-        fixture = _read_json("tests/fixtures/manifest/valid.json")
+    def test_v4_state_version_required(self) -> None:
+        fixture = _read_json("tests/fixtures/state/running.json")
 
-        zero_iteration = dict(fixture)
-        zero_iteration["iteration"] = 0
-        with self.assertRaisesRegex(AssertionError, r"iteration is required"):
-            _validate_batch_manifest(zero_iteration)
-
-        boolean_iteration = dict(fixture)
-        boolean_iteration["iteration"] = True
-        with self.assertRaisesRegex(AssertionError, r"iteration is required"):
-            _validate_batch_manifest(boolean_iteration)
-
-    def test_results_validator_rejects_boolean_aggregate_value(self) -> None:
-        fixture = _read_json("tests/fixtures/backend/results-valid.json")
-
-        boolean_aggregate = copy.deepcopy(fixture)
-        boolean_aggregate["best_aggregate_result"]["value"] = True
-        with self.assertRaisesRegex(AssertionError, r"aggregate value must be numeric"):
-            _validate_backend_payload("results", boolean_aggregate)
+        wrong_version = copy.deepcopy(fixture)
+        wrong_version["version"] = 3
+        with self.assertRaisesRegex(AssertionError, r"state fixture must use v4"):
+            _validate_state_payload(wrong_version)
 
     # ------------------------------------------------------------------
     # Cross-document worker target consistency

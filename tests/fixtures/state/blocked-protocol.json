@@ -1,52 +1,35 @@
 {
-  "version": 3,
-  "campaign_id": "market-forecast-v3",
+  "version": 4,
+  "campaign_id": "gnn-mnist-v4",
   "campaign_identity_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-  "runtime_config_hash": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
   "status": "BLOCKED_PROTOCOL",
   "machine_state": "BLOCKED_PROTOCOL",
   "current_iteration": 4,
-  "next_action": "protocol cannot represent the next semantic step; manual intervention required",
+  "next_action": null,
   "objective_snapshot": {
-    "metric": "rmse",
-    "direction": "minimize",
-    "aggregation": {
-      "method": "weighted_mean",
-      "weights": {
-        "ds_main": 0.7,
-        "ds_holdout": 0.3
-      }
-    },
-    "improvement_threshold": 0.0005
+    "metric": "val/accuracy",
+    "direction": "maximize",
+    "improvement_threshold": 0.005
   },
   "proposal_cycle": {
     "cycle_id": "iter-4-cycle-1",
-    "current_pool_frozen": true,
-    "ideation_rounds_by_slot": {},
-    "shortfall_reason": ""
+    "current_pool_frozen": true
   },
-  "active_slots": [],
+  "current_sweep": null,
+  "selected_sweep": null,
+  "baseline": {
+    "metric": "val/accuracy",
+    "value": 0.950,
+    "wandb_run_id": "run-iter3-best",
+    "wandb_run_url": "https://wandb.ai/my-entity/my-project/runs/run-iter3-best",
+    "established_at": "2026-04-13T16:00:00Z"
+  },
   "current_proposals": [],
   "next_proposals": [],
-  "selected_experiment": null,
-  "local_changeset": null,
-  "remote_batches": [],
-  "baseline": {
-    "aggregate": 0.1213,
-    "by_dataset": {
-      "ds_main": 0.1208,
-      "ds_holdout": 0.1225
-    }
-  },
-  "completed_experiments": [
-    {
-      "batch_id": "batch-20260405-0007",
-      "aggregate": 0.1213
-    }
-  ],
+  "completed_iterations": [],
   "key_learnings": [
     "Protocol version mismatch detected after iteration 3"
   ],
   "no_improve_iterations": 0,
-  "campaign_started_at": "2026-04-01T00:00:00Z"
+  "campaign_started_at": "2026-04-13T07:00:00Z"
 }

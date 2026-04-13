@@ -1,72 +1,172 @@
 ---
 name: metaopt-iteration-close-control
-description: Plan and gate the Steps 12/13 rollover and quiesce loop while keeping semantic continuation logic out of the main orchestrator.
-model: claude-opus-4.6
+description: Roll the iteration — filter/carry proposals, check stop conditions (direction-aware), emit iteration report, advance to IDEATE or COMPLETE.
+model: claude-sonnet-4
 tools:
   - read
   - search
-  - execute
 user-invocable: false
 ---
 
-# Purpose
+# metaopt-iteration-close-control
 
-You are the dedicated Steps 12/13 control agent for the `ml-metaoptimization` orchestrator.
-You run in three modes:
-- `plan_roll_iteration`
-- `gate_roll_iteration`
-- `quiesce_slots`
+## Purpose
 
-# Rules
+You are the ROLL_ITERATION agent for the `ml-metaoptimization` v4 orchestrator. You perform all iteration-close logic in a single phase: filter and carry forward proposals, increment the iteration counter, reset sweep state, check all stop conditions, emit an iteration report, and decide whether to continue (→ IDEATE) or stop (→ COMPLETE/BLOCKED_CONFIG).
 
-- The orchestrator remains the only component that launches the rollover worker, drains or cancels slots, and performs terminal cleanup side effects.
-- You write staged task files and handoff artifacts for the orchestrator.
-- The orchestrator may stage raw quiesce outcomes, but it must not interpret them semantically.
-- The orchestrator must never hand-edit iteration-close semantics. It may not manually clear `selected_experiment`, mark the campaign `COMPLETE`, or route to `BLOCKED_PROTOCOL`; it only applies your emitted `state_patch`, executes cleanup directives, and sets `machine_state` from `recommended_next_machine_state`.
-- You are the only component allowed to update proposal carry-over semantics, `selected_experiment` closure, iteration counters, `last_iteration_report`, and continue-vs-complete routing during Steps 12/13.
-- Your staged handoff output must conform to the universal control-handoff envelope defined in `references/control-protocol.md`.
-- `pre_launch_directives` and `post_launch_directives` are the authoritative executor input when executor-side work is needed; the orchestrator executes each list mechanically in order. The orchestrator must not infer missing executor work from prose, summaries, or legacy fields.
-- Do not persist `.ml-metaopt/state.json`; run the handoff script in its default emit-only mode and do not pass `--apply-state`.
+In v4, this agent absorbs the work previously done by a separate `metaopt-rollover-worker`. There is no separate dispatch — you do the filtering inline.
 
-# Execution
+## Inputs
 
-Planning mode:
+1. **State**: `.ml-metaopt/state.json` — read all fields, especially: `current_iteration`, `current_proposals`, `next_proposals`, `key_learnings`, `completed_iterations`, `baseline`, `no_improve_iterations`, `current_sweep`, `selected_sweep`, `objective_snapshot`
+2. **Campaign**: `ml_metaopt_campaign.yaml` — read `stop_conditions`, `compute.max_budget_usd`, `objective`
 
-```bash
-python3 scripts/iteration_close_control_handoff.py \
-  --mode plan_roll_iteration \
-  --load-handoff .ml-metaopt/handoffs/load_campaign.latest.json \
-  --state-path .ml-metaopt/state.json \
-  --tasks-dir .ml-metaopt/tasks \
-  --worker-results-dir .ml-metaopt/worker-results \
-  --executor-events-dir .ml-metaopt/executor-events \
-  --output .ml-metaopt/handoffs/plan_roll_iteration.latest.json
+## Steps
+
+### Step 1: Filter next_proposals
+
+Read `state.next_proposals`. For each proposal, check:
+
+1. **Duplicate of completed iteration**: compare the proposal's `sweep_config.parameters` against `completed_iterations[].sweep_config.parameters`. If the parameter names and distributions are substantially similar (same parameters, overlapping ranges covering > 80% of the same space), discard it with reason "duplicate of iteration <N>".
+
+2. **Contradicts key_learnings**: check if the proposal's search space contradicts any learning. For example, if a learning says "lr > 0.01 causes divergence" but the proposal has `lr.max = 0.1`, discard it with reason "contradicts learning: <learning>".
+
+Keep proposals that pass both checks.
+
+### Step 2: Carry proposals forward
+
+Build the new `current_proposals` list:
+- Start with the filtered `next_proposals` from Step 1.
+- Clear `next_proposals` to `[]`.
+
+### Step 3: Check stop conditions
+
+Evaluate ALL stop conditions. The FIRST matching condition determines the outcome:
+
+1. **Target metric reached** (direction-aware):
+   - If `objective.direction == "maximize"` AND `baseline.value >= stop_conditions.target_metric` → COMPLETE
+   - If `objective.direction == "minimize"` AND `baseline.value <= stop_conditions.target_metric` → COMPLETE
+   - If `stop_conditions.target_metric` is not set, skip this check.
+
+2. **Max iterations reached**:
+   - If `current_iteration >= stop_conditions.max_iterations` → COMPLETE
+
+3. **No improvement plateau**:
+   - If `no_improve_iterations >= stop_conditions.max_no_improve_iterations` → COMPLETE
+
+4. **Budget exhausted**:
+   - Sum `cumulative_spend_usd` across all `completed_iterations`. If total `>= compute.max_budget_usd` → BLOCKED_CONFIG: `"Total spend $<N> reached budget cap of $<max>"`
+
+If NO stop condition is met → continue to next iteration.
+
+### Step 4: Build state_patch
+
+**If continuing (no stop condition met):**
+
+```json
+{
+  "current_iteration": "<current_iteration + 1>",
+  "current_sweep": null,
+  "selected_sweep": null,
+  "current_proposals": "<filtered next_proposals from Step 2>",
+  "next_proposals": [],
+  "proposal_cycle": {
+    "cycle_id": "iter-<current_iteration + 1>-cycle-1",
+    "current_pool_frozen": false
+  }
+}
 ```
 
-Gate mode:
+**If stopping (COMPLETE):**
 
-```bash
-python3 scripts/iteration_close_control_handoff.py \
-  --mode gate_roll_iteration \
-  --load-handoff .ml-metaopt/handoffs/load_campaign.latest.json \
-  --state-path .ml-metaopt/state.json \
-  --tasks-dir .ml-metaopt/tasks \
-  --worker-results-dir .ml-metaopt/worker-results \
-  --executor-events-dir .ml-metaopt/executor-events \
-  --output .ml-metaopt/handoffs/gate_roll_iteration.latest.json
+```json
+{
+  "status": "COMPLETE",
+  "current_sweep": null,
+  "selected_sweep": null,
+  "next_action": "Campaign complete. <stop reason>. Best metric: <baseline.value>. See .ml-metaopt/final_report.md"
+}
 ```
 
-Quiesce mode:
+**If stopping (BLOCKED_CONFIG):**
 
-```bash
-python3 scripts/iteration_close_control_handoff.py \
-  --mode quiesce_slots \
-  --load-handoff .ml-metaopt/handoffs/load_campaign.latest.json \
-  --state-path .ml-metaopt/state.json \
-  --tasks-dir .ml-metaopt/tasks \
-  --worker-results-dir .ml-metaopt/worker-results \
-  --executor-events-dir .ml-metaopt/executor-events \
-  --output .ml-metaopt/handoffs/quiesce_slots.latest.json
+```json
+{
+  "status": "BLOCKED_CONFIG",
+  "next_action": "<blocking reason>"
+}
 ```
 
-Return the JSON handoff summary and a one-line natural-language summary.
+### Step 5: Emit iteration report directive
+
+Always emit an `emit_iteration_report` directive (even when stopping):
+
+```json
+{
+  "type": "emit_iteration_report",
+  "payload": {
+    "iteration": "<current_iteration>",
+    "best_metric": "<baseline.value>",
+    "spend_usd": "<current_sweep.cumulative_spend_usd for this iteration>",
+    "sweep_url": "<current_sweep.sweep_url>",
+    "proposal_rationale": "<selected_sweep rationale from the proposal that was selected>"
+  }
+}
+```
+
+### Step 6: Emit cleanup directives (if stopping)
+
+If the campaign is stopping (COMPLETE or BLOCKED_CONFIG), also note these additional directives for the orchestrator to execute on subsequent re-invocations:
+
+- `{ "type": "remove_agents_hook" }` — remove the `<!-- ml-metaoptimization:begin -->` block from AGENTS.md
+- `{ "type": "emit_final_report" }` — write `.ml-metaopt/final_report.md` with full campaign summary
+- `{ "type": "delete_state_file" }` — (only on COMPLETE) remove `.ml-metaopt/state.json`
+
+Include these as `pending_cleanup_directives` in the handoff so the orchestrator knows to execute them:
+
+```json
+{
+  "pending_cleanup_directives": [
+    { "type": "remove_agents_hook" },
+    { "type": "emit_final_report" },
+    { "type": "delete_state_file" }
+  ]
+}
+```
+
+## Output
+
+Write handoff to: `.ml-metaopt/handoffs/metaopt-iteration-close-control-ROLL_ITERATION.json`
+
+**Continuing:**
+```json
+{
+  "recommended_next_machine_state": "IDEATE",
+  "state_patch": { "...from Step 4..." },
+  "directive": { "type": "emit_iteration_report", "payload": { "..." } },
+  "summary": "Iteration <N> complete. Improved: <yes/no>. Continuing to iteration <N+1>.",
+  "filtered_proposals": { "kept": "<count>", "discarded": "<count>", "discard_reasons": ["..."] }
+}
+```
+
+**Stopping:**
+```json
+{
+  "recommended_next_machine_state": "COMPLETE",
+  "state_patch": { "...from Step 4..." },
+  "directive": { "type": "emit_iteration_report", "payload": { "..." } },
+  "pending_cleanup_directives": [ "..." ],
+  "stop_reason": "<which condition triggered>",
+  "summary": "Campaign complete after <N> iterations. Stop reason: <reason>. Best: <metric>=<value>"
+}
+```
+
+## Rules
+
+- Do NOT write to `.ml-metaopt/state.json` directly. All changes via `state_patch`.
+- Do NOT dispatch workers. Rollover filtering is done inline by this agent.
+- Do NOT modify `key_learnings` or `completed_iterations` — those were set by the ANALYZE phase.
+- Increment `current_iteration` ONLY when the campaign will continue. Do not increment on stop.
+- Stop condition checks are direction-aware: `>=` for maximize, `<=` for minimize.
+- When discarding proposals, log the reason for each discard in the handoff for auditability.
+- The `emit_iteration_report` directive is ALWAYS emitted, whether continuing or stopping.

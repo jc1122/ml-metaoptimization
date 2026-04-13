@@ -39,7 +39,7 @@ Skip to Step 4 (initialize fresh state).
 This is a resume. Read the full state. Proceed to Step 3 (crash recovery check).
 
 **Case C — State file exists, `campaign_identity_hash` does NOT match:**
-Emit BLOCKED_CONFIG: `"Stale state file — campaign_identity_hash mismatch. Archive or delete .ml-metaopt/state.json to start a fresh campaign, or restore the matching campaign YAML to resume."`. Do NOT modify or delete the state file.
+Emit BLOCKED_CONFIG with `recovery_action: "archive or remove the stale state before starting a new campaign"`. Do NOT modify or delete the state file.
 
 ### Step 3: Crash recovery (resume only)
 

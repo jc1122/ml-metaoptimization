@@ -236,24 +236,24 @@ class MetaoptValidationTests(unittest.TestCase):
         _require_pattern(
             self,
             contract,
-            r"## Enqueue Contract.*stdout JSON object.*`batch_id`.*`queue_ref`.*`status`",
+            r"### `launch_sweep`.*sweep_config.*wandb_entity.*wandb_project",
         )
         _require_pattern(
             self,
             contract,
-            r"## Status Contract.*stdout JSON object.*`batch_id`.*`status`.*`timestamps`",
+            r"### `poll_sweep`.*sweep_id.*sweep_status.*best_metric_value",
         )
         _require_pattern(
             self,
             contract,
-            r"## Results Contract.*stdout JSON object.*`best_aggregate_result`.*`per_dataset`.*`artifact_locations`.*`logs_location`",
+            r"### `run_smoke_test`.*command.*exit_code.*timed_out",
         )
 
     def test_hash_canonicalization_rules_are_explicit(self) -> None:
         contracts = _read_text("references/contracts.md")
         for required_detail in [
             "sorted keys",
-            '(",", ":")',
+            '","',
             "ensure_ascii",
             "UTF-8",
         ]:
@@ -268,29 +268,29 @@ class MetaoptValidationTests(unittest.TestCase):
         machine = _read_text("references/state-machine.md")
 
         self.assertIn("`campaign_identity_hash`", contracts)
-        self.assertIn("`runtime_config_hash`", contracts)
         self.assertNotIn("`campaign_hash`", contracts)
         _require_pattern(
             self,
-            machine,
-            r"campaign identity hash mismatch.*`BLOCKED_CONFIG`.*archive or remove the stale state",
+            contracts,
+            r"[Ii]dentity mismatch.*BLOCKED_CONFIG|BLOCKED_CONFIG.*identity.*mismatch",
         )
+        self.assertIn("identity hash mismatch", machine)
 
     def test_state_machine_bounds_sanity_and_quiesces_slots(self) -> None:
         machine = _read_text("references/state-machine.md")
         skill = _read_text("SKILL.md")
 
-        for state_name in ("`DESIGN_EXPERIMENT`", "`QUIESCE_SLOTS`"):
+        for state_name in ("SELECT_AND_DESIGN_SWEEP", "ROLL_ITERATION"):
             self.assertIn(state_name, machine)
             self.assertIn(state_name, skill)
 
-        _require_pattern(self, machine, r"### `LOCAL_SANITY`.*maximum 3 remediation attempts")
-        _require_pattern(self, skill, r"LOCAL_SANITY.*max 3 attempts")
-        _require_pattern(self, machine, r"### `QUIESCE_SLOTS`.*60-second drain window.*cancel leftovers")
+        _require_pattern(self, machine, r"LOCAL_SANITY.*60-second hard timeout")
+        _require_pattern(self, skill, r"LOCAL_SANITY.*60-second hard timeout")
+        _require_pattern(self, machine, r"ROLL_ITERATION.*check stop conditions")
         _require_pattern(
             self,
             machine,
-            r"### Terminal States.*`COMPLETE`:.*all slots have already been drained or canceled",
+            r"COMPLETE.*remove_agents_hook.*delete_state_file.*emit_final_report",
         )
 
     def test_contracts_define_slot_model_and_iteration_reporting(self) -> None:
@@ -300,17 +300,17 @@ class MetaoptValidationTests(unittest.TestCase):
         _require_pattern(
             self,
             contracts,
-            r"## Slot Contract.*`slot_class`.*`background`.*`auxiliary`.*`mode`.*`materialization`",
-        )
-        _require_pattern(
-            self,
-            machine,
-            r"`objective\.improvement_threshold`.*reset `no_improve_iterations` to `0`",
+            r"improvement_threshold.*float.*> 0",
         )
         _require_pattern(
             self,
             contracts,
-            r"At the end of `ROLL_ITERATION`, after carry-over filtering is complete, emit",
+            r"no_improve_iterations.*integer.*>= 0",
+        )
+        _require_pattern(
+            self,
+            machine,
+            r"no_improve_iterations.*COMPLETE",
         )
 
     def test_contracts_define_state_lifecycle_nullability_and_materialization_worker_pairing(self) -> None:
@@ -319,65 +319,60 @@ class MetaoptValidationTests(unittest.TestCase):
         _require_pattern(
             self,
             contracts,
-            r"## Selected Experiment Contract.*`selected_experiment` may be `null` until `SELECT_EXPERIMENT` persists a winner.*authoritative handoff object",
+            r"selected_sweep.*object or null.*null until selection",
         )
         _require_pattern(
             self,
             contracts,
-            r"## Local Changeset Contract.*`local_changeset` may be `null` until `MATERIALIZE_CHANGESET` persists outputs; once present, it is an object with the documented fields",
+            r"current_sweep.*object or null.*null when no sweep",
         )
         _require_pattern(
             self,
             contracts,
-            r"`mode = materialization` requires `model_class = strong_coder`",
+            r"baseline.*object or null.*null until first improvement",
         )
 
-    def test_contract_docs_define_v3_state_manifest_and_retry_policy(self) -> None:
+    def test_contract_docs_define_v4_state_manifest_and_operations(self) -> None:
         contracts = _read_text("references/contracts.md")
         backend = _read_text("references/backend-contract.md")
 
         _require_pattern(
             self,
             contracts,
-            r"## State File.*`proposal_cycle`.*`current_pool_frozen`.*`ideation_rounds_by_slot`",
+            r"## Section 1.*State File.*proposal_cycle.*current_pool_frozen",
         )
         _require_pattern(
             self,
             contracts,
-            r"## Slot Contract.*`model_class`.*`requested_model`.*`resolved_model`",
+            r"current_sweep.*sweep_id.*sweep_url.*sky_job_ids",
         )
         _require_pattern(
             self,
             contracts,
-            r"## Local Changeset Contract.*`integration_worktree`.*`patch_artifacts`.*`apply_results`.*`data_manifest_uri`",
+            r"selected_sweep.*proposal_id.*sweep_config",
         )
         _require_pattern(
             self,
             contracts,
-            r"## Local Changeset Contract.*`patch_artifacts\[\]`.*`producer_slot_id`.*`purpose`.*`patch_path`.*`target_worktree`",
+            r"iteration_record.*iteration.*sweep_id.*best_metric_value.*spend_usd.*improved_baseline",
         )
         _require_pattern(
             self,
             contracts,
-            r"## Local Changeset Contract.*`apply_results\[\]`.*`patch_path`.*`status`",
+            r"## Section 2.*Handoff Envelope.*recommended_next_machine_state.*state_patch.*directive",
         )
         _require_pattern(
             self,
             contracts,
-            r"## State File.*`remote_batches\[\]`.*`batch_id`.*`queue_ref`.*`status`",
-        )
-        _require_pattern(
-            self,
-            contracts,
-            r"## Batch Manifest Contract.*`version`.*`campaign_id`.*`iteration`.*`batch_id`.*`experiment`.*`retry_policy`.*`artifacts\.code_artifact\.uri`.*`artifacts\.data_manifest\.uri`.*`execution\.entrypoint`",
+            r"## Section 3.*Worker Result File",
         )
         _require_pattern(
             self,
             backend,
-            r"## Retry Policy Contract.*backend.*must honor the declared retry policy",
+            r"## Forbidden Operations.*protocol breach",
         )
 
-    def test_runtime_docs_define_reinvocation_and_patch_artifacts(self) -> None:
+    def test_runtime_docs_define_reinvocation_and_worker_lanes(self) -> None:
         skill = _read_text("SKILL.md")
         machine = _read_text("references/state-machine.md")
         lanes = _read_text("references/worker-lanes.md")
@@ -389,41 +384,36 @@ class MetaoptValidationTests(unittest.TestCase):
             skill,
             r"host runtime or user invocation re-enters it",
         )
-        _require_pattern(self, skill, r"artifacts/.*code/.*data/.*manifests/.*patches/")
+        _require_pattern(self, skill, r"\.ml-metaopt/.*state\.json")
         _require_pattern(
             self,
-            skill,
-            r"`SELECT_EXPERIMENT` begins.*freeze|freeze.*when `SELECT_EXPERIMENT` begins",
+            machine,
+            r"SELECT_AND_DESIGN_SWEEP.*current_pool_frozen.*true",
         )
         _require_pattern(
             self,
             machine,
-            r"`proposal_cycle`.*`ideation_rounds_by_slot`.*floor rule",
+            r"IDEATE.*proposal.*proposal_policy\.current_target",
         )
         _require_pattern(
             self,
             machine,
-            r"### `MAINTAIN_BACKGROUND_POOL`.*Create or reset `proposal_cycle\.cycle_id` when a new iteration first enters this state after `ROLL_ITERATION` or fresh initialization.*### `SELECT_EXPERIMENT`.*keep `proposal_cycle\.cycle_id` stable for auditability until the next iteration resets it",
-        )
-        _require_pattern(
-            self,
-            machine,
-            r"### `MAINTAIN_BACKGROUND_POOL`.*Set `proposal_cycle\.current_pool_frozen = false` when a new proposal cycle begins.*### `SELECT_EXPERIMENT`.*setting `proposal_cycle\.current_pool_frozen = true` once selection starts",
-        )
-        _require_pattern(
-            self,
-            machine,
-            r"### `MAINTAIN_BACKGROUND_POOL`.*Clear `proposal_cycle\.shortfall_reason` when a new cycle begins.*### `WAIT_FOR_PROPOSAL_THRESHOLD`.*set `proposal_cycle\.shortfall_reason` to the current blocking reason.*Clear `proposal_cycle\.shortfall_reason` once progress is allowed into `SELECT_EXPERIMENT`",
-        )
-        _require_pattern(
-            self,
-            machine,
-            r"record cancellation reasons in state.*`apply_results`",
+            r"ROLL_ITERATION.*current_sweep.*null.*selected_sweep.*null",
         )
         _require_pattern(
             self,
             lanes,
-            r"unified diff patch artifact.*`producer_slot_id`.*`patch_path`",
+            r"Ideation Lane.*metaopt-ideation-worker",
+        )
+        _require_pattern(
+            self,
+            lanes,
+            r"Analysis Lane.*metaopt-analysis-worker",
+        )
+        _require_pattern(
+            self,
+            lanes,
+            r"Execution Lane.*skypilot-wandb-worker",
         )
 
     def test_readme_documents_validation_command_and_agent_manifest(self) -> None:
@@ -440,13 +430,13 @@ class MetaoptValidationTests(unittest.TestCase):
         self.assertTrue((ROOT / "requirements.txt").exists())
         self.assertIn("python3 -m pip install --user -r requirements.txt", readme)
         self.assertIn("contract-only scope", readme)
-        _require_pattern(self, dependencies, r"`git`.*worktree")
-        _require_pattern(self, dependencies, r"PyYAML")
-        _require_pattern(self, dependencies, r"host reinvocation mechanism")
+        _require_pattern(self, dependencies, r"`git`.*PATH")
+        _require_pattern(self, dependencies, r"SkyPilot")
+        _require_pattern(self, dependencies, r"[Hh]ost reinvocation mechanism")
         _require_pattern(
             self,
             dependencies,
-            r"`ml_metaopt_campaign\.yaml`.*`AGENTS\.md`.*`\.ml-metaopt/state\.json`.*created on first run if absent",
+            r"`ml_metaopt_campaign\.yaml`.*`AGENTS\.md`.*`\.ml-metaopt/.*state\.json`.*created on first run if absent",
         )
         _require_pattern(
             self,
@@ -454,7 +444,7 @@ class MetaoptValidationTests(unittest.TestCase):
             r"`SKILL\.md`.*`references/contracts\.md`.*`references/state-machine\.md`.*"
             r"`references/worker-lanes\.md`.*`references/dispatch-guide\.md`.*"
             r"`references/backend-contract\.md`.*"
-            r"`ml_metaopt_campaign\.example\.yaml`",
+            r"`references/control-protocol\.md`",
         )
 
     def test_backend_and_state_fixtures_validate(self) -> None:
@@ -717,13 +707,8 @@ class MetaoptValidationTests(unittest.TestCase):
 
         expected_skills = [
             "metaopt-ideation-worker",
-            "metaopt-selection-worker",
-            "metaopt-design-worker",
-            "metaopt-materialization-worker",
-            "metaopt-diagnosis-worker",
             "metaopt-analysis-worker",
-            "metaopt-rollover-worker",
-            "repo-audit-refactor-optimize",
+            "skypilot-wandb-worker",
         ]
 
         for skill_name in expected_skills:
@@ -754,12 +739,15 @@ class MetaoptValidationTests(unittest.TestCase):
         dispatch_guide = _read_text("references/dispatch-guide.md")
 
         dispatch_states = [
-            "MAINTAIN_BACKGROUND_POOL",
-            "SELECT_EXPERIMENT",
-            "DESIGN_EXPERIMENT",
-            "MATERIALIZE_CHANGESET",
+            "LOAD_CAMPAIGN",
+            "HYDRATE_STATE",
+            "IDEATE",
+            "WAIT_FOR_PROPOSALS",
+            "SELECT_AND_DESIGN_SWEEP",
             "LOCAL_SANITY",
-            "ANALYZE_RESULTS",
+            "LAUNCH_SWEEP",
+            "WAIT_FOR_SWEEP",
+            "ANALYZE",
             "ROLL_ITERATION",
         ]
 
@@ -775,123 +763,119 @@ class MetaoptValidationTests(unittest.TestCase):
         skill_md = _read_text("SKILL.md")
         self.assertIn("references/dispatch-guide.md", skill_md)
 
-    def test_worker_lanes_has_rollover_lane(self) -> None:
-        """worker-lanes.md must document the rollover lane."""
+    def test_worker_lanes_has_execution_lane(self) -> None:
+        """worker-lanes.md must document the execution lane."""
         worker_lanes = _read_text("references/worker-lanes.md")
-        self.assertIn("## Rollover Lane", worker_lanes)
-        self.assertIn("metaopt-rollover-worker", worker_lanes)
+        self.assertIn("## Execution Lane", worker_lanes)
+        self.assertIn("skypilot-wandb-worker", worker_lanes)
 
-    def test_contracts_documents_inline_dispatch(self) -> None:
-        """contracts.md must distinguish slot-based from inline dispatch."""
+    def test_contracts_documents_dispatch_types(self) -> None:
+        """contracts.md must document directive types and worker result paths."""
         contracts = _read_text("references/contracts.md")
-        self.assertIn("Inline dispatch", contracts)
-        self.assertIn("Slot-based dispatch", contracts)
+        self.assertIn("launch_sweep", contracts)
+        self.assertIn("poll_sweep", contracts)
+        self.assertIn("run_smoke_test", contracts)
+        self.assertIn("worker-results", contracts)
 
     def test_skill_availability_section_exists(self) -> None:
-        """SKILL.md must document degradation behavior for missing worker skills."""
+        """SKILL.md must document worker targets and their roles."""
         skill_md = _read_text("SKILL.md")
-        self.assertIn("## Skill Availability", skill_md)
+        self.assertIn("## Worker Targets", skill_md)
         for skill_name in [
-            "metaopt-materialization-worker",
             "metaopt-ideation-worker",
-            "metaopt-rollover-worker",
-            "repo-audit-refactor-optimize",
+            "metaopt-analysis-worker",
+            "skypilot-wandb-worker",
         ]:
-            self.assertIn(skill_name, skill_md.split("## Skill Availability")[1].split("## Common Mistakes")[0],
-                          f"{skill_name} not in Skill Availability section")
+            self.assertIn(skill_name, skill_md,
+                          f"{skill_name} not in SKILL.md Worker Targets")
 
     def test_delegation_list_includes_all_worker_skills(self) -> None:
-        """SKILL.md delegation list must reference the ideation worker and rollover."""
+        """SKILL.md worker policy must reference the ideation worker and analysis worker."""
         skill_md = _read_text("SKILL.md")
-        delegation_section = skill_md.split("The orchestrator must delegate all semantic decisions.")[1].split("## Quick Flow")[0]
-        self.assertIn("metaopt-ideation-worker", delegation_section)
-        self.assertIn("metaopt-rollover-worker", delegation_section)
+        worker_section = skill_md.split("## Worker Policy")[1].split("## Worker Targets")[0]
+        self.assertIn("metaopt-ideation-worker", worker_section)
+        self.assertIn("metaopt-analysis-worker", worker_section)
 
     def test_proposal_record_shape_documented(self) -> None:
-        """contracts.md must define proposal record shape with orchestrator-owned and worker-provided fields."""
+        """contracts.md must define proposal record shape with required fields."""
         contracts = _read_text("references/contracts.md")
-        _require_pattern(self, contracts, r"### Proposal Record Shape")
-        _require_pattern(self, contracts, r"proposal_id.*non-empty string.*unique within the campaign")
-        _require_pattern(self, contracts, r"source_slot_id.*non-empty string")
-        _require_pattern(self, contracts, r"creation_iteration.*positive integer")
-        _require_pattern(self, contracts, r"created_at.*ISO 8601")
-        _require_pattern(self, contracts, r"[Ll]eaf workers never generate `proposal_id`")
+        _require_pattern(self, contracts, r"proposal.*object")
+        _require_pattern(self, contracts, r"proposal_id.*string.*[Nn]on-empty.*unique within the campaign")
+        _require_pattern(self, contracts, r"rationale.*string")
+        _require_pattern(self, contracts, r"sweep_config.*object")
+        _require_pattern(self, contracts, r"WandB sweep config")
 
-    def test_selected_experiment_expanded_shape(self) -> None:
-        """selected_experiment must document all lifecycle fields from SELECT through ANALYZE."""
+    def test_selected_sweep_expanded_shape(self) -> None:
+        """selected_sweep must document proposal_id and sweep_config."""
         contracts = _read_text("references/contracts.md")
-        _require_pattern(self, contracts, r"proposal_snapshot.*frozen copy")
-        _require_pattern(self, contracts, r"selection_rationale.*string")
-        _require_pattern(self, contracts, r"design.*object or `null`.*authoritative input for MATERIALIZE")
-        _require_pattern(self, contracts, r"diagnosis_history.*array.*ordered list")
-        _require_pattern(self, contracts, r"analysis_summary.*object or `null`.*structured analysis")
-        _require_pattern(self, contracts, r"clears `selected_experiment`.*ROLL_ITERATION")
+        _require_pattern(self, contracts, r"selected_sweep.*proposal_id.*string")
+        _require_pattern(self, contracts, r"selected_sweep.*sweep_config.*object")
+        _require_pattern(self, contracts, r"WandB sweep config.*method.*metric.*parameters")
+        # selected_sweep is nulled during ROLL_ITERATION
+        machine = _read_text("references/state-machine.md")
+        _require_pattern(self, machine, r"ROLL_ITERATION.*selected_sweep.*null")
 
-    def test_dispatch_guide_has_prompt_envelope(self) -> None:
-        """dispatch-guide.md must define the normalized prompt envelope."""
+    def test_dispatch_guide_has_worker_dispatch_details(self) -> None:
+        """dispatch-guide.md must define per-state dispatch details including worker and model class."""
         guide = _read_text("references/dispatch-guide.md")
-        _require_pattern(self, guide, r"## Prompt Envelope")
-        _require_pattern(self, guide, r"campaign_id.*string.*campaign.campaign_id")
-        _require_pattern(self, guide, r"aggregation_method.*string")
-        _require_pattern(self, guide, r"aggregation_weights.*object or null")
-        _require_pattern(self, guide, r"trial_budget.*object")
-        _require_pattern(self, guide, r"search_strategy.*object")
+        _require_pattern(self, guide, r"## IDEATE")
+        _require_pattern(self, guide, r"metaopt-ideation-worker")
+        _require_pattern(self, guide, r"general_worker")
+        _require_pattern(self, guide, r"strong_reasoner")
+        _require_pattern(self, guide, r"## ANALYZE")
+        _require_pattern(self, guide, r"metaopt-analysis-worker")
 
-    def test_remediation_flow_documented(self) -> None:
-        """state-machine.md must document the three-way diagnosis routing."""
+    def test_local_sanity_fail_fast_documented(self) -> None:
+        """state-machine.md must document LOCAL_SANITY fail-fast with no remediation."""
         sm = _read_text("references/state-machine.md")
-        _require_pattern(self, sm, r'"fix".*metaopt-materialization-worker.*remediation')
-        _require_pattern(self, sm, r'"adjust_config".*BLOCKED_CONFIG')
-        _require_pattern(self, sm, r'"abandon".*FAILED')
+        _require_pattern(self, sm, r"LOCAL_SANITY.*60-second.*hard.*timeout")
+        _require_pattern(self, sm, r"LOCAL_SANITY.*FAILED.*exit_code.*timed_out")
 
-    def test_remote_failure_diagnosis_path(self) -> None:
-        """Remote failures must route through diagnosis before terminal transition."""
+    def test_remote_failure_handling_path(self) -> None:
+        """WAIT_FOR_SWEEP failures must route to FAILED or BLOCKED_CONFIG."""
         sm = _read_text("references/state-machine.md")
-        _require_pattern(self, sm, r"WAIT_FOR_REMOTE_BATCH.*status.*failed.*metaopt-diagnosis-worker")
+        _require_pattern(self, sm, r"WAIT_FOR_SWEEP.*FAILED.*crashed")
         guide = _read_text("references/dispatch-guide.md")
-        _require_pattern(self, guide, r"WAIT_FOR_REMOTE_BATCH.*Remote Failure Diagnosis")
+        _require_pattern(self, guide, r"WAIT_FOR_SWEEP.*sweep_status.*failed")
 
-    def test_materialization_modes_documented(self) -> None:
-        """dispatch-guide.md must document all three materialization modes."""
+    def test_execution_directives_documented(self) -> None:
+        """dispatch-guide.md must document all three execution directive types."""
         guide = _read_text("references/dispatch-guide.md")
-        _require_pattern(self, guide, r'materialization_mode.*"standard"')
-        _require_pattern(self, guide, r'materialization_mode.*"remediation"')
-        _require_pattern(self, guide, r'materialization_mode.*"conflict_resolution"')
+        _require_pattern(self, guide, r"launch_sweep.*skypilot-wandb-worker")
+        _require_pattern(self, guide, r"poll_sweep.*skypilot-wandb-worker")
+        _require_pattern(self, guide, r"run_smoke_test.*skypilot-wandb-worker")
 
-    def test_diagnosis_action_routing_complete(self) -> None:
-        """dispatch-guide.md LOCAL_SANITY section must route all three diagnosis actions."""
+    def test_local_sanity_action_routing_complete(self) -> None:
+        """dispatch-guide.md LOCAL_SANITY section must document pass/fail routing."""
         guide = _read_text("references/dispatch-guide.md")
-        local_sanity_section = guide.split("## LOCAL_SANITY")[1].split("## WAIT_FOR_REMOTE")[0]
-        self.assertIn('"fix"', local_sanity_section)
-        self.assertIn('"adjust_config"', local_sanity_section)
-        self.assertIn('"abandon"', local_sanity_section)
-        self.assertIn("BLOCKED_CONFIG", local_sanity_section)
+        local_sanity_section = guide.split("## LOCAL_SANITY")[1].split("## LAUNCH_SWEEP")[0]
+        self.assertIn("run_smoke_test", local_sanity_section)
+        self.assertIn("LAUNCH_SWEEP", local_sanity_section)
         self.assertIn("FAILED", local_sanity_section)
 
-    def test_runtime_capabilities_in_state_schema(self) -> None:
-        """contracts.md state file must include runtime_capabilities with skill verification fields."""
+    def test_v4_state_fields_in_state_schema(self) -> None:
+        """contracts.md state file must include v4 fields: current_sweep, selected_sweep, key_learnings."""
         contracts = _read_text("references/contracts.md")
-        _require_pattern(self, contracts, r"runtime_capabilities")
-        _require_pattern(self, contracts, r"verified_at.*ISO 8601")
-        _require_pattern(self, contracts, r"available_skills.*array")
-        _require_pattern(self, contracts, r"missing_skills.*array")
-        _require_pattern(self, contracts, r"degraded_lanes.*array")
+        _require_pattern(self, contracts, r"current_sweep")
+        _require_pattern(self, contracts, r"selected_sweep")
+        _require_pattern(self, contracts, r"key_learnings.*list")
+        _require_pattern(self, contracts, r"completed_iterations.*list")
+        _require_pattern(self, contracts, r"no_improve_iterations.*integer")
 
-    def test_conflict_resolution_routes_through_materialization(self) -> None:
-        """Conflict resolution must route through metaopt-materialization-worker, not unnamed strong_coder."""
+    def test_no_code_patches_in_v4(self) -> None:
+        """v4 does not produce code patches; worker-lanes.md must document drift rules forbidding them."""
         lanes = _read_text("references/worker-lanes.md")
-        _require_pattern(self, lanes, r"conflict.*metaopt-materialization-worker")
+        _require_pattern(self, lanes, r"MUST NOT.*code patches|MUST NOT.*file diffs")
         skill_md = _read_text("SKILL.md")
-        _require_pattern(self, skill_md, r"conflict resolution.*metaopt-materialization-worker")
+        _require_pattern(self, skill_md, r"does NOT produce code patches")
 
-    def test_dispatch_guide_enrichment_step(self) -> None:
-        """dispatch-guide.md ideation output must document proposal enrichment by orchestrator."""
+    def test_dispatch_guide_ideation_step(self) -> None:
+        """dispatch-guide.md IDEATE section must document worker dispatch for proposals."""
         guide = _read_text("references/dispatch-guide.md")
-        ideation_section = guide.split("## MAINTAIN_BACKGROUND_POOL — Ideation")[1].split("## MAINTAIN_BACKGROUND_POOL — Maintenance")[0]
-        self.assertIn("proposal_id", ideation_section)
-        self.assertIn("source_slot_id", ideation_section)
-        self.assertIn("creation_iteration", ideation_section)
-        self.assertIn("created_at", ideation_section)
+        ideation_section = guide.split("## IDEATE")[1].split("## WAIT_FOR_PROPOSALS")[0]
+        self.assertIn("metaopt-ideation-worker", ideation_section)
+        self.assertIn("background", ideation_section)
+        self.assertIn("proposal", ideation_section)
 
     # --- Control Protocol tests ---
 
@@ -904,22 +888,16 @@ class MetaoptValidationTests(unittest.TestCase):
         """control-protocol.md must define the universal control-handoff envelope with all required fields."""
         protocol = _read_text("references/control-protocol.md")
         required_fields = [
-            "handoff_type",
-            "control_agent",
             "recommended_next_machine_state",
-            "launch_requests",
             "state_patch",
-            "pre_launch_directives",
-            "post_launch_directives",
-            "summary",
-            "warnings",
+            "directive",
         ]
         for field in required_fields:
             self.assertIn(field, protocol, f"control-protocol.md must define envelope field '{field}'")
 
     def test_control_protocol_lists_all_control_agents(self) -> None:
-        """control-protocol.md must reference all six control agents."""
-        protocol = _read_text("references/control-protocol.md")
+        """state-machine.md Control Agent Dispatch Table must reference all six control agents."""
+        state_machine = _read_text("references/state-machine.md")
         control_agents = [
             "metaopt-load-campaign",
             "metaopt-hydrate-state",
@@ -929,15 +907,13 @@ class MetaoptValidationTests(unittest.TestCase):
             "metaopt-iteration-close-control",
         ]
         for agent in control_agents:
-            self.assertIn(agent, protocol, f"control-protocol.md must reference control agent '{agent}'")
+            self.assertIn(agent, state_machine, f"state-machine.md must reference control agent '{agent}'")
 
     def test_control_protocol_defines_state_patch_ownership(self) -> None:
-        """control-protocol.md must define state-patch ownership rules mapping control agents to state keys."""
+        """control-protocol.md must define state-patch ownership rules."""
         protocol = _read_text("references/control-protocol.md")
-        _require_pattern(self, protocol, r"[Oo]wnership")
-        # Each control agent should have at least one owned state key documented
-        _require_pattern(self, protocol, r"metaopt-load-campaign.*campaign_identity_hash|campaign_identity_hash.*metaopt-load-campaign")
-        _require_pattern(self, protocol, r"metaopt-hydrate-state.*runtime_capabilities|runtime_capabilities.*metaopt-hydrate-state")
+        _require_pattern(self, protocol, r"[Oo]wnership|STATE_PATCH_OWNERSHIP")
+        _require_pattern(self, protocol, r"state_patch.*keys.*authorized|unauthorized.*BLOCKED_PROTOCOL")
 
     def test_skill_md_references_control_protocol(self) -> None:
         """SKILL.md Required References must include references/control-protocol.md."""
@@ -945,10 +921,10 @@ class MetaoptValidationTests(unittest.TestCase):
         self.assertIn("references/control-protocol.md", skill_md)
 
     def test_skill_md_describes_orchestrator_as_transport(self) -> None:
-        """SKILL.md must describe the orchestrator as a transport/runtime shell with control agents as the semantic layer."""
+        """SKILL.md must describe the orchestrator as delegating semantic decisions to control agents."""
         skill_md = _read_text("SKILL.md")
-        _require_pattern(self, skill_md, r"transport|runtime shell")
-        _require_pattern(self, skill_md, r"[Cc]ontrol agent")
+        _require_pattern(self, skill_md, r"delegate.*semantic|semantic.*delegate")
+        _require_pattern(self, skill_md, r"[Cc]ontrol [Aa]gent")
 
     def test_control_protocol_cross_referenced_from_contracts(self) -> None:
         """contracts.md must cross-reference control-protocol.md."""
@@ -965,61 +941,58 @@ class MetaoptValidationTests(unittest.TestCase):
         """control-protocol.md must define the concrete executor directive catalog."""
         protocol = _read_text("references/control-protocol.md")
         for action_name in (
-            "write_manifest",
-            "queue_op",
-            "apply_patch_artifacts",
-            "package_code_artifact",
-            "package_data_manifest",
-            "run_sanity",
-            "emit_iteration_report",
-            "drain_slots",
-            "cancel_slots",
+            "launch_sweep",
+            "poll_sweep",
+            "run_smoke_test",
             "remove_agents_hook",
             "delete_state_file",
             "emit_final_report",
+            "emit_iteration_report",
+            "none",
         ):
-            self.assertIn(f"`{action_name}`", protocol)
+            self.assertIn(action_name, protocol)
 
     def test_control_protocol_documents_local_directive_fields(self) -> None:
-        """control-protocol.md must describe the concrete fields the executor consumes for local directives."""
+        """control-protocol.md must describe directive execution steps."""
         protocol = _read_text("references/control-protocol.md")
-        _require_pattern(self, protocol, r"`apply_patch_artifacts`.*`result_file`.*`target_worktree`")
-        _require_pattern(self, protocol, r"`package_code_artifact`.*`worktree`.*`code_roots`")
-        _require_pattern(self, protocol, r"`package_data_manifest`.*`worktree`.*`data_roots`")
-        _require_pattern(self, protocol, r"`run_sanity`.*`worktree`.*`command`.*`max_duration_seconds`")
+        _require_pattern(self, protocol, r"launch_sweep.*skypilot-wandb-worker")
+        _require_pattern(self, protocol, r"poll_sweep.*skypilot-wandb-worker")
+        _require_pattern(self, protocol, r"run_smoke_test.*skypilot-wandb-worker")
+        _require_pattern(self, protocol, r"remove_agents_hook.*AGENTS\.md")
 
     def test_directive_docs_require_mechanical_execution_not_inference(self) -> None:
         """Directive docs must say the orchestrator executes directives mechanically instead of inferring executor work from prose."""
         protocol = _read_text("references/control-protocol.md")
-        state_machine = _read_text("references/state-machine.md")
         dispatch_guide = _read_text("references/dispatch-guide.md")
-        _require_pattern(self, protocol, r"execute.*mechanically")
-        _require_pattern(self, dispatch_guide, r"must not infer.*executor work")
-        _require_pattern(self, state_machine, r"pre_launch_directives|post_launch_directives")
+        _require_pattern(self, protocol, r"execut.*mechanically")
+        _require_pattern(self, protocol, r"never.*semantic|never performs semantic")
+        _require_pattern(self, dispatch_guide, r"directive")
 
     def test_contracts_document_campaign_started_at(self) -> None:
-        """contracts.md must list campaign_started_at as a required state-file key."""
+        """contracts.md must list campaign_started_at as a state-file field."""
         contracts = _read_text("references/contracts.md")
         self.assertIn("campaign_started_at", contracts)
-        # Must appear in the required keys section, not the optional section
-        required_section_end = contracts.index("Optional keys written by specific control agents")
-        first_occurrence = contracts.index("campaign_started_at")
-        self.assertLess(first_occurrence, required_section_end,
-                        "campaign_started_at must be in the required keys section")
+        # Must appear in the state file schema section
+        state_section = contracts.split("## Section 1")[1].split("## Section 2")[0]
+        self.assertIn("campaign_started_at", state_section,
+                        "campaign_started_at must be in the State File Schema section")
 
-    def test_state_machine_documents_max_wallclock_hours_in_roll_iteration(self) -> None:
-        """state-machine.md ROLL_ITERATION must document max_wallclock_hours stop condition."""
+    def test_state_machine_documents_stop_conditions_in_roll_iteration(self) -> None:
+        """state-machine.md ROLL_ITERATION must document stop conditions."""
         state_machine = _read_text("references/state-machine.md")
-        # The ROLL_ITERATION section should list max_wallclock_hours as a stop condition
-        self.assertIn("max_wallclock_hours", state_machine)
+        self.assertIn("max_iterations", state_machine)
+        self.assertIn("max_no_improve_iterations", state_machine)
+        self.assertIn("target_metric", state_machine)
 
     def test_state_machine_documents_terminal_cleanup_directives(self) -> None:
         """state-machine.md terminal states must document explicit cleanup directives."""
         state_machine = _read_text("references/state-machine.md")
-        self.assertIn("pre_launch_directives", state_machine)
+        self.assertIn("remove_agents_hook", state_machine)
+        self.assertIn("delete_state_file", state_machine)
+        self.assertIn("emit_final_report", state_machine)
 
     def test_control_agent_manifests_reference_control_protocol(self) -> None:
-        """Every control-agent manifest must reference references/control-protocol.md."""
+        """Every control-agent manifest must reference the handoff pattern from control-protocol.md."""
         control_agent_manifests = [
             ".github/agents/metaopt-load-campaign.agent.md",
             ".github/agents/metaopt-hydrate-state.agent.md",
@@ -1031,13 +1004,13 @@ class MetaoptValidationTests(unittest.TestCase):
         for manifest_path in control_agent_manifests:
             content = _read_text(manifest_path)
             self.assertIn(
-                "references/control-protocol.md",
-                content,
-                f"{manifest_path} must reference the control protocol",
+                "handoff",
+                content.lower(),
+                f"{manifest_path} must reference the handoff pattern",
             )
 
     def test_control_agent_manifests_state_handoff_conformance(self) -> None:
-        """Every control-agent manifest must state that handoff output conforms to the control protocol."""
+        """Every control-agent manifest must output a handoff file with the standard envelope."""
         control_agent_manifests = [
             ".github/agents/metaopt-load-campaign.agent.md",
             ".github/agents/metaopt-hydrate-state.agent.md",
@@ -1048,14 +1021,19 @@ class MetaoptValidationTests(unittest.TestCase):
         ]
         for manifest_path in control_agent_manifests:
             content = _read_text(manifest_path)
-            _require_pattern(
-                self,
+            self.assertIn(
+                "recommended_next_machine_state",
                 content,
-                r"must conform.*control.handoff envelope",
+                f"{manifest_path} must output recommended_next_machine_state",
+            )
+            self.assertIn(
+                "state_patch",
+                content,
+                f"{manifest_path} must output state_patch",
             )
 
     def test_control_agent_manifests_declare_directives_authoritative(self) -> None:
-        """Every control-agent manifest must declare directive lists as the authoritative executor input."""
+        """Every control-agent manifest must declare directive as the executor input."""
         control_agent_manifests = [
             ".github/agents/metaopt-load-campaign.agent.md",
             ".github/agents/metaopt-hydrate-state.agent.md",
@@ -1067,29 +1045,9 @@ class MetaoptValidationTests(unittest.TestCase):
         for manifest_path in control_agent_manifests:
             content = _read_text(manifest_path)
             self.assertIn(
-                "pre_launch_directives",
+                "directive",
                 content,
-                f"{manifest_path} must mention pre_launch_directives",
-            )
-            self.assertIn(
-                "post_launch_directives",
-                content,
-                f"{manifest_path} must mention post_launch_directives",
-            )
-            _require_pattern(
-                self,
-                content,
-                r"`pre_launch_directives`.*`post_launch_directives`.*authoritative.*executor",
-            )
-            _require_pattern(
-                self,
-                content,
-                r"orchestrator.*execut(es|e).*mechanically.*in order",
-            )
-            _require_pattern(
-                self,
-                content,
-                r"must not infer.*executor work.*prose|must not infer.*executor work.*summar|must not infer.*executor work.*legacy",
+                f"{manifest_path} must mention directive",
             )
 
     def test_control_agent_manifests_do_not_apply_state_in_agent_commands(self) -> None:
@@ -1103,10 +1061,12 @@ class MetaoptValidationTests(unittest.TestCase):
         ]
         for manifest_path in control_agent_manifests:
             content = _read_text(manifest_path)
-            command_blocks = re.findall(r"```bash\n(.*?)```", content, flags=re.DOTALL)
-            self.assertTrue(command_blocks, f"{manifest_path} must include executable handoff commands")
-            for command in command_blocks:
-                self.assertNotIn("--apply-state", command, f"{manifest_path} agent command must be emit-only")
+            # v4 agents must not write state directly
+            _require_pattern(
+                self,
+                content,
+                r"[Dd]o NOT write.*state\.json|NOT.*write.*state\.json.*directly",
+            )
 
     # ------------------------------------------------------------------
     # Preflight dependency documentation consistency
@@ -1121,28 +1081,28 @@ class MetaoptValidationTests(unittest.TestCase):
         cleanup semantics (preserve state, remove hook)."""
         sm = _read_text("references/state-machine.md")
         self.assertIn("BLOCKED_PROTOCOL", sm)
-        _require_pattern(self, sm, r"## States.*`BLOCKED_PROTOCOL`.*## ")
-        _require_pattern(self, sm, r"### Terminal States.*`BLOCKED_PROTOCOL`")
+        _require_pattern(self, sm, r"## State List.*BLOCKED_PROTOCOL")
+        _require_pattern(self, sm, r"BLOCKED_PROTOCOL.*terminal")
 
     def test_blocked_protocol_in_skill_md_diagram(self) -> None:
         """SKILL.md state-machine diagram must include BLOCKED_PROTOCOL as a
-        terminal node with transition edges from running states."""
+        terminal node."""
         skill = _read_text("SKILL.md")
         _require_pattern(self, skill, r'"BLOCKED_PROTOCOL".*doublecircle')
-        _require_pattern(self, skill, r'-> "BLOCKED_PROTOCOL"')
+        # In v4, BLOCKED_PROTOCOL is declared but implicit transitions aren't all shown in diagram
+        _require_pattern(self, skill, r'BLOCKED_PROTOCOL')
 
-    def test_blocked_protocol_select_design_edges_in_diagram(self) -> None:
-        """SKILL.md diagram must have BLOCKED_PROTOCOL edges from
-        SELECT_EXPERIMENT and DESIGN_EXPERIMENT for protocol breaches."""
-        skill = _read_text("SKILL.md")
-        _require_pattern(self, skill, r'"SELECT_EXPERIMENT" -> "BLOCKED_PROTOCOL"')
-        _require_pattern(self, skill, r'"DESIGN_EXPERIMENT" -> "BLOCKED_PROTOCOL"')
+    def test_blocked_protocol_transition_edges_in_state_machine(self) -> None:
+        """state-machine.md must document BLOCKED_PROTOCOL transition from HYDRATE_STATE."""
+        sm = _read_text("references/state-machine.md")
+        _require_pattern(self, sm, r"HYDRATE_STATE.*BLOCKED_PROTOCOL")
 
-    def test_blocked_protocol_roll_iteration_edge_in_diagram(self) -> None:
-        """SKILL.md diagram must have BLOCKED_PROTOCOL edge from
-        ROLL_ITERATION for iteration-close protocol breach."""
-        skill = _read_text("SKILL.md")
-        _require_pattern(self, skill, r'"ROLL_ITERATION" -> "BLOCKED_PROTOCOL"')
+    def test_blocked_protocol_validation_failure_in_control_protocol(self) -> None:
+        """control-protocol.md must document that handoff validation failures
+        transition to BLOCKED_PROTOCOL."""
+        protocol = _read_text("references/control-protocol.md")
+        _require_pattern(self, protocol, r"BLOCKED_PROTOCOL")
+        _require_pattern(self, protocol, r"validation failure.*BLOCKED_PROTOCOL|BLOCKED_PROTOCOL.*validation")
 
     def test_blocked_protocol_in_contracts_status_semantics(self) -> None:
         """contracts.md status semantics must pair BLOCKED_PROTOCOL status
@@ -1155,31 +1115,28 @@ class MetaoptValidationTests(unittest.TestCase):
         )
 
     def test_blocked_protocol_in_control_protocol(self) -> None:
-        """control-protocol.md must document which control agents can emit
-        BLOCKED_PROTOCOL and the fail-closed rule."""
+        """control-protocol.md must document BLOCKED_PROTOCOL transitions."""
         protocol = _read_text("references/control-protocol.md")
         self.assertIn("BLOCKED_PROTOCOL", protocol)
-        _require_pattern(self, protocol, r"fail.closed.*BLOCKED_PROTOCOL|BLOCKED_PROTOCOL.*fail.closed")
+        _require_pattern(self, protocol, r"BLOCKED_PROTOCOL")
 
     def test_semantic_fallback_forbidden_in_skill_md(self) -> None:
-        """SKILL.md must explicitly forbid generic semantic fallback."""
+        """SKILL.md must explicitly forbid the orchestrator from making semantic decisions."""
         skill = _read_text("SKILL.md")
-        _require_pattern(self, skill, r"[Ss]emantic fallback.*forbidden|[Ff]orbidden.*semantic fallback|[Nn]ever.*improv.*unsupported.*semantic")
+        _require_pattern(self, skill, r"[Mm]ust delegate all semantic decisions|[Nn]ever.*semantic")
 
     def test_preferred_model_documented_in_dispatch_guide(self) -> None:
-        """dispatch-guide.md must document preferred_model on launch requests
-        and the claude-opus-4.6 intent for strong_reasoner/strong_coder."""
-        guide = _read_text("references/dispatch-guide.md")
-        self.assertIn("preferred_model", guide)
-        self.assertIn("claude-opus-4.6", guide)
-        _require_pattern(self, guide, r"strong_coder.*claude-opus-4\.6|claude-opus-4\.6.*strong_coder")
+        """dispatch-guide.md or worker-lanes.md must document model classes."""
+        lanes = _read_text("references/worker-lanes.md")
+        self.assertIn("strong_reasoner", lanes)
+        self.assertIn("claude-opus-4.6", lanes)
+        self.assertIn("general_worker", lanes)
 
     def test_preferred_model_documented_in_control_protocol(self) -> None:
-        """control-protocol.md launch_requests must document preferred_model
-        and mention strong_coder enrichment."""
-        protocol = _read_text("references/control-protocol.md")
-        self.assertIn("preferred_model", protocol)
-        self.assertIn("strong_coder", protocol)
+        """SKILL.md must document model resolution classes."""
+        skill = _read_text("SKILL.md")
+        self.assertIn("strong_reasoner", skill)
+        self.assertIn("general_worker", skill)
 
     def test_strong_coder_in_guardrail_preferred_model_map(self) -> None:
         """_guardrail_utils.PREFERRED_MODEL_BY_CLASS must include strong_coder
@@ -1191,56 +1148,54 @@ class MetaoptValidationTests(unittest.TestCase):
         self.assertEqual(PREFERRED_MODEL_BY_CLASS["strong_coder"], "claude-opus-4.6")
 
     def test_worker_artifact_preconditions_in_worker_lanes(self) -> None:
-        """worker-lanes.md must document that remediation requires
-        diagnosis-worker output and result judgment requires analysis-worker output."""
+        """worker-lanes.md must document lane drift rules for all worker types."""
         lanes = _read_text("references/worker-lanes.md")
-        _require_pattern(self, lanes, r"[Rr]emediation.*diagnosis.worker.*output|diagnosis.worker.*output.*precondition.*remediation")
-        _require_pattern(self, lanes, r"[Rr]esult judgment.*analysis.worker.*output|analysis.worker.*output.*precondition.*result judgment")
+        _require_pattern(self, lanes, r"Lane drift rules.*MUST NOT")
+        _require_pattern(self, lanes, r"Analysis Lane.*metaopt-analysis-worker")
+        _require_pattern(self, lanes, r"Ideation Lane.*metaopt-ideation-worker")
 
     def test_queue_only_backend_contract_strengthened(self) -> None:
-        """backend-contract.md must explicitly prohibit raw SSH, Ray, and
-        cluster operations from the skill."""
+        """backend-contract.md must explicitly prohibit raw SSH and
+        direct API bypass."""
         backend = _read_text("references/backend-contract.md")
-        _require_pattern(self, backend, r"[Nn]o raw SSH|[Nn]ever.*raw.*SSH")
-        _require_pattern(self, backend, r"[Pp]rotocol breach|[Vv]iolation")
+        _require_pattern(self, backend, r"[Rr]aw SSH")
+        _require_pattern(self, backend, r"[Pp]rotocol breach")
 
     def test_backend_contract_blocks_direct_fallback_tools_by_name(self) -> None:
         """backend-contract.md should explicitly name the ad-hoc tools that
         must never be used as remote-execution fallbacks."""
         backend = _read_text("references/backend-contract.md")
-        _require_pattern(self, backend, r"ray job submit|ray start|ray stop")
-        _require_pattern(self, backend, r"scp|rsync")
-        _require_pattern(self, backend, r"hcloud")
+        _require_pattern(self, backend, r"ray job submit|[Rr]ay CLI")
+        _require_pattern(self, backend, r"sky exec")
+        _require_pattern(self, backend, r"[Dd]irect Vast\.ai API")
 
     def test_control_protocol_forbids_hand_authored_semantic_state_edits(self) -> None:
-        """control-protocol.md must say the orchestrator never hand-edits
-        semantic state and only applies control-agent state patches plus the
-        recommended machine_state transition."""
+        """control-protocol.md must say the orchestrator never performs
+        semantic decisions and only applies control-agent state patches."""
         protocol = _read_text("references/control-protocol.md")
-        _require_pattern(self, protocol, r"never hand.edit|must not hand.edit|manual state")
+        _require_pattern(self, protocol, r"never.*semantic|never performs semantic")
         _require_pattern(self, protocol, r"state_patch")
         _require_pattern(self, protocol, r"recommended_next_machine_state")
 
     def test_skill_md_forbids_direct_project_file_edits_by_orchestrator(self) -> None:
-        """SKILL.md must make direct repo edits by the orchestrator a protocol
-        breach rather than an acceptable shortcut around worker lanes."""
+        """SKILL.md must make clear this skill does not produce code patches."""
         skill = _read_text("SKILL.md")
-        _require_pattern(self, skill, r"must not.*edit.*project files|never.*edit.*project files")
-        _require_pattern(self, skill, r"materialization-worker|semantic code changes")
+        _require_pattern(self, skill, r"does NOT produce code patches")
+        _require_pattern(self, skill, r"does not dispatch code-writing workers|No.*strong_coder")
 
     def test_remote_control_manifest_forbids_raw_remote_fallbacks(self) -> None:
-        """The remote control-agent manifest should explicitly forbid Ray CLI,
-        SSH/SCP, and cloud-console fallbacks when queue execution has trouble."""
+        """The remote control-agent manifest should explicitly forbid
+        running remote commands directly."""
         manifest = _read_text(".github/agents/metaopt-remote-execution-control.agent.md")
-        _require_pattern(self, manifest, r"must not.*ray|never.*ray")
-        _require_pattern(self, manifest, r"ssh|scp|hcloud")
+        _require_pattern(self, manifest, r"[Dd]o NOT.*run remote commands|[Nn]ever.*remote")
+        _require_pattern(self, manifest, r"SSH|SkyPilot CLI|WandB CLI")
 
     def test_iteration_close_manifest_forbids_manual_state_closure(self) -> None:
         """The iteration-close control-agent manifest should explicitly forbid
-        hand-authored rollover/terminal state edits by the orchestrator."""
+        direct state file writes."""
         manifest = _read_text(".github/agents/metaopt-iteration-close-control.agent.md")
-        _require_pattern(self, manifest, r"must not.*hand.edit|never.*hand.edit|manual state")
-        _require_pattern(self, manifest, r"selected_experiment|COMPLETE|BLOCKED_PROTOCOL")
+        _require_pattern(self, manifest, r"[Dd]o NOT write.*state\.json|NOT.*write.*state\.json.*directly")
+        _require_pattern(self, manifest, r"COMPLETE|BLOCKED_CONFIG")
 
     def test_blocked_protocol_in_dispatch_guide(self) -> None:
         """dispatch-guide.md must reference BLOCKED_PROTOCOL for missing

@@ -64,8 +64,8 @@ If any required key is missing → BLOCKED_CONFIG with a message listing ALL mis
 
 Scan ALL string values in the campaign YAML for placeholder patterns:
 - Angle-bracket placeholders: `<...>`
-- `YOUR_*` patterns: any string starting with `YOUR_`
-- `replace-me` or `REPLACE_ME` (case-insensitive)
+- `YOUR_*` patterns: any string containing `YOUR_` as a substring
+- `replace-me` (exact lowercase, case-sensitive)
 
 If any sentinel is found → BLOCKED_CONFIG listing every field that contains a placeholder.
 
@@ -101,9 +101,9 @@ Serialize with compact separators (`","`, `":"`), `ensure_ascii=true`. Compute S
 
 Evaluate `.ml-metaopt/preflight-readiness.json` (see `_evaluate_preflight()` in `scripts/load_campaign_handoff.py`). The evaluation yields one of 5 statuses:
 
-- **`missing`** — artifact file does not exist → BLOCKED_CONFIG: `"Run metaopt-preflight to verify environment readiness"`
-- **`unreadable`** — file exists but cannot be parsed as JSON or is not a dict → BLOCKED_CONFIG: `"Preflight artifact is corrupt — re-run metaopt-preflight"`
-- **`stale`** — file is readable but `schema_version` is unrecognized, `campaign_identity_hash` does not match the hash from Step 8, or `status` is neither `"READY"` nor `"FAILED"` → BLOCKED_CONFIG: `"Campaign config changed or artifact is invalid — re-run metaopt-preflight"`
+- **`missing`** — artifact file does not exist → BLOCKED_CONFIG: `"run metaopt-preflight to verify environment readiness"`
+- **`unreadable`** — file exists but cannot be parsed as JSON or is not a dict → BLOCKED_CONFIG: `"re-run metaopt-preflight (campaign configuration has changed or artifact is invalid)"` (same `else:` path as `stale`)
+- **`stale`** — file is readable but `schema_version` is unrecognized, `campaign_identity_hash` does not match the hash from Step 8, or `status` is neither `"READY"` nor `"FAILED"` → BLOCKED_CONFIG: `"re-run metaopt-preflight (campaign configuration has changed or artifact is invalid)"`
 - **`fresh_failed`** — hash matches and `status == "FAILED"` → BLOCKED_CONFIG with the artifact's `next_action` and `failures` surfaced in the handoff
 - **`fresh_ready`** — hash matches and `status == "READY"` → proceed to emit HYDRATE_STATE recommendation
 
@@ -162,13 +162,13 @@ Note: `state_patch` is always `null` for this agent (not `{}`). The `campaign_va
 This agent is the first line of defense for configuration problems. Every failure path emits `BLOCKED_CONFIG` with actionable `recovery_action` text.
 
 ### YAML missing or invalid
-If `ml_metaopt_campaign.yaml` does not exist, is empty, or contains unparseable YAML → emit `BLOCKED_CONFIG` with `recovery_action: "Create or fix ml_metaopt_campaign.yaml — see ml_metaopt_campaign.example.yaml for the required schema"`.
+If `ml_metaopt_campaign.yaml` does not exist, is empty, or contains unparseable YAML → emit `BLOCKED_CONFIG` with `recovery_action: "repair ml_metaopt_campaign.yaml"`.
 
 ### Preflight artifact missing (skill not installed)
-If `.ml-metaopt/preflight-readiness.json` does not exist, the most likely cause is that the `metaopt-preflight` skill has never been run (or is not installed). Emit `BLOCKED_CONFIG` with `recovery_action: "Run metaopt-preflight to verify environment readiness. If the skill is not installed, install it first."`.
+If `.ml-metaopt/preflight-readiness.json` does not exist, the most likely cause is that the `metaopt-preflight` skill has never been run (or is not installed). Emit `BLOCKED_CONFIG` with `recovery_action: "run metaopt-preflight to verify environment readiness"`.
 
 ### Preflight stale or failed
-- **`stale`** (hash mismatch, unrecognized schema_version, or invalid status) → `BLOCKED_CONFIG`: `"Campaign config changed or preflight artifact is invalid — re-run metaopt-preflight"`.
+- **`stale`** (hash mismatch, unrecognized schema_version, or invalid status) → `BLOCKED_CONFIG`: `"re-run metaopt-preflight (campaign configuration has changed or artifact is invalid)"`. Note: `unreadable` artifacts also use this same recovery action (both follow the `else:` path in `build_handoff`).
 - **`fresh_failed`** (hash matches, `status == "FAILED"`) → `BLOCKED_CONFIG` surfacing the artifact's `failures` array and `next_action` in the handoff so the user sees exactly what preflight checks failed.
 
 ### Multiple validation failures

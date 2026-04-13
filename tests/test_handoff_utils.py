@@ -16,23 +16,17 @@ class HandoffUtilsTests(unittest.TestCase):
     def test_compute_state_patch_ignores_machine_state_and_status_but_captures_owned_changes(self) -> None:
         before = {
             "status": "RUNNING",
-            "machine_state": "SELECT_EXPERIMENT",
-            "next_action": "select experiment",
-            "proposal_cycle": {"current_pool_frozen": False, "shortfall_reason": ""},
-            "selected_experiment": None,
+            "machine_state": "SELECT_SWEEP",
+            "next_action": "select sweep",
+            "selected_sweep": None,
         }
         after = {
             "status": "RUNNING",
-            "machine_state": "DESIGN_EXPERIMENT",
-            "next_action": "run design worker",
-            "proposal_cycle": {"current_pool_frozen": True, "shortfall_reason": ""},
-            "selected_experiment": {
-                "proposal_id": "market-forecast-v3-p1",
+            "machine_state": "WAIT_FOR_SWEEP",
+            "next_action": "launch sweep",
+            "selected_sweep": {
+                "sweep_id": "market-forecast-v3-s1",
                 "selection_rationale": "best fit",
-                "sanity_attempts": 0,
-                "design": None,
-                "diagnosis_history": [],
-                "analysis_summary": None,
             },
         }
 
@@ -41,15 +35,10 @@ class HandoffUtilsTests(unittest.TestCase):
         self.assertEqual(
             patch,
             {
-                "next_action": "run design worker",
-                "proposal_cycle": {"current_pool_frozen": True},
-                "selected_experiment": {
-                    "proposal_id": "market-forecast-v3-p1",
+                "next_action": "launch sweep",
+                "selected_sweep": {
+                    "sweep_id": "market-forecast-v3-s1",
                     "selection_rationale": "best fit",
-                    "sanity_attempts": 0,
-                    "design": None,
-                    "diagnosis_history": [],
-                    "analysis_summary": None,
                 },
             },
         )
@@ -57,10 +46,10 @@ class HandoffUtilsTests(unittest.TestCase):
     def test_compute_state_patch_rejects_unauthorized_paths(self) -> None:
         before = {
             "status": "RUNNING",
-            "machine_state": "WAIT_FOR_REMOTE_BATCH",
-            "next_action": "poll remote batch status",
-            "proposal_cycle": {"current_pool_frozen": True, "shortfall_reason": ""},
-            "remote_batches": [],
+            "machine_state": "WAIT_FOR_SWEEP",
+            "next_action": "poll sweep status",
+            "proposal_cycle": {"shortfall_reason": ""},
+            "current_sweep": None,
         }
         after = deepcopy(before)
         after["proposal_cycle"]["shortfall_reason"] = "not_enough_proposals"
@@ -68,44 +57,36 @@ class HandoffUtilsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             compute_state_patch(before, after, "metaopt-remote-execution-control")
 
-    def test_background_control_cannot_patch_active_slots(self) -> None:
+    def test_background_control_cannot_patch_selected_sweep(self) -> None:
         before = {
             "status": "RUNNING",
             "machine_state": "MAINTAIN_BACKGROUND_POOL",
             "next_action": "execute planned background work",
-            "active_slots": [],
-            "proposal_cycle": {"current_pool_frozen": False, "shortfall_reason": ""},
+            "selected_sweep": None,
+            "proposal_cycle": {"shortfall_reason": ""},
         }
         after = deepcopy(before)
-        after["active_slots"] = [
-            {
-                "slot_id": "bg-1",
-                "slot_class": "background",
-                "mode": "ideation",
-                "model_class": "general_worker",
-                "task_file": ".ml-metaopt/tasks/bg-1.md",
-                "result_file": ".ml-metaopt/worker-results/bg-1.json",
-                "status": "running",
-                "attempt": 1,
-            }
-        ]
+        after["selected_sweep"] = {
+            "sweep_id": "market-forecast-v3-s1",
+            "selection_rationale": "unauthorized write",
+        }
 
-        with self.assertRaisesRegex(ValueError, "active_slots"):
+        with self.assertRaises(ValueError):
             compute_state_patch(before, after, "metaopt-background-control")
 
     def test_apply_state_patch_sets_machine_state_and_derives_status(self) -> None:
         before = {
             "status": "RUNNING",
-            "machine_state": "WAIT_FOR_REMOTE_BATCH",
-            "next_action": "poll remote batch status",
-            "remote_batches": [{"batch_id": "batch-1", "status": "running"}],
+            "machine_state": "WAIT_FOR_SWEEP",
+            "next_action": "poll sweep status",
+            "current_sweep": {"sweep_id": "s1", "status": "running"},
         }
 
         updated = apply_state_patch(
             before,
             {
                 "next_action": "protocol violation: manual intervention required",
-                "remote_batches": [{"batch_id": "batch-1", "status": "failed"}],
+                "current_sweep": {"sweep_id": "s1", "status": "failed"},
             },
             "BLOCKED_PROTOCOL",
         )
@@ -113,20 +94,20 @@ class HandoffUtilsTests(unittest.TestCase):
         self.assertEqual(updated["machine_state"], "BLOCKED_PROTOCOL")
         self.assertEqual(updated["status"], "BLOCKED_PROTOCOL")
         self.assertEqual(updated["next_action"], "protocol violation: manual intervention required")
-        self.assertEqual(updated["remote_batches"][0]["status"], "failed")
+        self.assertEqual(updated["current_sweep"]["status"], "failed")
 
     def test_compute_state_patch_preserves_explicit_none_updates(self) -> None:
         before = {
             "status": "RUNNING",
             "machine_state": "ROLL_ITERATION",
-            "selected_experiment": {"proposal_id": "market-forecast-v3-p1"},
+            "current_proposals": [{"proposal_id": "market-forecast-v3-p1"}],
             "next_action": "roll iteration",
         }
         after = {
             "status": "RUNNING",
-            "machine_state": "QUIESCE_SLOTS",
-            "selected_experiment": None,
-            "next_action": "drain or cancel active slots",
+            "machine_state": "MAINTAIN_BACKGROUND_POOL",
+            "current_proposals": None,
+            "next_action": "maintain background pool",
         }
 
         patch = compute_state_patch(before, after, "metaopt-iteration-close-control")
@@ -134,8 +115,8 @@ class HandoffUtilsTests(unittest.TestCase):
         self.assertEqual(
             patch,
             {
-                "selected_experiment": None,
-                "next_action": "drain or cancel active slots",
+                "current_proposals": None,
+                "next_action": "maintain background pool",
             },
         )
 
@@ -146,13 +127,13 @@ class HandoffUtilsTests(unittest.TestCase):
     def test_persist_state_handoff_is_emit_only_by_default(self) -> None:
         before = {
             "status": "RUNNING",
-            "machine_state": "SELECT_EXPERIMENT",
-            "next_action": "select experiment",
-            "selected_experiment": None,
+            "machine_state": "SELECT_SWEEP",
+            "next_action": "select sweep",
+            "selected_sweep": None,
         }
         after = deepcopy(before)
-        after["selected_experiment"] = {"proposal_id": "market-forecast-v3-p1"}
-        payload = {"recommended_next_machine_state": "DESIGN_EXPERIMENT"}
+        after["selected_sweep"] = {"sweep_id": "market-forecast-v3-s1"}
+        payload = {"recommended_next_machine_state": "WAIT_FOR_SWEEP"}
 
         with tempfile.TemporaryDirectory() as tempdir_str:
             state_path = Path(tempdir_str) / "state.json"
@@ -172,7 +153,7 @@ class HandoffUtilsTests(unittest.TestCase):
 
             self.assertFalse(payload["state_applied"])
             self.assertEqual(json.loads(state_path.read_text(encoding="utf-8")), before)
-            self.assertEqual(persisted["machine_state"], "DESIGN_EXPERIMENT")
+            self.assertEqual(persisted["machine_state"], "WAIT_FOR_SWEEP")
 
 
 if __name__ == "__main__":

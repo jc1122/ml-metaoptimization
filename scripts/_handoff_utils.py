@@ -8,21 +8,22 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from _guardrail_utils import normalize_launch_requests, validate_executor_policy
+from _guardrail_utils import validate_executor_policy
 
 
 TERMINAL_MACHINE_STATES = frozenset({"BLOCKED_CONFIG", "BLOCKED_PROTOCOL", "COMPLETE", "FAILED"})
 _NO_DIFF = object()
-LEGACY_HANDOFF_FIELDS = frozenset(
-    {
-        "producer",
-        "phase",
-        "outcome",
-        "recommended_next_action",
-        "recommended_executor_phase",
-        "executor_directives",  # split into pre_launch_directives + post_launch_directives
-    }
-)
+LEGACY_HANDOFF_FIELDS = frozenset({
+    "producer",
+    "phase",
+    "outcome",
+    "recommended_next_action",
+    "recommended_executor_phase",
+    "executor_directives",
+    "pre_launch_directives",
+    "post_launch_directives",
+    "launch_requests",
+})
 
 # Allowed patch ownership prefixes per control agent.
 STATE_PATCH_OWNERSHIP: dict[str, tuple[tuple[str, ...], ...]] = {
@@ -31,23 +32,18 @@ STATE_PATCH_OWNERSHIP: dict[str, tuple[tuple[str, ...], ...]] = {
         ("version",),
         ("campaign_id",),
         ("campaign_identity_hash",),
-        ("runtime_config_hash",),
         ("current_iteration",),
         ("next_action",),
         ("objective_snapshot",),
         ("proposal_cycle",),
-        ("active_slots",),
         ("current_proposals",),
         ("next_proposals",),
-        ("selected_experiment",),
-        ("local_changeset",),
-        ("remote_batches",),
+        ("selected_sweep",),
+        ("current_sweep",),
         ("baseline",),
-        ("completed_experiments",),
+        ("completed_iterations",),
         ("key_learnings",),
         ("no_improve_iterations",),
-        ("maintenance_summary",),
-        ("runtime_capabilities",),
         ("campaign_started_at",),
     ),
     "metaopt-background-control": (
@@ -55,40 +51,26 @@ STATE_PATCH_OWNERSHIP: dict[str, tuple[tuple[str, ...], ...]] = {
         ("current_proposals",),
         ("next_proposals",),
         ("next_action",),
-        ("maintenance_summary",),
     ),
     "metaopt-select-design": (
-        ("selected_experiment",),
-        ("proposal_cycle", "current_pool_frozen"),
-        ("next_action",),
-    ),
-    "metaopt-local-execution-control": (
-        ("local_changeset",),
-        ("selected_experiment", "sanity_attempts"),
-        ("selected_experiment", "diagnosis_history"),
+        ("selected_sweep",),
         ("next_action",),
     ),
     "metaopt-remote-execution-control": (
-        ("pending_remote_batch",),
-        ("remote_batches",),
-        ("selected_experiment", "analysis_summary"),
-        ("selected_experiment", "diagnosis_history"),
+        ("current_sweep",),
         ("baseline",),
-        ("no_improve_iterations",),
-        ("completed_experiments",),
+        ("completed_iterations",),
         ("key_learnings",),
+        ("no_improve_iterations",),
         ("next_action",),
     ),
     "metaopt-iteration-close-control": (
         ("current_iteration",),
-        ("current_proposals",),
+        ("no_improve_iterations",),
         ("next_proposals",),
-        ("selected_experiment",),
-        ("local_changeset",),
-        ("completed_experiments",),
-        ("key_learnings",),
-        ("active_slots",),
-        ("last_iteration_report",),
+        ("current_proposals",),
+        ("completed_iterations",),
+        ("proposal_cycle",),
         ("next_action",),
     ),
 }
@@ -283,7 +265,7 @@ def emit_handoff(
     """Write handoff JSON, injecting universal control-protocol envelope keys.
 
     Keys already present in *payload* are preserved; only missing envelope
-    keys receive their defaults (empty list / empty dict).
+    keys receive their defaults (empty dict / empty list).
     """
     legacy_keys = sorted(LEGACY_HANDOFF_FIELDS & payload.keys())
     if legacy_keys:
@@ -293,20 +275,13 @@ def emit_handoff(
 
     payload.setdefault("handoff_type", handoff_type)
     payload.setdefault("control_agent", control_agent)
-    payload.setdefault("launch_requests", [])
-    payload["launch_requests"] = normalize_launch_requests(payload["launch_requests"])
     if "state_patch" not in payload:
         raise ValueError("state_patch must be provided explicitly as a dict or null")
     payload["state_patch"] = validate_state_patch(control_agent, payload["state_patch"])
-    payload.setdefault("pre_launch_directives", [])
-    payload["pre_launch_directives"] = normalize_directives(payload["pre_launch_directives"])
-    payload["pre_launch_directives"] = validate_executor_policy(
-        control_agent, payload["handoff_type"], payload["pre_launch_directives"]
-    )
-    payload.setdefault("post_launch_directives", [])
-    payload["post_launch_directives"] = normalize_directives(payload["post_launch_directives"])
-    payload["post_launch_directives"] = validate_executor_policy(
-        control_agent, payload["handoff_type"], payload["post_launch_directives"]
+    payload.setdefault("directives", [])
+    payload["directives"] = normalize_directives(payload["directives"])
+    payload["directives"] = validate_executor_policy(
+        control_agent, payload["handoff_type"], payload["directives"]
     )
     payload.setdefault("summary", "")
     payload.setdefault("warnings", [])

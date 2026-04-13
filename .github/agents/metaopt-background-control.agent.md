@@ -58,13 +58,18 @@ For each worker `i` in `1..need`, write a task file to `.ml-metaopt/tasks/ideati
 
 ### Step 4: Emit launch_requests
 
-Include `launch_requests` in the handoff for the orchestrator to dispatch `metaopt-ideation-worker` agents:
+Include `launch_requests` in the handoff for the orchestrator to dispatch `metaopt-ideation-worker` agents. Each entry must follow the `WorkerLaunchRequest` schema from `references/contracts.md`:
 
 ```json
 {
   "launch_requests": [
     {
-      "agent": "metaopt-ideation-worker",
+      "skill": "metaopt-ideation-worker",
+      "payload": {},
+      "result_file": ".ml-metaopt/worker-results/ideation-iter-<N>-<i>.json",
+      "slot_class": "background",
+      "mode": "ideation",
+      "model_class": "general_worker",
       "task_file": ".ml-metaopt/tasks/ideation-iter-<N>-<i>.json"
     }
   ]

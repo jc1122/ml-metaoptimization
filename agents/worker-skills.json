@@ -1,6 +1,16 @@
 {
   "skills": [
     {
+      "name": "skypilot-wandb-worker",
+      "lane": "execution",
+      "worker_kind": "custom_agent",
+      "worker_ref": "skypilot-wandb-worker",
+      "classification": "required",
+      "probe_paths": [
+        ".github/agents/skypilot-wandb-worker.agent.md"
+      ]
+    },
+    {
       "name": "metaopt-ideation-worker",
       "lane": "ideation",
       "worker_kind": "custom_agent",
@@ -11,46 +21,6 @@
       ]
     },
     {
-      "name": "metaopt-selection-worker",
-      "lane": "selection",
-      "worker_kind": "custom_agent",
-      "worker_ref": "metaopt-selection-worker",
-      "classification": "required",
-      "probe_paths": [
-        "/home/jakub/projects/ml-metaoptimization/.github/agents/metaopt-selection-worker.agent.md"
-      ]
-    },
-    {
-      "name": "metaopt-design-worker",
-      "lane": "design",
-      "worker_kind": "custom_agent",
-      "worker_ref": "metaopt-design-worker",
-      "classification": "required",
-      "probe_paths": [
-        "/home/jakub/projects/ml-metaoptimization/.github/agents/metaopt-design-worker.agent.md"
-      ]
-    },
-    {
-      "name": "metaopt-materialization-worker",
-      "lane": "materialization",
-      "worker_kind": "custom_agent",
-      "worker_ref": "metaopt-materialization-worker",
-      "classification": "required",
-      "probe_paths": [
-        "/home/jakub/projects/ml-metaoptimization/.github/agents/metaopt-materialization-worker.agent.md"
-      ]
-    },
-    {
-      "name": "metaopt-diagnosis-worker",
-      "lane": "diagnosis",
-      "worker_kind": "custom_agent",
-      "worker_ref": "metaopt-diagnosis-worker",
-      "classification": "required",
-      "probe_paths": [
-        "/home/jakub/projects/ml-metaoptimization/.github/agents/metaopt-diagnosis-worker.agent.md"
-      ]
-    },
-    {
       "name": "metaopt-analysis-worker",
       "lane": "analysis",
       "worker_kind": "custom_agent",
@@ -58,38 +28,6 @@
       "classification": "required",
       "probe_paths": [
         "/home/jakub/projects/ml-metaoptimization/.github/agents/metaopt-analysis-worker.agent.md"
-      ]
-    },
-    {
-      "name": "metaopt-rollover-worker",
-      "lane": "rollover",
-      "worker_kind": "custom_agent",
-      "worker_ref": "metaopt-rollover-worker",
-      "classification": "degradable",
-      "degraded_lane": "rollover",
-      "probe_paths": [
-        "/home/jakub/projects/ml-metaoptimization/.github/agents/metaopt-rollover-worker.agent.md"
-      ]
-    },
-    {
-      "name": "repo-audit-refactor-optimize",
-      "lane": "maintenance",
-      "worker_kind": "skill",
-      "worker_ref": "repo-audit-refactor-optimize",
-      "classification": "degradable",
-      "degraded_lane": "maintenance",
-      "probe_paths": [
-        "/home/jakub/.agents/skills/repo-audit-refactor-optimize/SKILL.md"
-      ]
-    },
-    {
-      "name": "hetzner-delegation-worker",
-      "lane": "queue_execution",
-      "worker_kind": "custom_agent",
-      "worker_ref": "hetzner-delegation-worker",
-      "classification": "required",
-      "probe_paths": [
-        "/home/jakub/projects/ml-metaoptimization/.github/agents/hetzner-delegation-worker.agent.md"
       ]
     }
   ]

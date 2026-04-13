@@ -110,6 +110,7 @@ The orchestrator dispatches `skypilot-wandb-worker` with this directive. `recomm
         "launched_at": "<from result>",
         "cumulative_spend_usd": 0.0,
         "best_run_id": null,
+        "best_run_url": null,
         "best_metric_value": null
       }
     },
@@ -169,6 +170,7 @@ Note: `state_patch` for `current_sweep` must include ALL fields (the orchestrato
         "launched_at": "<preserve from state>",
         "cumulative_spend_usd": "<updated from result>",
         "best_run_id": "<preserve from state>",
+        "best_run_url": "<preserve from state>",
         "best_metric_value": "<preserve from state>"
       }
     },
@@ -190,6 +192,7 @@ Note: `state_patch` for `current_sweep` must include ALL fields (the orchestrato
         "launched_at": "<preserve from state>",
         "cumulative_spend_usd": "<updated from result>",
         "best_run_id": "<updated from result>",
+        "best_run_url": "<updated from result>",
         "best_metric_value": "<updated from result>"
       }
     },
@@ -209,6 +212,7 @@ Note: `state_patch` for `current_sweep` must include ALL fields (the orchestrato
         "launched_at": "<preserve from state>",
         "cumulative_spend_usd": "<updated from result>",
         "best_run_id": "<preserve from state>",
+        "best_run_url": "<preserve from state>",
         "best_metric_value": "<preserve from state>"
       },
       "next_action": "All sweep agents crashed with no successful runs. Check WandB logs."
@@ -229,6 +233,7 @@ Note: `state_patch` for `current_sweep` must include ALL fields (the orchestrato
         "launched_at": "<preserve from state>",
         "cumulative_spend_usd": "<updated from result>",
         "best_run_id": "<preserve from state>",
+        "best_run_url": "<preserve from state>",
         "best_metric_value": "<preserve from state>"
       },
       "next_action": "Budget cap of $<max_budget_usd> reached. Increase compute.max_budget_usd or reduce num_sweep_agents."
@@ -249,6 +254,7 @@ Note: `state_patch` for `current_sweep` must include ALL fields (the orchestrato
         "launched_at": "<preserve from state>",
         "cumulative_spend_usd": "<preserve from state>",
         "best_run_id": "<preserve from state>",
+        "best_run_url": "<preserve from state>",
         "best_metric_value": "<preserve from state>"
       },
       "next_action": "Sweep worker error: <error details from result>"
@@ -267,7 +273,7 @@ Write a task file to `.ml-metaopt/tasks/analysis-iter-<current_iteration>.json`:
 ```json
 {
   "task_type": "analysis",
-  "result_file": ".ml-metaopt/worker-results/sweep-analysis-iter-<current_iteration>.json",
+  "result_file": ".ml-metaopt/worker-results/analysis-iter-<current_iteration>.json",
   "best_run_id": "<state.current_sweep.best_run_id>",
   "sweep_url": "<state.current_sweep.sweep_url>",
   "wandb_entity": "<wandb.entity>",
@@ -293,7 +299,7 @@ Emit handoff:
 }
 ```
 
-**Step 2 (re-invocation after analysis completes):** Read `.ml-metaopt/worker-results/sweep-analysis-iter-<N>.json`:
+**Step 2 (re-invocation after analysis completes):** Read `.ml-metaopt/worker-results/analysis-iter-<N>.json`:
 
 If the result contains an `error` field → transition to FAILED:
 ```json
@@ -326,15 +332,10 @@ The iteration record appended to `completed_iterations`:
 ```json
 {
   "iteration": "<current_iteration>",
-  "improved": "<result.improved>",
-  "best_run_id": "<result.best_run_id>",
-  "best_run_config": "<result.best_run_config>",
+  "sweep_id": "<state.current_sweep.sweep_id>",
   "best_metric_value": "<result.new_baseline.value if improved, else current best>",
-  "sweep_url": "<state.current_sweep.sweep_url>",
-  "sweep_config": "<state.selected_sweep.sweep_config>",
-  "proposal_id": "<state.selected_sweep.proposal_id>",
-  "cumulative_spend_usd": "<state.current_sweep.cumulative_spend_usd>",
-  "learnings": "<result.learnings>"
+  "spend_usd": "<state.current_sweep.cumulative_spend_usd>",
+  "improved_baseline": "<result.improved>"
 }
 ```
 

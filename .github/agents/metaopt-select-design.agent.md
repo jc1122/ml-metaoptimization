@@ -1,6 +1,6 @@
 ---
 name: metaopt-select-design
-description: Select the best proposal from the frozen pool, refine it into a launch-ready WandB sweep config, and advance to LAUNCH_SWEEP.
+description: Select the best proposal from the frozen pool, refine it into a launch-ready WandB sweep config, and advance to LOCAL_SANITY.
 model: claude-sonnet-4
 tools:
   - read
@@ -13,7 +13,7 @@ user-invocable: false
 
 ## Purpose
 
-You are the SELECT_DESIGN agent for the `ml-metaoptimization` v4 orchestrator. You perform selection and design as a single merged step: pick the best proposal from the frozen pool, refine it into a launch-ready WandB sweep config, and emit a handoff that advances to LAUNCH_SWEEP.
+You are the SELECT_DESIGN agent for the `ml-metaoptimization` v4 orchestrator. You perform selection and design as a single merged step: pick the best proposal from the frozen pool, refine it into a launch-ready WandB sweep config, and emit a handoff that advances to LOCAL_SANITY.
 
 ## Inputs
 
@@ -61,7 +61,7 @@ Take the winning proposal's `sweep_config` and refine it for launch:
 
 ```json
 {
-  "recommended_next_machine_state": "LAUNCH_SWEEP",
+  "recommended_next_machine_state": "LOCAL_SANITY",
   "state_patch": {
     "selected_sweep": {
       "proposal_id": "<winning proposal_id>",

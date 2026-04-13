@@ -28,24 +28,27 @@ The orchestrator invokes you with the current `machine_state` as context. You ha
 
 ### When invoked in machine_state == LOCAL_SANITY:
 
-**Step 1:** Emit a `run_smoke_test` directive:
+**Step 1:** Check if smoke test result file exists at `.ml-metaopt/executor-events/smoke-test-iter-<current_iteration>.json`. If it does NOT exist, emit a `run_smoke_test` directive:
 
 ```json
 {
-  "recommended_next_machine_state": null,
-  "state_patch": {},
-  "directive": {
-    "type": "run_smoke_test",
-    "payload": {
-      "command": "<project.smoke_test_command from load handoff>",
-      "repo": "<project.repo from load handoff>",
+  "recommended_next_machine_state": "LAUNCH_SWEEP",
+  "state_patch": {
+    "next_action": "run smoke test"
+  },
+  "directives": [
+    {
+      "action": "run_smoke_test",
+      "reason": "smoke test result not found; dispatching smoke test",
+      "command": "<load_handoff.project.smoke_test_command>",
       "result_file": ".ml-metaopt/executor-events/smoke-test-iter-<current_iteration>.json"
     }
-  }
+  ],
+  "summary": "run_smoke_test directive emitted"
 }
 ```
 
-The orchestrator dispatches `skypilot-wandb-worker` with this directive. `recommended_next_machine_state: null` tells the orchestrator to re-invoke this agent after the directive completes.
+The orchestrator dispatches `skypilot-wandb-worker` with this directive. The `directives` array uses `action` (not `type`) and must include a `reason` string. No `repo` field — only `command` and `result_file`.
 
 **Step 2 (re-invocation):** Read the result file `.ml-metaopt/executor-events/smoke-test-iter-<N>.json`:
 
@@ -53,9 +56,10 @@ The orchestrator dispatches `skypilot-wandb-worker` with this directive. `recomm
   ```json
   {
     "recommended_next_machine_state": "LAUNCH_SWEEP",
-    "state_patch": {},
-    "directive": { "type": "none" },
-    "summary": "Smoke test passed"
+    "state_patch": {
+      "next_action": "launch sweep"
+    },
+    "summary": "smoke test passed; ready to launch sweep"
   }
   ```
 - If `exit_code != 0` or `timed_out == true` → FAILED:
@@ -63,41 +67,60 @@ The orchestrator dispatches `skypilot-wandb-worker` with this directive. `recomm
   {
     "recommended_next_machine_state": "FAILED",
     "state_patch": {
-      "next_action": "Smoke test failed (exit_code=<N>, timed_out=<bool>). Fix the training script. Last stderr: <stderr_tail last 5 lines>"
+      "next_action": "smoke test failed"
     },
-    "directive": { "type": "none" }
+    "summary": "smoke test timed out"
   }
   ```
+  The `summary` field contains the detail: `"smoke test timed out"` if `timed_out`, otherwise `"smoke test failed with exit code <N>"`.
 
 ## Phase: LAUNCH_SWEEP
 
 ### When invoked in machine_state == LAUNCH_SWEEP:
 
-**Step 1:** Emit a `launch_sweep` directive:
+The script first validates that `state.selected_sweep` exists and contains `sweep_config`. If invalid, it returns a runtime error with recovery action `"persist selected_sweep before launch"`.
+
+**Step 1 (first entry — no result file):** Check if launch result exists at `.ml-metaopt/worker-results/launch-sweep-iter-<current_iteration>.json`. If it does NOT exist, emit a `launch_sweep` directive:
 
 ```json
 {
-  "recommended_next_machine_state": null,
-  "state_patch": {},
-  "directive": {
-    "type": "launch_sweep",
-    "payload": {
+  "recommended_next_machine_state": "LAUNCH_SWEEP",
+  "state_patch": {
+    "current_sweep": {
+      "sweep_id": null,
+      "sweep_url": null,
+      "sky_job_ids": [],
+      "launched_at": null,
+      "cumulative_spend_usd": 0.0,
+      "best_run_id": null,
+      "best_metric_value": null
+    },
+    "next_action": "execute launch sweep directive"
+  },
+  "directives": [
+    {
+      "action": "launch_sweep",
+      "reason": "selected sweep config validated; launching WandB sweep via SkyPilot",
       "sweep_config": "<state.selected_sweep.sweep_config>",
-      "wandb_entity": "<wandb.entity from campaign>",
-      "wandb_project": "<wandb.project from campaign>",
-      "repo": "<project.repo from campaign>",
-      "accelerator": "<compute.accelerator>",
-      "num_sweep_agents": "<compute.num_sweep_agents>",
-      "idle_timeout_minutes": "<compute.idle_timeout_minutes>",
+      "sky_task_spec": {
+        "provider": "<compute.provider or 'vast_ai'>",
+        "accelerator": "<compute.accelerator or 'A100:1'>",
+        "num_sweep_agents": "<compute.num_sweep_agents or 4>",
+        "idle_timeout_minutes": "<compute.idle_timeout_minutes or 15>",
+        "max_budget_usd": "<compute.max_budget_usd or 10>"
+      },
       "result_file": ".ml-metaopt/worker-results/launch-sweep-iter-<current_iteration>.json"
     }
-  }
+  ],
+  "summary": "launch_sweep directive emitted"
 }
 ```
 
-**Step 2 (re-invocation):** Read result file:
+Note: The directive payload uses a nested `sky_task_spec` object (not flat fields) and does NOT include `wandb_entity`, `wandb_project`, or `repo`. Compute fields come from `load_handoff.compute.*` with the defaults shown.
 
-- If result contains `sweep_id`, `sweep_url`, `sky_job_ids`, `launched_at` → success:
+**Step 2 (re-entry — result file exists):** Read launch result file:
+
+- If result contains `sweep_id` → success:
   ```json
   {
     "recommended_next_machine_state": "WAIT_FOR_SWEEP",
@@ -109,21 +132,23 @@ The orchestrator dispatches `skypilot-wandb-worker` with this directive. `recomm
         "launched_at": "<from result>",
         "cumulative_spend_usd": 0.0,
         "best_run_id": null,
-        "best_run_url": null,
         "best_metric_value": null
-      }
+      },
+      "next_action": "poll sweep status"
     },
-    "directive": { "type": "none" }
+    "summary": "launch result found; sweep <sweep_id> is active"
   }
   ```
-- If result contains an error → FAILED:
+  Note: `current_sweep` does NOT include `best_run_url`.
+
+- If result contains an `error` field → FAILED:
   ```json
   {
     "recommended_next_machine_state": "FAILED",
     "state_patch": {
-      "next_action": "Sweep launch failed: <error details>"
+      "next_action": "sweep launch failed: <error details>"
     },
-    "directive": { "type": "none" }
+    "summary": "sweep launch failed: <error details>"
   }
   ```
 
@@ -131,206 +156,161 @@ The orchestrator dispatches `skypilot-wandb-worker` with this directive. `recomm
 
 ### When invoked in machine_state == WAIT_FOR_SWEEP:
 
-**Step 1:** Emit a `poll_sweep` directive:
+The script first validates that `state.current_sweep` exists and is a dict. If missing, it returns a runtime error with recovery action `"launch sweep before polling"`.
+
+**Step 1:** Check if poll result exists at `.ml-metaopt/executor-events/poll-sweep-iter-<current_iteration>.json`. If it does NOT exist, emit a `poll_sweep` directive:
 
 ```json
 {
   "recommended_next_machine_state": null,
-  "state_patch": {},
-  "directive": {
-    "type": "poll_sweep",
-    "payload": {
+  "state_patch": {
+    "next_action": "poll WandB sweep status"
+  },
+  "directives": [
+    {
+      "action": "poll_sweep",
+      "reason": "checking sweep status",
       "sweep_id": "<state.current_sweep.sweep_id>",
-      "wandb_entity": "<wandb.entity>",
-      "wandb_project": "<wandb.project>",
       "sky_job_ids": "<state.current_sweep.sky_job_ids>",
-      "idle_timeout_minutes": "<compute.idle_timeout_minutes>",
-      "max_budget_usd": "<compute.max_budget_usd>",
-      "cumulative_spend_usd": "<state.current_sweep.cumulative_spend_usd>",
       "result_file": ".ml-metaopt/executor-events/poll-sweep-iter-<current_iteration>.json"
     }
-  }
+  ],
+  "summary": "poll_sweep directive emitted"
 }
 ```
 
-**Step 2 (re-invocation):** Read the poll result file:
+Note: The directive does NOT include `wandb_entity`, `wandb_project`, `idle_timeout_minutes`, `max_budget_usd`, or `cumulative_spend_usd`. Only `sweep_id`, `sky_job_ids`, and `result_file`.
 
-Note: `state_patch` for `current_sweep` must include ALL fields (the orchestrator replaces the entire object). Read the existing `current_sweep` from state and include all fields, updating only the changed ones.
+**Step 2 (re-invocation):** Read the poll result file. First, if `cumulative_spend_usd` is present in the poll result, update `current_sweep.cumulative_spend_usd` in state. Then branch on `sweep_status`:
 
-- **`sweep_status == "running"`**: Update spend and stay in WAIT_FOR_SWEEP:
+- **`sweep_status == "running"`**: Stay in WAIT_FOR_SWEEP:
   ```json
   {
     "recommended_next_machine_state": null,
     "state_patch": {
-      "current_sweep": {
-        "sweep_id": "<preserve from state>",
-        "sweep_url": "<preserve from state>",
-        "sky_job_ids": ["<preserve from state>"],
-        "launched_at": "<preserve from state>",
-        "cumulative_spend_usd": "<updated from result>",
-        "best_run_id": "<preserve from state>",
-        "best_run_url": "<preserve from state>",
-        "best_metric_value": "<preserve from state>"
-      }
+      "current_sweep": { "cumulative_spend_usd": "<updated from result>" },
+      "next_action": "poll WandB sweep status"
     },
-    "directive": { "type": "none" },
-    "summary": "Sweep still running, spend $<N>"
+    "summary": "sweep is still running"
   }
   ```
-  `null` next state means "poll again on next session."
+  `null` next state means "poll again on next session." Only `cumulative_spend_usd` is updated — no other `current_sweep` fields change.
 
 - **`sweep_status == "completed"`**: Advance to ANALYZE:
   ```json
   {
     "recommended_next_machine_state": "ANALYZE",
     "state_patch": {
-      "current_sweep": {
-        "sweep_id": "<preserve from state>",
-        "sweep_url": "<preserve from state>",
-        "sky_job_ids": ["<preserve from state>"],
-        "launched_at": "<preserve from state>",
-        "cumulative_spend_usd": "<updated from result>",
-        "best_run_id": "<updated from result>",
-        "best_run_url": "<updated from result>",
-        "best_metric_value": "<updated from result>"
-      }
+      "current_sweep": { "cumulative_spend_usd": "<updated from result>" },
+      "next_action": "analyze sweep results"
     },
-    "directive": { "type": "none" }
+    "summary": "sweep completed; advancing to analysis"
   }
   ```
-
-- **`sweep_status == "failed"`** (all agents crashed, no successful runs):
-  ```json
-  {
-    "recommended_next_machine_state": "FAILED",
-    "state_patch": {
-      "current_sweep": {
-        "sweep_id": "<preserve from state>",
-        "sweep_url": "<preserve from state>",
-        "sky_job_ids": ["<preserve from state>"],
-        "launched_at": "<preserve from state>",
-        "cumulative_spend_usd": "<updated from result>",
-        "best_run_id": "<preserve from state>",
-        "best_run_url": "<preserve from state>",
-        "best_metric_value": "<preserve from state>"
-      },
-      "next_action": "All sweep agents crashed with no successful runs. Check WandB logs."
-    },
-    "directive": { "type": "none" }
-  }
-  ```
+  Note: `best_run_id`, `best_run_url`, and `best_metric_value` are NOT updated from the poll result. Only `cumulative_spend_usd` changes.
 
 - **`sweep_status == "budget_exceeded"`**:
   ```json
   {
     "recommended_next_machine_state": "BLOCKED_CONFIG",
     "state_patch": {
-      "current_sweep": {
-        "sweep_id": "<preserve from state>",
-        "sweep_url": "<preserve from state>",
-        "sky_job_ids": ["<preserve from state>"],
-        "launched_at": "<preserve from state>",
-        "cumulative_spend_usd": "<updated from result>",
-        "best_run_id": "<preserve from state>",
-        "best_run_url": "<preserve from state>",
-        "best_metric_value": "<preserve from state>"
-      },
-      "next_action": "Budget cap of $<max_budget_usd> reached. Increase compute.max_budget_usd or reduce num_sweep_agents."
+      "current_sweep": { "cumulative_spend_usd": "<updated from result>" },
+      "next_action": "sweep budget exceeded"
     },
-    "directive": { "type": "none" }
+    "warnings": ["budget exceeded"],
+    "summary": "sweep budget exceeded"
   }
   ```
 
-- **`sweep_status == "error"` or `result.error` present** (worker-level error):
+- **Any other `sweep_status`** (fallthrough — includes `"failed"`, `"error"`, etc.):
   ```json
   {
     "recommended_next_machine_state": "FAILED",
     "state_patch": {
-      "current_sweep": {
-        "sweep_id": "<preserve from state>",
-        "sweep_url": "<preserve from state>",
-        "sky_job_ids": ["<preserve from state>"],
-        "launched_at": "<preserve from state>",
-        "cumulative_spend_usd": "<preserve from state>",
-        "best_run_id": "<preserve from state>",
-        "best_run_url": "<preserve from state>",
-        "best_metric_value": "<preserve from state>"
-      },
-      "next_action": "Sweep worker error: <error details from result>"
+      "current_sweep": { "cumulative_spend_usd": "<updated from result>" },
+      "next_action": "sweep failed"
     },
-    "directive": { "type": "none" }
+    "summary": "sweep failed with status: <sweep_status>"
   }
   ```
+  There is no separate `"error"` status handler — any status not explicitly handled falls through to FAILED.
 
 ## Phase: ANALYZE
 
 ### When invoked in machine_state == ANALYZE:
 
-**Step 1:** Emit `launch_requests` for `metaopt-analysis-worker`:
+**Step 1:** Check if analysis result exists at `.ml-metaopt/worker-results/sweep-analysis-iter-<current_iteration>.json`. If it does NOT exist, write a Markdown task file and emit `launch_requests`.
 
-Write a task file to `.ml-metaopt/tasks/analysis-iter-<current_iteration>.json`. Forward the best run data from `state.current_sweep` and the poll result event (`.ml-metaopt/executor-events/poll-sweep-iter-<current_iteration>.json`):
-```json
-{
-  "task_type": "analysis",
-  "result_file": ".ml-metaopt/worker-results/analysis-iter-<current_iteration>.json",
-  "best_run_id": "<state.current_sweep.best_run_id>",
-  "best_metric_value": "<state.current_sweep.best_metric_value>",
-  "best_run_url": "<state.current_sweep.best_run_url>",
-  "best_run_config": "<from poll result event best_run_config>",
-  "sweep_url": "<state.current_sweep.sweep_url>",
-  "wandb_entity": "<wandb.entity>",
-  "wandb_project": "<wandb.project>",
-  "current_baseline": "<state.baseline or null>",
-  "objective": "<state.objective_snapshot>",
-  "key_learnings": "<state.key_learnings>"
-}
+Write a task file to `.ml-metaopt/tasks/sweep-analysis-iter-<current_iteration>.md` (Markdown, not JSON):
+```markdown
+# Sweep Analysis Task — Iteration <current_iteration>
+
+## Sweep Result
+- sweep_id: <state.current_sweep.sweep_id>
+- best_run_id: <state.current_sweep.best_run_id>
+- best_run_url: <state.current_sweep.best_run_url>
+- best_metric_value: <state.current_sweep.best_metric_value>
+- objective_metric: <state.objective_snapshot.metric>
+- objective_direction: <state.objective_snapshot.direction>
+- improvement_threshold: <state.objective_snapshot.improvement_threshold>
+- baseline: <JSON of state.baseline>
+- key_learnings_so_far: <JSON of state.key_learnings>
+
+## Output
+Write result to: .ml-metaopt/worker-results/sweep-analysis-iter-<current_iteration>.json
 ```
+
+Note: File names use `sweep-analysis-iter-N` (not `analysis-iter-N`). The task file does NOT include `wandb_entity`, `wandb_project`, or `best_run_config` — it draws from `state.current_sweep` and `state.objective_snapshot`.
 
 Emit handoff:
 ```json
 {
-  "recommended_next_machine_state": null,
-  "state_patch": {},
-  "directive": { "type": "none" },
+  "recommended_next_machine_state": "ANALYZE",
+  "state_patch": {
+    "next_action": "run sweep results analysis"
+  },
   "launch_requests": [
     {
-      "worker_ref": "metaopt-analysis-worker",
-      "result_file": ".ml-metaopt/worker-results/analysis-iter-<current_iteration>.json",
       "slot_class": "auxiliary",
       "mode": "analysis",
+      "worker_ref": "metaopt-analysis-worker",
       "model_class": "strong_reasoner",
-      "task_file": ".ml-metaopt/tasks/analysis-iter-<current_iteration>.json"
+      "task_file": ".ml-metaopt/tasks/sweep-analysis-iter-<current_iteration>.md",
+      "result_file": ".ml-metaopt/worker-results/sweep-analysis-iter-<current_iteration>.json"
     }
-  ]
+  ],
+  "summary": "analysis worker launch request emitted"
 }
 ```
 
-**Step 2 (re-invocation after analysis completes):** Read `.ml-metaopt/worker-results/analysis-iter-<N>.json`:
+**Step 2 (re-invocation after analysis completes):** Read `.ml-metaopt/worker-results/sweep-analysis-iter-<N>.json`.
 
-If the result contains an `error` field → transition to FAILED:
-```json
-{
-  "recommended_next_machine_state": "FAILED",
-  "state_patch": {
-    "next_action": "Analysis worker error: <error details from result>"
-  },
-  "directive": { "type": "none" }
-}
-```
+The script does NOT check for an `error` field — it always processes the result. Build state_patch based on `analysis.improved`:
 
-Otherwise, build state_patch based on analysis result:
+If `improved == true`:
+- Set `baseline` to: `{metric: state.objective_snapshot.metric, value: analysis.best_metric_value, wandb_run_id: analysis.best_run_id, wandb_run_url: analysis.best_run_url, established_at: <timestamp>}`
+- Reset `no_improve_iterations` to 0
+
+If `improved == false`:
+- Increment `no_improve_iterations` by 1
+- Do NOT update `baseline`
+
+In both cases:
+- Append iteration record to `completed_iterations`
+- Append new entries from `analysis.learnings` to `key_learnings` (deduplicating)
+- Set `next_action` to `"roll iteration"`
 
 ```json
 {
   "recommended_next_machine_state": "ROLL_ITERATION",
   "state_patch": {
-    "baseline": "<result.new_baseline if result.improved == true, else keep existing>",
-    "key_learnings": "<existing key_learnings + result.learnings>",
+    "baseline": "<updated if improved, else unchanged>",
+    "key_learnings": "<existing + new from analysis.learnings>",
     "completed_iterations": "<append iteration record>",
-    "no_improve_iterations": "<reset to 0 if improved, else increment by 1>"
+    "no_improve_iterations": "<0 if improved, else previous + 1>",
+    "next_action": "roll iteration"
   },
-  "directive": { "type": "none" },
-  "summary": "Iteration <N> analysis complete. Improved: <result.improved>. Best metric: <value>"
+  "summary": "sweep analysis complete; advancing to iteration rollover"
 }
 ```
 
@@ -339,11 +319,13 @@ The iteration record appended to `completed_iterations`:
 {
   "iteration": "<current_iteration>",
   "sweep_id": "<state.current_sweep.sweep_id>",
-  "best_metric_value": "<result.new_baseline.value if improved, else current best>",
+  "best_metric_value": "<analysis.best_metric_value>",
   "spend_usd": "<state.current_sweep.cumulative_spend_usd>",
-  "improved_baseline": "<result.improved>"
+  "improved_baseline": "<analysis.improved>"
 }
 ```
+
+Note: `best_metric_value` always comes from `analysis.best_metric_value` regardless of whether the baseline improved.
 
 ## Output
 
@@ -351,29 +333,32 @@ Write handoff to: `.ml-metaopt/handoffs/metaopt-remote-execution-control-<machin
 
 ## Error Handling
 
-### LOCAL_SANITY: smoke test failure
-LOCAL_SANITY has no retry loop — this is by design (see SKILL.md: "60-second hard timeout, no remediation loop"). If the smoke test fails (`exit_code != 0` or `timed_out == true`), emit `recommended_next_machine_state: "FAILED"` immediately with `next_action` containing the exit code and last 5 lines of stderr. The user must fix the training script and restart the campaign.
+### Input validation failures
+If the load handoff or state file is unreadable or invalid, the script emits a runtime error with `recommended_next_machine_state: null`, `state_patch: null`, and a `recovery_action` string. This happens before any phase-specific logic runs.
 
-### LOCAL_SANITY: result file missing or unreadable
-If the smoke test result file (`.ml-metaopt/executor-events/smoke-test-iter-<N>.json`) does not exist or cannot be parsed as JSON after re-invocation, emit `BLOCKED_PROTOCOL` with `next_action: "Smoke test result file missing or corrupt — skypilot-wandb-worker may have failed to execute the directive"`.
+### LOCAL_SANITY: smoke test failure
+LOCAL_SANITY has no retry loop — this is by design (see SKILL.md: "60-second hard timeout, no remediation loop"). If the smoke test fails (`exit_code != 0` or `timed_out == true`), emit `recommended_next_machine_state: "FAILED"` immediately. The `summary` field contains the failure detail (not `next_action`). The user must fix the training script and restart the campaign.
+
+### LOCAL_SANITY: result file not yet written
+If the smoke test result file does not exist, the script simply emits the `run_smoke_test` directive again. There is no `BLOCKED_PROTOCOL` transition for missing result files — the script always re-emits the directive when the file is absent.
 
 ### LAUNCH_SWEEP: worker failure
-If `skypilot-wandb-worker` returns an error (result contains an `error` field, or required fields `sweep_id`/`sweep_url`/`sky_job_ids` are missing), emit `recommended_next_machine_state: "FAILED"` with the error details. There is no retry — a failed launch transitions directly to FAILED. The user can re-run the campaign to attempt again from the persisted state.
+If `skypilot-wandb-worker` returns an error (result contains an `error` field), emit `recommended_next_machine_state: "FAILED"`. If the result file does not exist, the script emits the `launch_sweep` directive (first-entry path). There is no retry loop — a result with an error transitions directly to FAILED.
 
-### LAUNCH_SWEEP: result file missing
-If the launch result file does not exist after re-invocation, emit `BLOCKED_PROTOCOL` with `next_action: "Launch sweep result file missing — skypilot-wandb-worker may have crashed"`.
+### LAUNCH_SWEEP: selected_sweep missing
+If `state.selected_sweep` is missing or does not contain `sweep_config`, the script emits a runtime error with `recovery_action: "persist selected_sweep before launch"`.
 
 ### WAIT_FOR_SWEEP: sweep timeout or crash
-The poll directive delegates timeout detection to `skypilot-wandb-worker`, which enforces `idle_timeout_minutes` as a watchdog. If the sweep times out (agents idle beyond the threshold), the worker kills the SkyPilot jobs and returns `sweep_status: "failed"`. This agent then emits `FAILED`. There is no separate timeout mechanism in this agent — the worker handles it.
+The poll directive delegates timeout detection to `skypilot-wandb-worker`, which enforces `idle_timeout_minutes` as a watchdog. If the sweep times out, the worker returns a non-"running" status, and this agent transitions to FAILED via the fallthrough handler.
 
-### WAIT_FOR_SWEEP: poll result missing
-If the poll result file does not exist after re-invocation, emit `BLOCKED_PROTOCOL` with `next_action: "Poll sweep result file missing — skypilot-wandb-worker may have crashed during polling"`.
+### WAIT_FOR_SWEEP: poll result not yet written
+If the poll result file does not exist, the script emits the `poll_sweep` directive again. No `BLOCKED_PROTOCOL`.
 
-### ANALYZE: analysis worker error
-If the analysis result contains an `error` field, emit `FAILED` with the error details. If the result file is missing or unreadable, emit `BLOCKED_PROTOCOL`.
+### ANALYZE: result not yet written
+If the analysis result file does not exist, the script writes the task file and emits `launch_requests`. No `BLOCKED_PROTOCOL`. The script does not check for an `error` field in analysis results — it processes whatever is in the file.
 
 ### No retry semantics
-This agent does not retry failed directives. Each directive failure maps to a terminal state (`FAILED` for execution errors, `BLOCKED_PROTOCOL` for missing results, `BLOCKED_CONFIG` for budget overruns). The orchestrator does not re-invoke this agent after a terminal recommendation.
+This agent does not retry failed directives. Execution errors map to `FAILED`, budget overruns map to `BLOCKED_CONFIG`. When a result file is simply absent, the script re-emits the directive rather than transitioning to a terminal state.
 
 ## Rules
 

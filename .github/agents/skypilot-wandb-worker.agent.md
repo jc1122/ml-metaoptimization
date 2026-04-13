@@ -22,30 +22,36 @@ You are NEVER invoked directly by users. The orchestrator dispatches you via dir
 
 ## Inputs
 
-You will be invoked with a task file from `.ml-metaopt/tasks/`. The task file contains a `directive` object with:
-- `directive.type`: one of `launch_sweep`, `poll_sweep`, or `run_smoke_test` — determines which operation to execute
-- `directive.payload`: operation-specific parameters (described per-operation below)
+You will be invoked with a directive from the orchestrator. The directive is a flat JSON object with:
+- `action`: one of `launch_sweep`, `poll_sweep`, or `run_smoke_test` — determines which operation to execute
+- `reason`: human-readable rationale for the dispatch
+- Additional action-specific fields (described per-operation below, at the top level of the directive object)
 
-Dispatch on `directive.type` to select the operation. Read parameters from `directive.payload`.
+Dispatch on `action` to select the operation. Read parameters directly from the directive's top-level fields.
 
 ## Operation: `launch_sweep`
 
 ### Inputs
 
-From `directive.payload`:
+From the directive (flat fields):
 
 ```json
 {
+  "action": "launch_sweep",
+  "reason": "selected sweep config validated; launching WandB sweep via SkyPilot",
   "sweep_config": { "method": "bayes", "metric": {...}, "parameters": {...} },
-  "wandb_entity": "my-entity",
-  "wandb_project": "my-project",
-  "repo": "git@github.com:user/project.git",
-  "accelerator": "A100:1",
-  "num_sweep_agents": 4,
-  "idle_timeout_minutes": 15,
-  "result_file": ".ml-metaopt/worker-results/launch-sweep.json"
+  "sky_task_spec": {
+    "provider": "vast_ai",
+    "accelerator": "A100:1",
+    "num_sweep_agents": 4,
+    "idle_timeout_minutes": 15,
+    "max_budget_usd": 10
+  },
+  "result_file": ".ml-metaopt/worker-results/launch-sweep-iter-<N>.json"
 }
 ```
+
+Read `wandb_entity`, `wandb_project`, and `repo` from the project's own configuration files (e.g. `ml_metaopt_campaign.yaml` or environment variables). Read `WANDB_API_KEY` from the local environment. The directive does NOT carry `wandb_entity`, `wandb_project`, or `repo` — all WandB and repo context comes from the local environment.
 
 ### Steps
 

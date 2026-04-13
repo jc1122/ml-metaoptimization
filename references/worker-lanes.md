@@ -104,6 +104,48 @@ When no improvement: `"improved": false`, `"best_metric_value": <value>`, `"best
 - Produce code changes or patches
 - Make recommendations about what to try next (only report what happened)
 
+## Selection Lane
+
+**Worker target:** `metaopt-selection-worker` (custom agent)
+
+**Slot class:** `selection`
+
+**Model class:** `strong_reasoner`
+
+**Inputs (from task file `.ml-metaopt/tasks/select-design-iter-<N>.md`):**
+- Frozen `current_proposals` — the proposal pool as frozen by the plan phase (JSON array)
+- `key_learnings` — accumulated learnings from prior iterations (JSON array of strings)
+- Objective context: `metric`, `direction`, `improvement_threshold`
+- `baseline` — current best known result (JSON object or null)
+
+**Output:** A JSON file written to `.ml-metaopt/worker-results/select-design-iter-<N>.json`:
+
+```json
+{
+  "winning_proposal": {
+    "proposal_id": "<id matching an entry in the frozen proposal pool>"
+  },
+  "sweep_config": {
+    "method": "bayes",
+    "metric": { "name": "<metric>", "goal": "<maximize|minimize>" },
+    "parameters": { ... }
+  },
+  "ranking_rationale": "One or more sentences explaining why this proposal was selected."
+}
+```
+
+**Constraints:**
+- `winning_proposal.proposal_id` MUST exactly match a `proposal_id` in the frozen proposal pool — no new IDs
+- `sweep_config` MUST be a valid WandB sweep config with `method`, `metric`, and `parameters` keys
+- Must select exactly one proposal — no partial selections or abstentions
+
+**Lane drift rules — MUST NOT:**
+- Generate new proposals or modify the proposal pool
+- Mutate `.ml-metaopt/state.json`
+- Make control-plane decisions (state transitions, iteration management)
+- Launch subagents or dispatch workers
+- Produce code patches, file diffs, or architecture changes
+
 ## Execution Lane
 
 **Worker target:** `skypilot-wandb-worker` (custom agent)

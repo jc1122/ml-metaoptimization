@@ -108,17 +108,17 @@ Build the `directives` array (an ordered list of cleanup actions for the orchest
 **Always emit:**
 - `emit_iteration_report` — the orchestrator writes the iteration summary:
   ```json
-  { "action": "emit_iteration_report", "report_type": "iteration", "iteration": "<current_iteration>" }
+  { "action": "emit_iteration_report", "reason": "iteration rollover complete; publish iteration report", "report_type": "iteration", "iteration": "<current_iteration>" }
   ```
 
 **If stopping (COMPLETE — target met, max iterations, or no-improvement plateau), also emit:**
 - `remove_agents_hook` — remove the ml-metaoptimization block from `AGENTS.md`:
   ```json
-  { "action": "remove_agents_hook", "agents_path": "AGENTS.md" }
+  { "action": "remove_agents_hook", "reason": "campaign complete; orchestration hook no longer needed", "agents_path": "AGENTS.md" }
   ```
 - `emit_final_report` — write `.ml-metaopt/final_report.md`:
   ```json
-  { "action": "emit_final_report", "report_type": "final" }
+  { "action": "emit_final_report", "reason": "campaign complete; produce final summary", "report_type": "final" }
   ```
 
 **If stopping (BLOCKED_CONFIG — budget exhausted), also emit:**
@@ -138,7 +138,7 @@ Write handoff to: `.ml-metaopt/handoffs/metaopt-iteration-close-control-ROLL_ITE
   "stop_reason": "",
   "state_patch": { "...from Step 4..." },
   "directives": [
-    { "action": "emit_iteration_report", "report_type": "iteration", "iteration": "<N>" }
+    { "action": "emit_iteration_report", "reason": "iteration rollover complete; publish iteration report", "report_type": "iteration", "iteration": "<N>" }
   ],
   "iteration_report": "=== Iteration <N> Report ===\n...",
   "warnings": [],
@@ -160,9 +160,9 @@ Write handoff to: `.ml-metaopt/handoffs/metaopt-iteration-close-control-ROLL_ITE
     "next_action": "emit final report and remove orchestration hook"
   },
   "directives": [
-    { "action": "emit_iteration_report", "report_type": "iteration", "iteration": "<N>" },
-    { "action": "remove_agents_hook", "agents_path": "AGENTS.md" },
-    { "action": "emit_final_report", "report_type": "final" }
+    { "action": "emit_iteration_report", "reason": "iteration rollover complete; publish iteration report", "report_type": "iteration", "iteration": "<N>" },
+    { "action": "remove_agents_hook", "reason": "campaign complete; orchestration hook no longer needed", "agents_path": "AGENTS.md" },
+    { "action": "emit_final_report", "reason": "campaign complete; produce final summary", "report_type": "final" }
   ],
   "iteration_report": "=== Iteration <N> Report ===\n...",
   "warnings": [],
@@ -179,12 +179,14 @@ Write handoff to: `.ml-metaopt/handoffs/metaopt-iteration-close-control-ROLL_ITE
   "recommended_next_machine_state": "BLOCKED_CONFIG",
   "stop_reason": "budget_exhausted",
   "state_patch": {
+    "current_sweep": null,
+    "selected_sweep": null,
     "next_action": "Budget cap exceeded: <amount> USD spent of <max> USD limit. Increase compute.max_budget_usd or reduce num_sweep_agents."
   },
   "directives": [
-    { "action": "emit_iteration_report", "report_type": "iteration", "iteration": "<N>" },
-    { "action": "remove_agents_hook", "agents_path": "AGENTS.md" },
-    { "action": "emit_final_report", "report_type": "final" }
+    { "action": "emit_iteration_report", "reason": "iteration rollover complete; publish iteration report", "report_type": "iteration", "iteration": "<N>" },
+    { "action": "remove_agents_hook", "reason": "campaign complete; orchestration hook no longer needed", "agents_path": "AGENTS.md" },
+    { "action": "emit_final_report", "reason": "campaign complete; produce final summary", "report_type": "final" }
   ],
   "iteration_report": "=== Iteration <N> Report ===\n...",
   "warnings": [],

@@ -29,6 +29,16 @@
       "probe_paths": [
         ".github/agents/metaopt-analysis-worker.agent.md"
       ]
+    },
+    {
+      "name": "metaopt-selection-worker",
+      "lane": "selection",
+      "worker_kind": "custom_agent",
+      "worker_ref": "metaopt-selection-worker",
+      "classification": "required",
+      "probe_paths": [
+        ".github/agents/metaopt-selection-worker.agent.md"
+      ]
     }
   ]
 }

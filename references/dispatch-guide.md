@@ -64,19 +64,37 @@ For worker lane contracts (inputs, outputs, drift rules), see references/worker-
 
 **Governing agent:** metaopt-select-design
 
-**Dispatch:** Inline subagent. No worker slot. One agent invocation performs both selection and design.
+**Dispatch:** Two-phase workflow with an intermediate worker dispatch.
 
-**Worker:** None — the `metaopt-select-design` agent selects the best proposal inline and refines it into a WandB sweep config. There is no intermediate worker dispatch.
+**Worker:** `metaopt-selection-worker`
+**Slot class:** `selection`
+**Model class:** `strong_reasoner`
+
+### Phase 1 — Plan (`plan_select_design`)
 
 **Orchestrator action:**
-1. Invoke metaopt-select-design as subagent
-2. The agent reads `current_proposals`, scores them, selects the best, and refines the sweep config
-3. Read handoff -- contains selected_sweep in state_patch and sweep config
-4. Script's `finalize_select_design` mode validates the agent's output and freezes it
-5. Apply state_patch (sets selected_sweep, freezes proposal_cycle.current_pool_frozen = true)
-6. Transition to LOCAL_SANITY
+1. Invoke metaopt-select-design as subagent (plan phase)
+2. Agent validates preconditions and freezes the proposal pool
+3. Agent writes task file to `.ml-metaopt/tasks/select-design-iter-<N>.md` for `metaopt-selection-worker`
+4. Read handoff -- `recommended_next_machine_state: SELECT_AND_DESIGN_SWEEP` (stays in same state)
+5. Dispatch `metaopt-selection-worker` with the task file path
+6. Worker reads frozen proposals, key learnings, and objective context from the task file
+7. Worker writes result to `.ml-metaopt/worker-results/select-design-iter-<N>.json`
 
-**Note:** Selection and design are combined into one agent, one step. No separate selection worker or design worker slot. No intermediate worker dispatch.
+**Worker result fields:**
+- `winning_proposal` — dict including `proposal_id` matching an entry in the frozen proposal pool
+- `sweep_config` — valid WandB sweep config dict (method, metric, parameters)
+- `ranking_rationale` — string explaining selection reasoning
+
+### Phase 2 — Finalize (`finalize_select_design`)
+
+**Orchestrator action:**
+1. Re-invoke metaopt-select-design as subagent (finalize phase) with worker result available
+2. Agent validates that `winning_proposal.proposal_id` matches frozen `current_proposals`
+3. Agent validates `sweep_config` is a non-empty dict
+4. Read handoff -- `recommended_next_machine_state: LOCAL_SANITY`
+5. Apply state_patch (sets `selected_sweep` with `proposal_id` and `sweep_config`, freezes `proposal_cycle.current_pool_frozen = true`)
+6. Transition to LOCAL_SANITY
 
 ## LOCAL_SANITY
 

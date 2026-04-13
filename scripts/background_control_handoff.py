@@ -190,33 +190,37 @@ def _gate_background_work(
     sequence = _proposal_sequence(state)
     processed_results: list[str] = []
 
-    # Build set of existing proposal IDs for idempotent processing
-    existing_ids: set[str] = set()
+    # Build set of source_file values already in proposals for dedup by file name
+    existing_source_files: set[str] = set()
     for pool_name in ("current_proposals", "next_proposals"):
         for proposal in state.get(pool_name, []):
-            pid = proposal.get("proposal_id")
-            if isinstance(pid, str):
-                existing_ids.add(pid)
+            sf = proposal.get("source_file")
+            if isinstance(sf, str):
+                existing_source_files.add(sf)
 
     for result_file in sorted(worker_results_dir.glob("bg-*.json")):
         result = read_json(result_file)
+        file_basename = result_file.name
         processed_results.append(result_file.stem)
+
+        # Skip files already processed (dedup by result file name)
+        if file_basename in existing_source_files:
+            continue
 
         if result.get("status") == "completed":
             candidates = result.get("proposal_candidates", [])
             for candidate in candidates:
                 sequence += 1
                 proposal_id = f"{state['campaign_id']}-p{sequence}"
-                if proposal_id in existing_ids:
-                    continue
                 enriched = dict(candidate)
                 enriched["proposal_id"] = proposal_id
                 enriched["source_slot_id"] = result_file.stem
+                enriched["source_file"] = file_basename
                 enriched["creation_iteration"] = state["current_iteration"]
                 enriched["created_at"] = timestamp()
                 destination = "current_proposals" if not state["proposal_cycle"]["current_pool_frozen"] else "next_proposals"
                 state[destination].append(enriched)
-                existing_ids.add(proposal_id)
+            existing_source_files.add(file_basename)
 
     if _ready_for_selection(state, load_handoff):
         state["next_action"] = "select experiment"

@@ -61,12 +61,15 @@ The orchestrator dispatches `skypilot-wandb-worker` for execution directives emi
   "best_metric_value": 0.934,
   "best_run_id": "wandb-run-abc",
   "best_run_url": "https://wandb.ai/entity/project/runs/wandb-run-abc",
+  "best_run_config": {"learning_rate": 0.001, "batch_size": 64, "hidden_dim": 256},
   "killed_runs": ["run-xyz"],
   "cumulative_spend_usd": 3.40
 }
 ```
 
 `sweep_status` values: `running`, `completed`, `failed`, `budget_exceeded`
+
+`best_run_config` contains the hyperparameter configuration of the best run (from WandB run config). The `metaopt-analysis-worker` can use this directly without fetching from WandB separately.
 
 ### `run_smoke_test`
 

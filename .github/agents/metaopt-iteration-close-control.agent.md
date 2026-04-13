@@ -126,14 +126,33 @@ Write handoff to: `.ml-metaopt/handoffs/metaopt-iteration-close-control-ROLL_ITE
 }
 ```
 
-**Stopping:**
+**Stopping (COMPLETE — target met, max iterations, or no-improvement plateau):**
+
 ```json
 {
   "recommended_next_machine_state": "COMPLETE",
-  "state_patch": { "...from Step 4..." },
+  "state_patch": {
+    "current_sweep": null,
+    "selected_sweep": null,
+    "next_action": "Campaign complete. <stop reason>. Best metric: <baseline.value>. See .ml-metaopt/final_report.md"
+  },
   "directive": { "type": "none" },
   "stop_reason": "<which condition triggered>",
   "summary": "Campaign complete after <N> iterations. Stop reason: <reason>. Best: <metric>=<value>"
+}
+```
+
+**Stopping (BLOCKED_CONFIG — budget exhausted):**
+
+```json
+{
+  "recommended_next_machine_state": "BLOCKED_CONFIG",
+  "state_patch": {
+    "next_action": "Budget cap exceeded: <amount> USD spent of <max> USD limit. Increase compute.max_budget_usd or reduce num_sweep_agents."
+  },
+  "directive": { "type": "none" },
+  "stop_reason": "budget_exhausted",
+  "summary": "Budget exhausted after <N> iterations. Total spend: $<amount> of $<max> cap."
 }
 ```
 

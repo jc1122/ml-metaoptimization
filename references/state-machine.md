@@ -25,7 +25,7 @@
 |----------|----------------|----------|
 | LOAD_CAMPAIGN | metaopt-load-campaign | single (validate) |
 | HYDRATE_STATE | metaopt-hydrate-state | single (hydrate) |
-| IDEATE, WAIT_FOR_PROPOSALS | metaopt-background-control | plan_ideation, gate_ideation |
+| IDEATE, WAIT_FOR_PROPOSALS | metaopt-background-control | plan_background_work, gate_background_work |
 | SELECT_AND_DESIGN_SWEEP | metaopt-select-design | plan_select_design, finalize_select_design |
 | LOCAL_SANITY | metaopt-remote-execution-control | single (gate_local_sanity) |
 | LAUNCH_SWEEP | metaopt-remote-execution-control | single (plan_launch) |
@@ -45,11 +45,11 @@ Governed by metaopt-hydrate-state. Initializes a fresh state file or resumes fro
 
 ### IDEATE
 
-Governed by metaopt-background-control (plan_ideation phase). Dispatches metaopt-ideation-worker background agents that produce WandB sweep search space proposals. Each proposal includes a WandB-formatted sweep config with parameter distributions and search method. Agents run until the proposal pool reaches proposal_policy.current_target.
+Governed by metaopt-background-control (plan_background_work phase). Dispatches metaopt-ideation-worker background agents that produce WandB sweep search space proposals. Each proposal includes a WandB-formatted sweep config with parameter distributions and search method. Agents run until the proposal pool reaches proposal_policy.current_target.
 
 ### WAIT_FOR_PROPOSALS
 
-Governed by metaopt-background-control (gate_ideation phase). Gate: checks whether current_proposals has reached proposal_policy.current_target. If not, stays in this state (returns to IDEATE on next reinvocation for more workers). If threshold met, advances to SELECT_AND_DESIGN_SWEEP.
+Governed by metaopt-background-control (gate_background_work phase). Gate: checks whether current_proposals has reached proposal_policy.current_target. If not, stays in this state (returns to IDEATE on next reinvocation for more workers). If threshold met, advances to SELECT_AND_DESIGN_SWEEP.
 
 ### SELECT_AND_DESIGN_SWEEP
 

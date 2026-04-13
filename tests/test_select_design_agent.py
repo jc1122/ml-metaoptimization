@@ -99,15 +99,13 @@ class SelectDesignAgentTests(unittest.TestCase):
 
     # ── plan_select_design ─────────────────────────────────────────────
 
-    def test_plan_select_design_emits_selection_worker_and_freezes_pool(self):
+    def test_plan_select_design_validates_proposals_and_freezes_pool(self):
         with tempfile.TemporaryDirectory() as td:
             state = _v4_state()
             payload, updated, _ = self._run(td, "plan_select_design", state=state)
             self.assertEqual(payload["recommended_next_machine_state"], "SELECT_AND_DESIGN_SWEEP")
-            self.assertEqual(len(payload["launch_requests"]), 1)
-            lr = payload["launch_requests"][0]
-            self.assertEqual(lr["worker_ref"], "metaopt-analysis-worker")
-            self.assertEqual(lr["model_class"], "strong_reasoner")
+            # No worker dispatch — selection is done inline by metaopt-select-design agent
+            self.assertEqual(len(payload["launch_requests"]), 0)
             self.assertTrue(updated["proposal_cycle"]["current_pool_frozen"])
 
     def test_plan_select_design_writes_task_file(self):
@@ -219,12 +217,12 @@ class SelectDesignAgentTests(unittest.TestCase):
             self.assertIn("control_agent", payload)
             self.assertIn("summary", payload)
 
-    def test_launch_request_includes_preferred_model(self):
+    def test_plan_select_design_no_worker_dispatch(self):
+        """plan_select_design should not dispatch any workers — selection is inline."""
         with tempfile.TemporaryDirectory() as td:
             state = _v4_state()
             payload, _, _ = self._run(td, "plan_select_design", state=state)
-            lr = payload["launch_requests"][0]
-            self.assertIn("preferred_model", lr)
+            self.assertEqual(payload["launch_requests"], [])
 
 
 if __name__ == "__main__":

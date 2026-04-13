@@ -137,6 +137,7 @@ def _gate_local_sanity(
 def _plan_launch(
     load_handoff: dict[str, Any],
     state_path: Path,
+    worker_results_dir: Path,
     output_path: Path,
 ) -> dict[str, Any]:
     state = read_json(state_path)
@@ -149,6 +150,42 @@ def _plan_launch(
     iteration = state["current_iteration"]
     result_file = f".ml-metaopt/worker-results/launch-sweep-iter-{iteration}.json"
 
+    # Re-entry: check if the launch result already exists
+    launch_result_path = worker_results_dir / f"launch-sweep-iter-{iteration}.json"
+    if launch_result_path.exists():
+        launch_result = read_json(launch_result_path)
+        if isinstance(launch_result, dict) and launch_result.get("error"):
+            state["next_action"] = f"sweep launch failed: {launch_result['error']}"
+            payload = {
+                "schema_version": 1,
+                "recommended_next_machine_state": "FAILED",
+                "warnings": [],
+                "summary": f"sweep launch failed: {launch_result['error']}",
+            }
+            persist_state_handoff(state_path, previous_state, state, payload, control_agent=_CONTROL_AGENT)
+            return emit_handoff(output_path, payload, handoff_type=_PLAN_LAUNCH_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
+
+        if isinstance(launch_result, dict) and launch_result.get("sweep_id"):
+            state["current_sweep"] = {
+                "sweep_id": launch_result["sweep_id"],
+                "sweep_url": launch_result.get("sweep_url"),
+                "sky_job_ids": launch_result.get("sky_job_ids", []),
+                "launched_at": launch_result.get("launched_at"),
+                "cumulative_spend_usd": 0.0,
+                "best_run_id": None,
+                "best_metric_value": None,
+            }
+            state["next_action"] = "poll sweep status"
+            payload = {
+                "schema_version": 1,
+                "recommended_next_machine_state": "WAIT_FOR_SWEEP",
+                "warnings": [],
+                "summary": f"launch result found; sweep {launch_result['sweep_id']} is active",
+            }
+            persist_state_handoff(state_path, previous_state, state, payload, control_agent=_CONTROL_AGENT)
+            return emit_handoff(output_path, payload, handoff_type=_PLAN_LAUNCH_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
+
+    # First entry: emit launch_sweep directive
     compute = load_handoff.get("compute", {})
     sky_task_spec = {
         "provider": compute.get("provider", "vast_ai"),
@@ -291,6 +328,30 @@ def _analyze(
     if not analysis_result_path.exists():
         task_file = f".ml-metaopt/tasks/sweep-analysis-iter-{iteration}.md"
         result_file = f".ml-metaopt/worker-results/{analysis_result_file}"
+
+        current_sweep = state.get("current_sweep") or {}
+        objective = state.get("objective_snapshot", {})
+        task_content = (
+            f"# Sweep Analysis Task — Iteration {iteration}\n"
+            f"\n"
+            f"## Sweep Result\n"
+            f"- sweep_id: {current_sweep.get('sweep_id')}\n"
+            f"- best_run_id: {current_sweep.get('best_run_id')}\n"
+            f"- best_run_url: {current_sweep.get('best_run_url', '')}\n"
+            f"- best_metric_value: {current_sweep.get('best_metric_value')}\n"
+            f"- objective_metric: {objective.get('metric')}\n"
+            f"- objective_direction: {objective.get('direction')}\n"
+            f"- improvement_threshold: {objective.get('improvement_threshold')}\n"
+            f"- baseline: {json.dumps(state.get('baseline'))}\n"
+            f"- key_learnings_so_far: {json.dumps(state.get('key_learnings', []))}\n"
+            f"\n"
+            f"## Output\n"
+            f"Write result to: {result_file}\n"
+        )
+        task_path = Path(task_file)
+        (tasks_dir / task_path.name).parent.mkdir(parents=True, exist_ok=True)
+        (tasks_dir / task_path.name).write_text(task_content, encoding="utf-8")
+
         state["next_action"] = "run sweep results analysis"
         payload = {
             "schema_version": 1,
@@ -375,7 +436,7 @@ def main() -> int:
     if args.mode == "gate_local_sanity":
         payload = _gate_local_sanity(load_handoff, state_path, Path(args.executor_events_dir), Path(args.output))
     elif args.mode == "plan_launch":
-        payload = _plan_launch(load_handoff, state_path, Path(args.output))
+        payload = _plan_launch(load_handoff, state_path, Path(args.worker_results_dir), Path(args.output))
     elif args.mode == "poll_sweep":
         payload = _poll_sweep(load_handoff, state_path, Path(args.executor_events_dir), Path(args.output))
     else:

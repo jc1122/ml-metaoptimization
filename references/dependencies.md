@@ -22,6 +22,8 @@ WandB access must be configured:
 
 The `skypilot-wandb-worker` custom agent must be available in the runtime. Verified during `HYDRATE_STATE`. If missing, transition to `BLOCKED_CONFIG` with `next_action = "install missing agent: skypilot-wandb-worker"`.
 
+Worker availability is checked by verifying that the agent definition file exists at `.github/agents/skypilot-wandb-worker.agent.md` in the project. The `HYDRATE_STATE` script probes this path (via the skills manifest) and blocks if the file is not found.
+
 ### Project Repository Access
 
 - `project.repo` must be accessible (SSH key or HTTPS credentials for the git URL)

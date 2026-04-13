@@ -52,6 +52,8 @@ The campaign was interrupted mid-sweep. Emit a `poll_sweep` directive so the orc
   "payload": {
     "sweep_id": "<state.current_sweep.sweep_id>",
     "sky_job_ids": "<state.current_sweep.sky_job_ids>",
+    "wandb_entity": "<wandb.entity from campaign YAML>",
+    "wandb_project": "<wandb.project from campaign YAML>",
     "idle_timeout_minutes": "<compute.idle_timeout_minutes from campaign YAML>",
     "max_budget_usd": "<compute.max_budget_usd from campaign YAML>",
     "cumulative_spend_usd_so_far": "<state.current_sweep.cumulative_spend_usd>",

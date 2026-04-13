@@ -5,6 +5,7 @@ model: claude-sonnet-4
 tools:
   - read
   - search
+  - execute
 user-invocable: false
 ---
 
@@ -93,4 +94,4 @@ Write handoff to: `.ml-metaopt/handoffs/metaopt-select-design-SELECT_DESIGN.json
 - Do NOT dispatch workers or emit execution directives. The next state (LAUNCH_SWEEP) handles execution.
 - Do NOT modify any proposal's `proposal_id` — preserve the original ID in `selected_sweep`.
 - If all proposals are poor quality (contradicted by learnings, duplicate of completed iterations), still select the least-bad one and note concerns in `selection_rationale`. The campaign must advance.
-- This is a SINGLE-PHASE agent. There is no separate gate or finalize step.
+- This is a SINGLE-AGENT step. The agent performs both selection and design in one invocation. There is no separate worker dispatch — the agent runs inline and writes its handoff directly. The script's `finalize_select_design` mode subsequently reads the agent's output and validates/freezes it into state.

@@ -220,8 +220,13 @@ def _gate_roll_iteration(load_handoff: dict[str, Any], state_path: Path, worker_
         state["next_action"] = "maintain background pool"
         next_state = "IDEATE"
     elif stop_reason == "budget_exhausted":
-        state["next_action"] = "budget cap reached"
-        next_state = "COMPLETE"
+        max_budget = load_handoff.get("compute", {}).get("max_budget_usd", "?")
+        total_spend = sum(
+            entry.get("spend_usd", 0.0)
+            for entry in state.get("completed_iterations", [])
+        )
+        state["next_action"] = f"Budget cap exceeded: {total_spend} USD spent of {max_budget} USD limit. Increase compute.max_budget_usd or reduce num_sweep_agents."
+        next_state = "BLOCKED_CONFIG"
     else:
         state["next_action"] = "emit final report and remove orchestration hook"
         next_state = "COMPLETE"

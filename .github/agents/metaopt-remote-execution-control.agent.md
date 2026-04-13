@@ -236,6 +236,26 @@ Note: `state_patch` for `current_sweep` must include ALL fields (the orchestrato
   }
   ```
 
+- **`sweep_status == "error"` or `result.error` present** (worker-level error):
+  ```json
+  {
+    "recommended_next_machine_state": "FAILED",
+    "state_patch": {
+      "current_sweep": {
+        "sweep_id": "<preserve from state>",
+        "sweep_url": "<preserve from state>",
+        "sky_job_ids": ["<preserve from state>"],
+        "launched_at": "<preserve from state>",
+        "cumulative_spend_usd": "<preserve from state>",
+        "best_run_id": "<preserve from state>",
+        "best_metric_value": "<preserve from state>"
+      },
+      "next_action": "Sweep worker error: <error details from result>"
+    },
+    "directive": { "type": "none" }
+  }
+  ```
+
 ## Phase: ANALYZE
 
 ### When invoked in machine_state == ANALYZE:
@@ -274,7 +294,18 @@ Emit handoff:
 
 **Step 2 (re-invocation after analysis completes):** Read `.ml-metaopt/worker-results/analysis-iter-<N>.json`:
 
-Build state_patch based on analysis result:
+If the result contains an `error` field → transition to FAILED:
+```json
+{
+  "recommended_next_machine_state": "FAILED",
+  "state_patch": {
+    "next_action": "Analysis worker error: <error details from result>"
+  },
+  "directive": { "type": "none" }
+}
+```
+
+Otherwise, build state_patch based on analysis result:
 
 ```json
 {

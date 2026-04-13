@@ -170,24 +170,14 @@ def _plan_select_design(
     task_path.write_text(_selection_task_markdown(load_handoff, state, result_file), encoding="utf-8")
 
     state["proposal_cycle"]["current_pool_frozen"] = True
-    state["next_action"] = "run selection worker"
+    state["next_action"] = "invoke metaopt-select-design agent"
 
     payload = {
         "schema_version": 1,
         "proposal_id": None,
         "recommended_next_machine_state": "SELECT_AND_DESIGN_SWEEP",
-        "launch_requests": [
-            {
-                "slot_class": "auxiliary",
-                "mode": "analysis",
-                "worker_ref": "metaopt-analysis-worker",
-                "model_class": "strong_reasoner",
-                "task_file": task_file,
-                "result_file": result_file,
-            },
-        ],
         "warnings": [],
-        "summary": "selection worker is ready to choose one proposal from the frozen pool",
+        "summary": "proposals validated and pool frozen; invoke metaopt-select-design for inline selection and design",
     }
     persist_state_handoff(state_path, previous_state, state, payload, control_agent=_CONTROL_AGENT)
     return emit_handoff(output_path, payload, handoff_type=_PLAN_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)

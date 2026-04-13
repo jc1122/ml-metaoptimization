@@ -30,7 +30,7 @@ For worker lane contracts (inputs, outputs, drift rules), see references/worker-
 
 ## IDEATE
 
-**Governing agent:** metaopt-background-control (plan_ideation phase)
+**Governing agent:** metaopt-background-control (plan_background_work phase)
 
 **Dispatch:** Background workers via launch_requests from the handoff.
 
@@ -49,7 +49,7 @@ For worker lane contracts (inputs, outputs, drift rules), see references/worker-
 
 ## WAIT_FOR_PROPOSALS
 
-**Governing agent:** metaopt-background-control (gate_ideation phase)
+**Governing agent:** metaopt-background-control (gate_background_work phase)
 
 **Dispatch:** No new dispatch. Gate check only.
 
@@ -64,16 +64,19 @@ For worker lane contracts (inputs, outputs, drift rules), see references/worker-
 
 **Governing agent:** metaopt-select-design
 
-**Dispatch:** Inline subagent. No worker slot.
+**Dispatch:** Inline subagent. No worker slot. One agent invocation performs both selection and design.
+
+**Worker:** None — the `metaopt-select-design` agent selects the best proposal inline and refines it into a WandB sweep config. There is no intermediate worker dispatch.
 
 **Orchestrator action:**
 1. Invoke metaopt-select-design as subagent
-2. Read handoff -- contains selected_sweep in state_patch and sweep config
-3. Execute directive (typically none)
-4. Apply state_patch (sets selected_sweep, freezes proposal_cycle.current_pool_frozen = true)
-5. Transition to LOCAL_SANITY
+2. The agent reads `current_proposals`, scores them, selects the best, and refines the sweep config
+3. Read handoff -- contains selected_sweep in state_patch and sweep config
+4. Script's `finalize_select_design` mode validates the agent's output and freezes it
+5. Apply state_patch (sets selected_sweep, freezes proposal_cycle.current_pool_frozen = true)
+6. Transition to LOCAL_SANITY
 
-**Note:** Selection and design are combined into one agent, one step. No separate selection worker or design worker slot.
+**Note:** Selection and design are combined into one agent, one step. No separate selection worker or design worker slot. No intermediate worker dispatch.
 
 ## LOCAL_SANITY
 

@@ -132,6 +132,21 @@ Schema:
 | `directive.payload` | object | Action-specific fields (see `references/backend-contract.md` for execution directives) |
 | `launch_requests` | list[WorkerLaunchRequest] | Optional; workers to dispatch. Each entry: `{ "skill": "<worker_ref>", "payload": { ... }, "result_file": "<path>" }` |
 
+### `WorkerLaunchRequest` object
+
+Each entry in `launch_requests`:
+
+| Field | Type | Constraint |
+|-------|------|------------|
+| `skill` / `worker_ref` | string | The worker skill name (e.g. `"metaopt-ideation-worker"`, `"metaopt-analysis-worker"`) |
+| `payload` | object | Worker-specific input payload; contents vary by worker |
+| `result_file` | string | Path where the worker writes its output JSON (must be under `.ml-metaopt/worker-results/`) |
+| `slot_class` | string | Optional; `"background"` or `"auxiliary"` — determines concurrency policy |
+| `mode` | string | Optional; must be present if `slot_class` is present (e.g. `"ideation"`, `"analysis"`) |
+| `model_class` | string | Required; model tier for the worker (e.g. `"general_worker"`, `"strong_reasoner"`) |
+| `task_file` | string | Required; path to the task description file the worker should read |
+| `preferred_model` | string | Auto-injected by `normalize_launch_requests`; resolved from `model_class` |
+
 ## Section 3 — Worker Result File Schema
 
 All worker and directive results are written to:

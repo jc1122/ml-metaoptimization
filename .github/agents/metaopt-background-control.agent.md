@@ -64,8 +64,7 @@ Include `launch_requests` in the handoff for the orchestrator to dispatch `metao
 {
   "launch_requests": [
     {
-      "skill": "metaopt-ideation-worker",
-      "payload": {},
+      "worker_ref": "metaopt-ideation-worker",
       "result_file": ".ml-metaopt/worker-results/ideation-iter-<N>-<i>.json",
       "slot_class": "background",
       "mode": "ideation",
@@ -75,6 +74,8 @@ Include `launch_requests` in the handoff for the orchestrator to dispatch `metao
   ]
 }
 ```
+
+Note: the field is `worker_ref` (not `skill`). The `payload` field is not used for slot-based workers — the task file contains all context.
 
 ### Step 5: Write plan handoff
 
@@ -99,12 +100,13 @@ Scan `.ml-metaopt/worker-results/ideation-iter-<current_iteration>-*.json` for r
 ### Step 2: Validate each result
 
 For each result file, check:
-1. Has required fields: `proposal_id`, `rationale`, `sweep_config`
-2. `sweep_config` has `method`, `metric`, `parameters`
-3. `sweep_config.metric.name` matches `objective_snapshot.metric`
-4. `sweep_config.metric.goal` matches the objective direction (`"maximize"` or `"minimize"`)
-5. `sweep_config.parameters` has at least 1 parameter
-6. Each parameter uses a valid WandB distribution type: `values`, `uniform`, `log_uniform_values`, `int_uniform`, `normal`, `log_normal`, `categorical`, `constant`
+1. `status` field equals `"completed"` (exact string match — silently drop results that omit it or use a different value)
+2. Has required fields: `proposal_id`, `rationale`, `sweep_config`
+3. `sweep_config` has `method`, `metric`, `parameters`
+4. `sweep_config.metric.name` matches `objective_snapshot.metric`
+5. `sweep_config.metric.goal` matches the objective direction (`"maximize"` or `"minimize"`)
+6. `sweep_config.parameters` has at least 2 parameters (single-parameter sweeps waste GPU budget and will be rejected at selection)
+7. Each parameter uses a valid WandB distribution type: `values`, `uniform`, `log_uniform_values`, `int_uniform`, `normal`, `log_normal`, `categorical`, `constant`
 
 ### Step 3: Lane drift detection
 

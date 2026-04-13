@@ -72,6 +72,7 @@ Take the winning proposal's `sweep_config` and refine it for launch:
       }
     },
     "proposal_cycle": {
+      "cycle_id": "<preserve existing cycle_id>",
       "current_pool_frozen": true
     }
   },

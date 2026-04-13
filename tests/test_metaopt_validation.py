@@ -290,7 +290,7 @@ class MetaoptValidationTests(unittest.TestCase):
         _require_pattern(
             self,
             machine,
-            r"COMPLETE.*remove_agents_hook.*delete_state_file.*emit_final_report",
+            r"COMPLETE.*remove_agents_hook.*emit_final_report",
         )
 
     def test_contracts_define_slot_model_and_iteration_reporting(self) -> None:
@@ -988,7 +988,6 @@ class MetaoptValidationTests(unittest.TestCase):
         """state-machine.md terminal states must document explicit cleanup directives."""
         state_machine = _read_text("references/state-machine.md")
         self.assertIn("remove_agents_hook", state_machine)
-        self.assertIn("delete_state_file", state_machine)
         self.assertIn("emit_final_report", state_machine)
 
     def test_control_agent_manifests_reference_control_protocol(self) -> None:

@@ -13,9 +13,9 @@ user-invocable: false
 
 ## Purpose
 
-You are the ROLL_ITERATION agent for the `ml-metaoptimization` v4 orchestrator. You perform all iteration-close logic in a single phase: filter and carry forward proposals, increment the iteration counter, reset sweep state, check all stop conditions, emit an iteration report, and decide whether to continue (→ IDEATE) or stop (→ COMPLETE/BLOCKED_CONFIG).
+You are the ROLL_ITERATION agent for the `ml-metaoptimization` v4 orchestrator. You perform iteration-close logic in two phases (`plan_roll_iteration` then `gate_roll_iteration`): compute proposal rollover inline, filter and carry forward proposals, increment the iteration counter, reset sweep state, check all stop conditions, emit an iteration report, and decide whether to continue (→ IDEATE) or stop (→ COMPLETE/BLOCKED_CONFIG).
 
-In v4, this agent absorbs the work previously done by a separate `metaopt-rollover-worker`. There is no separate dispatch — you do the filtering inline.
+In v4, this agent absorbs the work previously done by a separate `metaopt-rollover-worker`. There is no separate dispatch — rollover filtering is computed inline during `plan_roll_iteration`, then gated in `gate_roll_iteration`.
 
 ## Inputs
 
@@ -24,20 +24,23 @@ In v4, this agent absorbs the work previously done by a separate `metaopt-rollov
 
 ## Steps
 
-### Step 1: Filter next_proposals
+### Step 1: Compute rollover inline (`plan_roll_iteration`)
 
-Read `state.next_proposals`. For each proposal, check:
+Read `state.next_proposals`. Apply **mechanical filtering**: drop any proposal whose `proposal_id` already appears in `completed_iterations[].proposal_id`. All remaining proposals are carried forward.
 
-1. **Duplicate of completed iteration**: compare the proposal's `sweep_config.parameters` against `completed_iterations[].sweep_config.parameters`. If the parameter names and distributions are substantially similar (same parameters, overlapping ranges covering > 80% of the same space), discard it with reason "duplicate of iteration <N>".
+This produces a rollover result file (`rollover-iter-<N>.json`) containing:
+- `filtered_proposals` — list of proposal IDs that were dropped (already executed)
+- `merged_proposals` — list of proposal dicts that passed filtering
+- `needs_fresh_ideation` — `true` if `len(merged) < proposal_policy.current_target`
+- `summary` — human-readable description
 
-2. **Contradicts key_learnings**: check if the proposal's search space contradicts any learning. For example, if a learning says "lr > 0.01 causes divergence" but the proposal has `lr.max = 0.1`, discard it with reason "contradicts learning: <learning>".
+> **Note:** Semantic filtering (e.g. contradiction against `key_learnings` or parameter-space similarity) is not performed by the script. If needed, the agent layer may add semantic checks before gating.
 
-Keep proposals that pass both checks.
+### Step 2: Gate rollover and carry proposals forward (`gate_roll_iteration`)
 
-### Step 2: Carry proposals forward
-
-Build the new `current_proposals` list:
-- Start with the filtered `next_proposals` from Step 1.
+Read the rollover result file. Build the new `current_proposals` list:
+- Start with `filtered_proposals` from the rollover result.
+- Enrich each `merged_proposals` entry with a new `proposal_id` (sequenced from the campaign), `source_slot_id: "rollover"`, `creation_iteration`, and `created_at` timestamp, then append to `current_proposals`.
 - Clear `next_proposals` to `[]`.
 
 ### Step 3: Check stop conditions
@@ -70,8 +73,9 @@ If NO stop condition is met → continue to next iteration.
   "current_iteration": "<current_iteration + 1>",
   "current_sweep": null,
   "selected_sweep": null,
-  "current_proposals": "<filtered next_proposals from Step 2>",
+  "current_proposals": "<carried proposals from Step 2>",
   "next_proposals": [],
+  "next_action": "maintain background pool",
   "proposal_cycle": {
     "cycle_id": "iter-<current_iteration + 1>-cycle-1",
     "current_pool_frozen": false
@@ -85,7 +89,7 @@ If NO stop condition is met → continue to next iteration.
 {
   "current_sweep": null,
   "selected_sweep": null,
-  "next_action": "Campaign complete. <stop reason>. Best metric: <baseline.value>. See .ml-metaopt/final_report.md"
+  "next_action": "emit final report and remove orchestration hook"
 }
 ```
 
@@ -119,6 +123,7 @@ Build the `directives` array (an ordered list of cleanup actions for the orchest
 
 **If stopping (BLOCKED_CONFIG — budget exhausted), also emit:**
 - `remove_agents_hook` (same as above)
+- `emit_final_report` (same as above)
 
 ## Output
 
@@ -127,13 +132,17 @@ Write handoff to: `.ml-metaopt/handoffs/metaopt-iteration-close-control-ROLL_ITE
 **Continuing:**
 ```json
 {
+  "schema_version": 1,
+  "continue_campaign": true,
   "recommended_next_machine_state": "IDEATE",
+  "stop_reason": "",
   "state_patch": { "...from Step 4..." },
   "directives": [
     { "action": "emit_iteration_report", "report_type": "iteration", "iteration": "<N>" }
   ],
-  "summary": "Iteration <N> complete. Improved: <yes/no>. Continuing to iteration <N+1>.",
-  "filtered_proposals": { "kept": "<count>", "discarded": "<count>", "discard_reasons": ["..."] }
+  "iteration_report": "=== Iteration <N> Report ===\n...",
+  "warnings": [],
+  "summary": "rollover semantics applied"
 }
 ```
 
@@ -141,19 +150,23 @@ Write handoff to: `.ml-metaopt/handoffs/metaopt-iteration-close-control-ROLL_ITE
 
 ```json
 {
+  "schema_version": 1,
+  "continue_campaign": false,
   "recommended_next_machine_state": "COMPLETE",
+  "stop_reason": "<which condition triggered>",
   "state_patch": {
     "current_sweep": null,
     "selected_sweep": null,
-    "next_action": "Campaign complete. <stop reason>. Best metric: <baseline.value>. See .ml-metaopt/final_report.md"
+    "next_action": "emit final report and remove orchestration hook"
   },
   "directives": [
     { "action": "emit_iteration_report", "report_type": "iteration", "iteration": "<N>" },
     { "action": "remove_agents_hook", "agents_path": "AGENTS.md" },
     { "action": "emit_final_report", "report_type": "final" }
   ],
-  "stop_reason": "<which condition triggered>",
-  "summary": "Campaign complete after <N> iterations. Stop reason: <reason>. Best: <metric>=<value>"
+  "iteration_report": "=== Iteration <N> Report ===\n...",
+  "warnings": [],
+  "summary": "rollover semantics applied"
 }
 ```
 
@@ -161,16 +174,21 @@ Write handoff to: `.ml-metaopt/handoffs/metaopt-iteration-close-control-ROLL_ITE
 
 ```json
 {
+  "schema_version": 1,
+  "continue_campaign": false,
   "recommended_next_machine_state": "BLOCKED_CONFIG",
+  "stop_reason": "budget_exhausted",
   "state_patch": {
     "next_action": "Budget cap exceeded: <amount> USD spent of <max> USD limit. Increase compute.max_budget_usd or reduce num_sweep_agents."
   },
   "directives": [
     { "action": "emit_iteration_report", "report_type": "iteration", "iteration": "<N>" },
-    { "action": "remove_agents_hook", "agents_path": "AGENTS.md" }
+    { "action": "remove_agents_hook", "agents_path": "AGENTS.md" },
+    { "action": "emit_final_report", "report_type": "final" }
   ],
-  "stop_reason": "budget_exhausted",
-  "summary": "Budget exhausted after <N> iterations. Total spend: $<amount> of $<max> cap."
+  "iteration_report": "=== Iteration <N> Report ===\n...",
+  "warnings": [],
+  "summary": "rollover semantics applied"
 }
 ```
 

@@ -31,7 +31,7 @@
 | LAUNCH_SWEEP | metaopt-remote-execution-control | single (plan_launch) |
 | WAIT_FOR_SWEEP | metaopt-remote-execution-control | poll (loops until non-null transition) |
 | ANALYZE | metaopt-remote-execution-control | single (analyze) |
-| ROLL_ITERATION | metaopt-iteration-close-control | single (roll) |
+| ROLL_ITERATION | metaopt-iteration-close-control | plan_roll_iteration, gate_roll_iteration |
 
 ## State Semantics
 
@@ -41,7 +41,7 @@ Governed by metaopt-load-campaign. Validates campaign YAML against the schema in
 
 ### HYDRATE_STATE
 
-Governed by metaopt-hydrate-state. Initializes a fresh state file or resumes from an existing one. If state.current_sweep.sweep_id exists (crash recovery), reconnects to that WandB sweep rather than launching a new one. Verifies skypilot-wandb-worker availability. Creates the AGENTS.md resume hook if absent.
+Governed by metaopt-hydrate-state. Initializes a fresh state file or resumes from an existing one. If state.current_sweep.sweep_id exists (crash recovery), sets recommended_next_machine_state to WAIT_FOR_SWEEP to reconnect to that WandB sweep rather than launching a new one. Verifies worker availability via the skills manifest. Creates the AGENTS.md resume hook if absent.
 
 ### IDEATE
 
@@ -73,7 +73,7 @@ Governed by metaopt-remote-execution-control (analyze phase). Dispatches metaopt
 
 ### ROLL_ITERATION
 
-Governed by metaopt-iteration-close-control (roll phase). Filters next_proposals for the next iteration, increments current_iteration, checks all stop conditions, resets current_sweep and selected_sweep to null, and emits an iteration report. Transitions to COMPLETE if a stop condition is met, or back to IDEATE for the next iteration.
+Governed by metaopt-iteration-close-control (plan_roll_iteration, gate_roll_iteration phases). Computes proposal rollover inline during plan, then gates the result: filters next_proposals by proposal_id against completed_iterations, enriches merged proposals, increments current_iteration, checks all stop conditions, resets current_sweep and selected_sweep to null, and emits an iteration report. Transitions to COMPLETE if a stop condition is met, to BLOCKED_CONFIG if budget is exhausted, or back to IDEATE for the next iteration.
 
 ## Stop Conditions
 
@@ -84,7 +84,7 @@ Checked by metaopt-iteration-close-control during ROLL_ITERATION:
 | Target metric reached | Direction-aware: >= target_metric (maximize) or <= target_metric (minimize) | COMPLETE |
 | Max iterations reached | current_iteration >= stop_conditions.max_iterations | COMPLETE |
 | No improvement plateau | no_improve_iterations >= stop_conditions.max_no_improve_iterations | COMPLETE |
-| Budget exhausted | current_sweep.cumulative_spend_usd >= compute.max_budget_usd | BLOCKED_CONFIG |
+| Budget exhausted | sum(completed_iterations[].spend_usd) >= compute.max_budget_usd | BLOCKED_CONFIG |
 
 ## Terminal State Cleanup
 
@@ -92,12 +92,12 @@ When transitioning to a terminal state, the governing control agent emits cleanu
 
 | Terminal State | Required Directives |
 |---------------|-------------------|
-| COMPLETE | remove_agents_hook, delete_state_file, emit_final_report |
-| BLOCKED_CONFIG | remove_agents_hook |
+| COMPLETE | remove_agents_hook, emit_final_report |
+| BLOCKED_CONFIG | remove_agents_hook, emit_final_report |
 | BLOCKED_PROTOCOL | remove_agents_hook |
 | FAILED | remove_agents_hook |
 
-All terminal states preserve state (except COMPLETE which deletes it after emitting the final report). All terminal states remove the AGENTS.md hook to prevent infinite re-invocation loops.
+All terminal states remove the AGENTS.md hook to prevent infinite re-invocation loops. COMPLETE and BLOCKED_CONFIG also emit a final report.
 
 ## State Transition Diagram
 
@@ -105,9 +105,10 @@ All terminal states preserve state (except COMPLETE which deletes it after emitt
       -> BLOCKED_CONFIG (invalid config or missing preflight)
       -> HYDRATE_STATE (campaign valid)
     HYDRATE_STATE
-      -> IDEATE (fresh or resumed)
-      -> BLOCKED_PROTOCOL (prior state protocol violation)
-      -> BLOCKED_CONFIG (missing worker target)
+      -> IDEATE (fresh init)
+      -> WAIT_FOR_SWEEP (crash recovery with active sweep)
+      -> BLOCKED_CONFIG (identity mismatch or missing required skill)
+      -> <resumed machine_state> (resume from prior state)
     IDEATE
       -> WAIT_FOR_PROPOSALS
     WAIT_FOR_PROPOSALS

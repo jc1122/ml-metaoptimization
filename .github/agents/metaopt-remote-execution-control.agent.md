@@ -269,12 +269,15 @@ Note: `state_patch` for `current_sweep` must include ALL fields (the orchestrato
 
 **Step 1:** Emit `launch_requests` for `metaopt-analysis-worker`:
 
-Write a task file to `.ml-metaopt/tasks/analysis-iter-<current_iteration>.json`:
+Write a task file to `.ml-metaopt/tasks/analysis-iter-<current_iteration>.json`. Forward the best run data from `state.current_sweep` and the poll result event (`.ml-metaopt/executor-events/poll-sweep-iter-<current_iteration>.json`):
 ```json
 {
   "task_type": "analysis",
   "result_file": ".ml-metaopt/worker-results/analysis-iter-<current_iteration>.json",
   "best_run_id": "<state.current_sweep.best_run_id>",
+  "best_metric_value": "<state.current_sweep.best_metric_value>",
+  "best_run_url": "<state.current_sweep.best_run_url>",
+  "best_run_config": "<from poll result event best_run_config>",
   "sweep_url": "<state.current_sweep.sweep_url>",
   "wandb_entity": "<wandb.entity>",
   "wandb_project": "<wandb.project>",
@@ -292,7 +295,12 @@ Emit handoff:
   "directive": { "type": "none" },
   "launch_requests": [
     {
-      "agent": "metaopt-analysis-worker",
+      "skill": "metaopt-analysis-worker",
+      "payload": {},
+      "result_file": ".ml-metaopt/worker-results/analysis-iter-<current_iteration>.json",
+      "slot_class": "auxiliary",
+      "mode": "analysis",
+      "model_class": "strong_reasoner",
       "task_file": ".ml-metaopt/tasks/analysis-iter-<current_iteration>.json"
     }
   ]

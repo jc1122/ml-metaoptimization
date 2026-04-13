@@ -2,128 +2,112 @@
 
 ## Purpose
 
-The skill interacts with remote execution **only** through this queue-based contract. The backend owns cluster verification, sync, submission, retries, result collection, and utilization management.
+All remote execution goes through `skypilot-wandb-worker`. The skill never calls SkyPilot or WandB APIs directly — only the worker does.
 
-**Execution ownership:** `metaopt-remote-execution-control` decides what queue operations are needed and emits them as `queue_op` executor directives. The orchestrator executes those directives by dispatching `@hetzner-delegation-worker` (which invokes the `hetzner-delegation` skill internally) and writes the worker's JSON result to `.ml-metaopt/queue-results/<op>-<batch_id>.json`. The control agent reads the result file in its subsequent gate or analyze phase. The orchestrator never calls queue commands directly — it only writes manifest files (via `write_manifest`), dispatches the worker (via `queue_op`), and applies state patches returned by the control agent.
+The orchestrator dispatches `skypilot-wandb-worker` for execution directives emitted by control agents. The worker executes the operation, writes its result to `.ml-metaopt/worker-results/<name>.json`, and exits. The control agent reads the result file in its subsequent phase.
 
-**Queue-only rule:** The skill must never execute raw SSH commands, Ray cluster operations, `kubectl exec`, or any direct cluster interaction. All remote execution flows through the three declared queue commands below, dispatched by the orchestrator via `@hetzner-delegation-worker`. Any attempt to bypass this contract — whether by the orchestrator constructing ad-hoc remote commands or by a control agent emitting raw-cluster executor directives — is a protocol breach and must be rejected. If a control agent emits an executor directive with a blocked action (e.g. `ssh_command`, `raw_ssh`, `shell_exec`, `kubectl_exec`), the guardrail validators reject it before execution. No raw SSH, Ray CLI, or direct cluster probing is permitted from within this skill.
+## Operations
 
-Forbidden fallback examples include `ray job submit`, `ray start`, `ray stop`, `scp`, `rsync`, and cloud-console or cloud-CLI lifecycle detours such as `hcloud`. If the queue backend cannot represent the needed next step, the orchestrator must fail closed to `BLOCKED_PROTOCOL` or route through the diagnosis lane; it must never invent a direct-per-node execution path.
+### `launch_sweep`
 
-## Required Backend Commands
+**Directive type:** `launch_sweep`
 
-Declared in `ml_metaopt_campaign.yaml` under `remote_queue`:
-- `enqueue_command`
-- `status_command`
-- `results_command`
+**Input payload:**
+- `sweep_config` — valid WandB sweep config object (`method`, `metric`, `parameters`)
+- `wandb_entity` — WandB entity name
+- `wandb_project` — WandB project name
+- `repo` — target project git URL
+- `accelerator` — compute spec (e.g. `A100:1`)
+- `num_sweep_agents` — number of parallel WandB agents to launch (1–16)
+- `idle_timeout_minutes` — SkyPilot autostop timeout (5–60)
 
-`metaopt-remote-execution-control` emits `queue_op` directives referencing only these commands. The orchestrator dispatches `@hetzner-delegation-worker` to execute them. No other component may invoke these commands.
+**Worker execution:**
+1. Call WandB API: `wandb.sweep(sweep_config, project=wandb_project, entity=wandb_entity)` — returns `sweep_id`
+2. For each of `num_sweep_agents` agents: `sky launch --idle-minutes-to-autostop <idle_timeout_minutes>` running `wandb agent <entity>/<project>/<sweep_id>`
+3. If any `sky launch` fails after sweep creation, cancel the sweep via WandB API before returning an error (atomic guarantee)
 
-These fields are shell command strings, not argv arrays. The backend command contract assumes shell execution semantics, including normal shell path expansion.
-The orchestrator appends one shell-escaped value after the command string declared in the campaign file.
-The command string must include the flag name so the final invocation is valid:
-- `enqueue_command --manifest <manifest_path>` → e.g. `python3 enqueue_batch.py --manifest /path/manifest.json`
-- `status_command --batch-id <batch_id>` → e.g. `python3 get_batch_status.py --batch-id batch-001`
-- `results_command --batch-id <batch_id>` → e.g. `python3 fetch_batch_results.py --batch-id batch-001`
+**Result file:** `.ml-metaopt/worker-results/launch-sweep.json`
 
-The current `ray-hetzner` implementation uses `--manifest` and `--batch-id` named flags. The campaign example includes these flags in the command strings accordingly.
+```json
+{
+  "sweep_id": "abc123",
+  "sweep_url": "https://wandb.ai/entity/project/sweeps/abc123",
+  "sky_job_ids": ["sky-job-1", "sky-job-2", "sky-job-3", "sky-job-4"],
+  "launched_at": "2026-04-13T11:00:00Z"
+}
+```
 
-All three commands must write exactly one stdout JSON object on success and exit non-zero on failure.
+### `poll_sweep`
 
-## Enqueue Contract
+**Directive type:** `poll_sweep`
 
-Input:
-- exactly one immutable batch manifest
+**Input payload:**
+- `sweep_id` — WandB sweep to poll
+- `sky_job_ids` — SkyPilot job identifiers to monitor
+- `idle_timeout_minutes` — threshold for hung agent detection
+- `max_budget_usd` — hard spend cap
+- `cumulative_spend_usd` — spend so far (from state)
 
-Output:
-- stdout JSON object with:
-  - `batch_id`
-  - `queue_ref`
-  - `status`
+**Worker execution:**
+1. Query WandB API for sweep status and best run metric value
+2. For each active run: check `last_log_at` timestamp. If `now - last_log_at > idle_timeout_minutes`, call `sky down <job_id>` and mark the run as crashed via WandB API
+3. Query SkyPilot for cumulative cost estimate. If `cumulative_spend_usd >= max_budget_usd`, kill all remaining jobs via `sky down`, return `budget_exceeded` status
 
-Required behavior:
-- register the batch
-- echo the manifest `batch_id` exactly as provided by the orchestrator
-- return a stable `queue_ref`
-- set `status = "queued"`
-- make queued status observable
+**Result file:** `.ml-metaopt/worker-results/poll-sweep.json`
 
-## Status Contract
+```json
+{
+  "sweep_status": "running",
+  "best_metric_value": 0.934,
+  "best_run_id": "wandb-run-abc",
+  "best_run_url": "https://wandb.ai/entity/project/runs/wandb-run-abc",
+  "killed_runs": ["run-xyz"],
+  "cumulative_spend_usd": 3.40
+}
+```
 
-Input:
-- exactly one `batch_id`
+`sweep_status` values: `running`, `completed`, `failed`, `budget_exceeded`
 
-The backend must expose a stdout JSON object with:
-- `batch_id`
-- lifecycle `status`
-- `timestamps`
-- utilization when available
-- failure classification when failed
-- result pointers when completed
+### `run_smoke_test`
 
-Accepted lifecycle states:
-- `queued`
-- `running`
-- `completed`
-- `failed`
+**Directive type:** `run_smoke_test`
 
-## Results Contract
+**Input payload:**
+- `command` — the smoke test command from `project.smoke_test_command`
+- `repo` — target project git URL (for cloning if needed)
 
-Input:
-- exactly one `batch_id`
+**Worker execution:**
+1. Run `command` locally (or on a cheap CPU instance if `project.repo` is a remote URL)
+2. Enforce **60-second hard timeout** — not configurable
+3. If the command has not crashed within 60 seconds, it passes
 
-The backend must expose a stdout JSON object with:
-- `batch_id`
-- `status`
-- `best_aggregate_result`
-- `best_aggregate_result.metric`
-- `best_aggregate_result.value`
-- `per_dataset`
-- `artifact_locations`
-- `logs_location`
+**Result file:** `.ml-metaopt/worker-results/smoke-test.json`
 
-Required results behavior:
-- echo the requested `batch_id` exactly
-- report `status = "completed"`
-- provide `best_aggregate_result.metric` as a non-empty metric name
-- provide `best_aggregate_result.value` as the numeric aggregate score for that metric
-- return non-empty artifact locations for the immutable code artifact, immutable data manifest, and execution logs
+```json
+{
+  "exit_code": 0,
+  "timed_out": false,
+  "stdout_tail": "...",
+  "stderr_tail": "..."
+}
+```
 
-Required artifact location fields:
-- `artifact_locations.code`
-- `artifact_locations.data_manifest`
-- `logs_location`
+## Forbidden Operations
 
-## Artifact Contract
+The following are protocol breaches that trigger `BLOCKED_PROTOCOL`:
 
-The backend must accept immutable artifacts, not mutable working tree paths.
+- Raw SSH to any instance
+- Direct Vast.ai API calls (bypassing SkyPilot)
+- `sky exec` (use `sky launch` only)
+- `ray job submit` or any Ray CLI command
+- Any cluster operation not mediated by SkyPilot or WandB API
+- Orchestrator calling WandB API or SkyPilot CLI directly (must go through `skypilot-wandb-worker`)
 
-Expected artifact behavior:
-- consume a content-addressed or fixed manifest reference
-- unpack or materialize into an isolated execution workspace
-- run the declared entrypoint there
+If the worker cannot represent a needed operation through the three declared operations above, it must fail closed. The orchestrator transitions to `BLOCKED_PROTOCOL`.
 
-## Retry Policy Contract
+## Instance Lifecycle Contract
 
-The orchestrator declares retry policy in the campaign spec and batch manifest.
-The backend must honor the declared retry policy.
-If the selected backend cannot honor it, the run must fail before enqueue.
-
-## Utilization Contract
-
-The backend is responsible for cluster utilization policy.
-
-The skill expresses utilization goals in the campaign file, but the backend decides how those goals map to actual cluster jobs or internal trial fanout.
-
-## Current Implementation
-
-Current backend:
-- `ray-hetzner`
-
-Mapping:
-- enqueue -> `metaopt/enqueue_batch.py`
-- status -> `metaopt/get_batch_status.py`
-- results -> `metaopt/fetch_batch_results.py`
-- backend reconciler -> `metaopt/head_daemon.py`
-
-This mapping is an implementation note, not the generic contract itself.
+- Every `sky launch` includes `--idle-minutes-to-autostop <idle_timeout_minutes>` — instances self-terminate if the skill crashes mid-session
+- On resume after crash, `HYDRATE_STATE` detects `current_sweep.sweep_id` in state and reconnects to the existing WandB sweep
+- SkyPilot job IDs in `state.current_sweep.sky_job_ids` resume watchdog monitoring via subsequent `poll_sweep` calls
+- Never launch a new sweep if `current_sweep.sweep_id` already exists in state — always reconnect

@@ -1,248 +1,133 @@
 # State Machine
 
-## States
+## State List
 
-- `LOAD_CAMPAIGN`
-- `HYDRATE_STATE`
-- `MAINTAIN_BACKGROUND_POOL`
-- `WAIT_FOR_PROPOSAL_THRESHOLD`
-- `SELECT_EXPERIMENT`
-- `DESIGN_EXPERIMENT`
-- `MATERIALIZE_CHANGESET`
-- `LOCAL_SANITY`
-- `ENQUEUE_REMOTE_BATCH`
-- `WAIT_FOR_REMOTE_BATCH`
-- `ANALYZE_RESULTS`
-- `ROLL_ITERATION`
-- `QUIESCE_SLOTS`
-- `COMPLETE`
-- `BLOCKED_CONFIG`
-- `BLOCKED_PROTOCOL`
-- `FAILED`
+| State | Type | Description |
+|-------|------|-------------|
+| LOAD_CAMPAIGN | init | Validate campaign YAML, check preflight readiness, compute identity hash |
+| HYDRATE_STATE | init | Initialize or resume state, verify worker availability, crash recovery |
+| IDEATE | running | Dispatch ideation workers to generate sweep search space proposals |
+| WAIT_FOR_PROPOSALS | running | Gate: require proposal_policy.current_target proposals before advancing |
+| SELECT_AND_DESIGN_SWEEP | running | Pick best proposal, refine and freeze sweep config for launch |
+| LOCAL_SANITY | running | Run smoke test with 60-second hard timeout |
+| LAUNCH_SWEEP | running | Create WandB sweep, launch SkyPilot agents on Vast.ai |
+| WAIT_FOR_SWEEP | running | Poll sweep status, watchdog for hung agents, budget enforcement |
+| ANALYZE | running | Read best WandB run, compare against baseline, extract learnings |
+| ROLL_ITERATION | running | Filter proposals, increment iteration, check stop conditions |
+| COMPLETE | terminal | Stop condition met; emit final report, cleanup |
+| BLOCKED_CONFIG | terminal | User-actionable config issue (budget cap, bad YAML, missing preflight) |
+| BLOCKED_PROTOCOL | terminal | Protocol-level violation the skill cannot recover from |
+| FAILED | terminal | Unrecoverable error (smoke test failed, all sweep agents crashed) |
 
-## Control-Agent Dispatch Map
+## Control Agent Dispatch Table
 
-Every delegated phase is governed by a mandatory control agent. The orchestrator must invoke the designated control agent before and after each executor phase; it must not make semantic decisions itself. See `references/control-protocol.md` for the handoff envelope schema and `references/dispatch-guide.md` for per-state dispatch details.
+| State(s) | Governing Agent | Phase(s) |
+|----------|----------------|----------|
+| LOAD_CAMPAIGN | metaopt-load-campaign | single (validate) |
+| HYDRATE_STATE | metaopt-hydrate-state | single (hydrate) |
+| IDEATE, WAIT_FOR_PROPOSALS | metaopt-background-control | plan_ideation, gate_ideation |
+| SELECT_AND_DESIGN_SWEEP | metaopt-select-design | plan_select_design, finalize_select_design |
+| LOCAL_SANITY | metaopt-remote-execution-control | single (gate_local_sanity) |
+| LAUNCH_SWEEP | metaopt-remote-execution-control | single (plan_launch) |
+| WAIT_FOR_SWEEP | metaopt-remote-execution-control | poll (loops until non-null transition) |
+| ANALYZE | metaopt-remote-execution-control | single (analyze) |
+| ROLL_ITERATION | metaopt-iteration-close-control | single (roll) |
 
-| State(s) | Control Agent | Plan Phase | Gate Phase(s) |
-|----------|--------------|------------|---------------|
-| `LOAD_CAMPAIGN` | `metaopt-load-campaign` | single-phase (validate) | — |
-| `HYDRATE_STATE` | `metaopt-hydrate-state` | single-phase (hydrate) | — |
-| `MAINTAIN_BACKGROUND_POOL`, `WAIT_FOR_PROPOSAL_THRESHOLD` | `metaopt-background-control` | `plan_background_work` | `gate_background_work` |
-| `SELECT_EXPERIMENT`, `DESIGN_EXPERIMENT` | `metaopt-select-design` | `plan_select_experiment` | `gate_select_and_plan_design`, `finalize_select_design` |
-| `MATERIALIZE_CHANGESET`, `LOCAL_SANITY` | `metaopt-local-execution-control` | `plan_local_changeset` | `gate_materialization`, `gate_local_sanity` |
-| `ENQUEUE_REMOTE_BATCH`, `WAIT_FOR_REMOTE_BATCH`, `ANALYZE_RESULTS` | `metaopt-remote-execution-control` | `plan_remote_batch` | `gate_remote_batch`, `analyze_remote_results` |
-| `ROLL_ITERATION`, `QUIESCE_SLOTS` | `metaopt-iteration-close-control` | `plan_roll_iteration` | `gate_roll_iteration`, `quiesce_slots` |
+## State Semantics
 
-## Event Priority
+### LOAD_CAMPAIGN
 
-Within each reinvocation, the orchestrator processes events in this order before invoking the governing control agent:
+Governed by metaopt-load-campaign. Validates campaign YAML against the schema in references/dependencies.md, checks the preflight readiness artifact (.ml-metaopt/preflight-readiness.json), and computes the campaign_identity_hash. Transitions to BLOCKED_CONFIG on invalid config, missing preflight, or identity hash mismatch on resume.
 
-1. Stage raw outputs of any completed slots
-2. Invoke the governing control agent in the correct phase and apply the resulting handoff. Phase selection rule: if the latest handoff file for the current state has `recommended_next_machine_state = null`, the plan phase already ran and the gate phase is pending — invoke gate. If no handoff exists for the current state, or the prior handoff already completed (non-null `recommended_next_machine_state`), invoke plan.
-3. During `QUIESCE_SLOTS`, execute only drain and cancel directives from the handoff — do not launch new workers
+### HYDRATE_STATE
 
-## Executor Directives
+Governed by metaopt-hydrate-state. Initializes a fresh state file or resumes from an existing one. If state.current_sweep.sweep_id exists (crash recovery), reconnects to that WandB sweep rather than launching a new one. Verifies skypilot-wandb-worker availability. Creates the AGENTS.md resume hook if absent.
 
-- Whenever executor-side work is required, the governing control agent must emit explicit `pre_launch_directives` and/or `post_launch_directives` in the handoff envelope.
-- The orchestrator executes these directive lists mechanically and must not infer executor work from prose descriptions in this document.
-- A phase that has no executor-side work still emits `pre_launch_directives = []` and `post_launch_directives = []` so the absence of work is explicit.
+### IDEATE
 
-## Transition Semantics
+Governed by metaopt-background-control (plan_ideation phase). Dispatches metaopt-ideation-worker background agents that produce WandB sweep search space proposals. Each proposal includes a WandB-formatted sweep config with parameter distributions and search method. Agents run until the proposal pool reaches proposal_policy.current_target.
 
-> **Reading these sections:** The bullets below describe the *behaviour* the system must produce in each state. For states labelled "governed by `<control-agent>`", the detailed semantic bullets are the control agent's responsibility — the orchestrator executes them mechanically from the control agent's `pre_launch_directives`, `post_launch_directives`, `launch_requests`, and `state_patch`. The orchestrator must not apply these rules autonomously. See `references/control-protocol.md` for the handoff protocol.
+### WAIT_FOR_PROPOSALS
 
-### `LOAD_CAMPAIGN`
+Governed by metaopt-background-control (gate_ideation phase). Gate: checks whether current_proposals has reached proposal_policy.current_target. If not, stays in this state (returns to IDEATE on next reinvocation for more workers). If threshold met, advances to SELECT_AND_DESIGN_SWEEP.
 
-This state is governed by `metaopt-load-campaign`. The control agent validates the campaign YAML, evaluates the preflight readiness artifact, and emits a single-phase handoff (`validate`). The orchestrator applies the handoff mechanically. See `references/control-protocol.md`.
+### SELECT_AND_DESIGN_SWEEP
 
-- The control agent reads `ml_metaopt_campaign.yaml`
-- The control agent validates required fields and schema shape
-- The control agent rejects sentinel placeholders such as angle-bracket paths, `YOUR_*`, and dataset fingerprints containing `replace-me` — when validation fails, it sets `recommended_next_machine_state = "BLOCKED_CONFIG"` and `next_action = "repair ml_metaopt_campaign.yaml"` in the handoff; the orchestrator derives `status` from the resulting `machine_state`
-- The control agent computes `campaign_identity_hash` and `runtime_config_hash` using the canonical rules from `references/contracts.md`
-- **Preflight gate** (evaluated only when campaign validation passes):
-  - The control agent reads `.ml-metaopt/preflight-readiness.json` (artifact emitted by `metaopt-preflight`)
-  - If the artifact is missing, unreadable, or has an unrecognized `schema_version` → the control agent recommends `BLOCKED_CONFIG` with `next_action = "run metaopt-preflight"`
-  - If the artifact is present but binding freshness fails (hash mismatch on `campaign_identity_hash` or `runtime_config_hash`) → the control agent recommends `BLOCKED_CONFIG` with `next_action = "re-run metaopt-preflight (campaign configuration has changed)"`
-  - If binding freshness passes and preflight `status` is `FAILED` → the control agent recommends `BLOCKED_CONFIG`, using the artifact's `next_action` and `failures` to present actionable remediation (the environment is not ready, not that configuration has changed)
-  - If binding freshness passes and preflight `status` is `READY` → the control agent recommends `HYDRATE_STATE`
-- The handoff includes a `preflight_readiness` advisory payload describing the observed artifact status for inspectability
+Governed by metaopt-select-design. A single inline agent picks the best proposal from the pool given prior learnings and baseline context, then refines it into a final WandB sweep config ready for launch. Freezes proposal_cycle.current_pool_frozen = true. Select and design are one combined step.
 
-### `HYDRATE_STATE`
+### LOCAL_SANITY
 
-This state is governed by `metaopt-hydrate-state`. The control agent initializes or resumes state, manages the `AGENTS.md` hook, verifies worker target availability, and emits a single-phase handoff (`hydrate`). The orchestrator applies the `state_patch` and transitions. See `references/control-protocol.md`.
+Governed by metaopt-remote-execution-control (gate_local_sanity phase). Emits a run_smoke_test directive with a 60-second hard time limit (not configurable). Goal: confirm the training script starts, loads data, and executes a forward+backward pass without crashing. If exit_code != 0 or timed_out = true, transition to FAILED. No remediation loop -- fail fast.
 
-- If `.ml-metaopt/state.json` exists and `campaign_identity_hash` matches the campaign identity, resume from `machine_state`
-- If `.ml-metaopt/state.json` exists and there is a campaign identity hash mismatch, transition to `BLOCKED_CONFIG`, preserve the stale state in place, set `next_action = "archive or remove the stale state before starting a new campaign"`, remove the `AGENTS.md` hook, and stop. (This removal calls the same operation as terminal-state cleanup — it strips only the `<!-- ml-metaoptimization:begin -->...<!-- ml-metaoptimization:end -->` block — but here it is a hard stop with no state-machine transition to a final state.)
-- Otherwise initialize fresh state from the campaign spec
-- If `AGENTS.md` does not exist, create it
-- Ensure the marked `AGENTS.md` hook is present only while `status = RUNNING`
-- Verify required worker target availability and record the result in `state.runtime_capabilities`; if any required target is missing, transition to `BLOCKED_CONFIG` with `next_action = "install missing skill: <skill_name>"`
+### LAUNCH_SWEEP
 
-### `MAINTAIN_BACKGROUND_POOL`
+Governed by metaopt-remote-execution-control (plan_launch phase). Emits a launch_sweep directive. The orchestrator dispatches skypilot-wandb-worker, which creates the WandB sweep and launches SkyPilot agents on Vast.ai. Persists sweep_id, sweep_url, and sky_job_ids to state via state_patch.
 
-This state is governed by `metaopt-background-control`. The control agent plans slot launches (via staged task files), the orchestrator dispatches workers mechanically, and the control agent gates completed outputs. See `references/control-protocol.md` for the handoff protocol.
+### WAIT_FOR_SWEEP
 
-- Ensure exactly `dispatch_policy.background_slots` background slots exist
-- Prefer ideation via the `metaopt-ideation-worker` custom agent when `current_proposals` is below target and `next_proposals` is below cap
-- Otherwise assign maintenance work via `repo-audit-refactor-optimize`
-- **Patch integration timing:** maintenance workers may produce patch outputs, but those patches are NOT applied during background work. When a maintenance slot completes, the orchestrator records the patch path as an executor event in `.ml-metaopt/executor-events/`. Integration is deferred to `QUIESCE_SLOTS`, where `metaopt-iteration-close-control` emits `apply_patch_artifacts` directives and the orchestrator applies them mechanically.
-- The current proposal cycle starts on the first entry into this state for an iteration
-- Create or reset `proposal_cycle.cycle_id` when a new iteration first enters this state after `ROLL_ITERATION` or fresh initialization
-- Set `proposal_cycle.current_pool_frozen = false` when a new proposal cycle begins and keep it false while `current_proposals` may still grow
-- Clear `proposal_cycle.shortfall_reason` when a new cycle begins or when the target threshold is later satisfied
-- Persist round bookkeeping in `proposal_cycle.ideation_rounds_by_slot`
-- Increment `proposal_cycle.ideation_rounds_by_slot[slot_id]` each time a background ideation slot finishes and its output is persisted
-- If the machine reaches this state with zero active slots, refill background slots here rather than launching ad hoc workers outside the slot accounting rules
+Governed by metaopt-remote-execution-control (poll phase). Emits a poll_sweep directive on each session. Each poll also acts as a watchdog: detects hung agents (no WandB logs for idle_timeout_minutes), kills their SkyPilot jobs, and enforces the budget cap. Returns recommended_next_machine_state = null while sweep is running. Transitions to ANALYZE when sweep completes, to FAILED if all agents crash, to BLOCKED_CONFIG if budget is exceeded.
 
-### `WAIT_FOR_PROPOSAL_THRESHOLD`
+### ANALYZE
 
-This state is governed by `metaopt-background-control`. The control agent evaluates proposal readiness against the threshold; the orchestrator must not assess proposal counts independently. See `references/control-protocol.md`.
+Governed by metaopt-remote-execution-control (analyze phase). Dispatches metaopt-analysis-worker to read the best WandB run from the sweep, compare against baseline using direction-aware comparison (see references/contracts.md Section 5), update baseline if improved, and extract learnings.
 
+### ROLL_ITERATION
 
-- Require `proposal_policy.current_target` distinct, non-overlapping proposals in `current_proposals`
-- `proposal_cycle` uses persisted `ideation_rounds_by_slot` bookkeeping for the floor rule so reinvocations resume the same round counts instead of restarting them
-- Floor rule: if the persisted `proposal_cycle.ideation_rounds_by_slot` bookkeeping shows every background slot has completed two ideation rounds in the current cycle and fewer than the target exist, allow progress once `proposal_policy.current_floor` is reached
-- If the floor is still not met, continue background ideation and set `proposal_cycle.shortfall_reason` to the current blocking reason
-- Clear `proposal_cycle.shortfall_reason` once progress is allowed into `SELECT_EXPERIMENT`
+Governed by metaopt-iteration-close-control (roll phase). Filters next_proposals for the next iteration, increments current_iteration, checks all stop conditions, resets current_sweep and selected_sweep to null, and emits an iteration report. Transitions to COMPLETE if a stop condition is met, or back to IDEATE for the next iteration.
 
-### `SELECT_EXPERIMENT`
+## Stop Conditions
 
-This state is governed by `metaopt-select-design`. The control agent writes a staged selection task, the orchestrator launches `metaopt-selection-worker`, and the control agent validates the winning proposal before advancing. See `references/control-protocol.md`.
+Checked by metaopt-iteration-close-control during ROLL_ITERATION:
 
-- Dispatch the `metaopt-selection-worker` custom agent as one `strong_reasoner` subagent
-- Input: `current_proposals`, baseline context, prior learnings, and completed experiments
-- Output: exactly one winning proposal and a short ranking rationale
-- Freeze `current_proposals` by setting `proposal_cycle.current_pool_frozen = true` once selection starts
-- The current proposal cycle ends when this state begins; keep `proposal_cycle.cycle_id` stable for auditability until the next iteration resets it
+| Condition | Check | Transition |
+|-----------|-------|------------|
+| Target metric reached | Direction-aware: >= target_metric (maximize) or <= target_metric (minimize) | COMPLETE |
+| Max iterations reached | current_iteration >= stop_conditions.max_iterations | COMPLETE |
+| No improvement plateau | no_improve_iterations >= stop_conditions.max_no_improve_iterations | COMPLETE |
+| Budget exhausted | cumulative_spend_usd >= compute.max_budget_usd | BLOCKED_CONFIG |
 
-### `DESIGN_EXPERIMENT`
+## Terminal State Cleanup
 
-This state is governed by `metaopt-select-design`. The control agent writes a staged design task, the orchestrator launches `metaopt-design-worker`, and the control agent finalizes `state.selected_experiment.design` before `MATERIALIZE_CHANGESET`. See `references/control-protocol.md`.
+When transitioning to a terminal state, the governing control agent emits cleanup directives:
 
-- Dispatch the `metaopt-design-worker` custom agent as one `strong_reasoner` subagent
-- Input: the winning proposal, baseline context, queue/backend constraints, and prior learnings
-- Output: exactly one concrete experiment specification plus execution assumptions and artifact expectations
-- Persist the experiment design before any coder starts `MATERIALIZE_CHANGESET`
+| Terminal State | Required Directives |
+|---------------|-------------------|
+| COMPLETE | remove_agents_hook, delete_state_file, emit_final_report |
+| BLOCKED_CONFIG | remove_agents_hook |
+| BLOCKED_PROTOCOL | remove_agents_hook |
+| FAILED | remove_agents_hook |
 
-### `MATERIALIZE_CHANGESET`
+All terminal states preserve state (except COMPLETE which deletes it after emitting the final report). All terminal states remove the AGENTS.md hook to prevent infinite re-invocation loops.
 
-This state is governed by `metaopt-local-execution-control`. The control agent writes staged materialization tasks, the orchestrator launches workers and applies patches mechanically, and the control agent gates the results. See `references/control-protocol.md`.
+## State Transition Diagram
 
-- Dispatch the `metaopt-materialization-worker` custom agent as `strong_coder` subagents in isolated worktrees
-- Count these coders against `auxiliary_slots` with `mode = materialization`
-- `metaopt-local-execution-control`'s `plan_local_changeset` handoff places an `apply_patch_artifacts` directive (with `output_event_path` set) in `post_launch_directives`, ordering the orchestrator to attempt mechanical patch integration — after the worker completes — and write the outcome as an executor event
-- The orchestrator then re-invokes `metaopt-local-execution-control` in `gate_materialization` phase; the control agent reads the integration outcome executor event and either emits a conflict-resolution `launch_requests` entry (patches did not merge cleanly) or advances to `LOCAL_SANITY` (merge succeeded)
-- Conflict-resolution is still part of the `MATERIALIZE_CHANGESET` state; the machine advances to `LOCAL_SANITY` only after successful integration
-- Package an immutable code artifact under `.ml-metaopt/artifacts/code/`
-- Package the manifest-linked data artifact inputs under `.ml-metaopt/artifacts/data/`
-- Persist one unified diff patch artifact for each code-modifying worker under `.ml-metaopt/artifacts/patches/`
-- Write a batch manifest under `.ml-metaopt/artifacts/manifests/`
-
-### `LOCAL_SANITY`
-
-This state is governed by `metaopt-local-execution-control`. The control agent emits `run_sanity` directives; the orchestrator executes them and stages raw outputs; the control agent interprets results and routes retries. See `references/control-protocol.md`.
-
-- `metaopt-local-execution-control` emits a `run_sanity` directive (in the handoff that advances into `LOCAL_SANITY` and after each remediation cycle) with `output_event_path` set; the orchestrator runs `sanity.command` and writes captured stdout, stderr, exit-code, and duration to `output_event_path`
-- Semantic interpretation and retry routing are the exclusive responsibility of `metaopt-local-execution-control`; the orchestrator must not evaluate sanity outcomes directly
-- Required checks:
-  - config loads
-  - fast path executes
-  - temporal leakage passes when required
-- Allow a maximum 3 remediation attempts for the selected experiment
-- If sanity fails and `sanity_attempts < 3`:
-  - Dispatch the `metaopt-diagnosis-worker` custom agent as a `strong_reasoner` subagent with the failure output, experiment design, patch summary, and prior diagnosis history from `state.selected_experiment.diagnosis_history`
-  - Persist the diagnosis record to `state.selected_experiment.diagnosis_history`
-  - Increment `state.selected_experiment.sanity_attempts`
-  - Route on `fix_recommendation.action`:
-    - `"fix"`: dispatch `metaopt-materialization-worker` in remediation mode with `code_guidance` from the diagnosis, the original experiment design, and the current patch state. The materialization worker produces an updated unified diff patch. Rerun `LOCAL_SANITY` after integration.
-    - `"adjust_config"`: transition to `BLOCKED_CONFIG` with `next_action` set to the `config_guidance` from the diagnosis. The orchestrator cannot autonomously modify campaign configuration.
-    - `"abandon"`: transition to `FAILED` with the diagnosis `root_cause` as the terminal error
-- If `sanity_attempts >= 3`, transition to `FAILED` regardless of diagnosis output
-
-### `ENQUEUE_REMOTE_BATCH`
-
-This state is governed by `metaopt-remote-execution-control`. The control agent validates enqueue readiness, writes the manifest (via a `write_manifest` executor directive), and emits a `queue_op` directive for `enqueue`. The orchestrator dispatches `@hetzner-delegation-worker` and writes the result to `.ml-metaopt/queue-results/enqueue-<batch_id>.json`. The control agent reads that file in the gate phase. See `references/control-protocol.md`.
-
-- `metaopt-remote-execution-control` emits a `queue_op` directive; orchestrator dispatches `@hetzner-delegation-worker` with `remote_queue.enqueue_command`
-- Pass exactly one immutable batch manifest
-- Expect one stdout JSON object containing `batch_id`, `queue_ref`, and `status = "queued"`
-- Control agent records `batch_id` and queue reference in `state_patch`; orchestrator applies it
-
-### `WAIT_FOR_REMOTE_BATCH`
-
-This state is governed by `metaopt-remote-execution-control`. The control agent emits `queue_op` directives for status polling; the orchestrator dispatches `@hetzner-delegation-worker` and writes results for the control agent to interpret. See `references/control-protocol.md`.
-
-- `metaopt-remote-execution-control` emits `queue_op` directives for `remote_queue.status_command`; orchestrator dispatches `@hetzner-delegation-worker` and writes raw backend payloads to `.ml-metaopt/queue-results/status-<batch_id>.json`
-- Semantic interpretation and remote failure routing are the exclusive responsibility of `metaopt-remote-execution-control`
-- Never inspect raw cluster jobs directly from this skill
-- If `stop_conditions.max_wallclock_hours` is exceeded, `metaopt-remote-execution-control` sets `next_action = "finish current batch and stop"` in its `state_patch`, stops emitting background `launch_requests`, and continues polling the current batch to completion
-- **Background slot choreography during polling:** When `metaopt-remote-execution-control`'s gate handoff keeps `machine_state = WAIT_FOR_REMOTE_BATCH` (batch still running, no state transition), the orchestrator additionally invokes `metaopt-background-control` in `plan_background_work` / `gate_background_work` mode as a non-advancing secondary step before the next polling cycle. This secondary invocation fills idle slots and is bounded by `dispatch_policy.background_slots`; it must not advance `machine_state`. All background slot decisions — including whether to fill, how many, and in what mode — remain the exclusive responsibility of `metaopt-background-control`.
-- If `status_command` returns `status = "failed"`:
-  - Dispatch the `metaopt-diagnosis-worker` custom agent as a `strong_reasoner` subagent with the remote failure context (`classification`, `message`, `returncode` from the backend response)
-  - Persist the diagnosis record to `state.selected_experiment.diagnosis_history`
-  - Route on `fix_recommendation.action`:
-    - `"fix"`: the failure was caused by experiment code — transition to `FAILED` (remote failures cannot be remediated locally without re-enqueueing)
-    - `"adjust_config"`: transition to `BLOCKED_CONFIG` with `next_action = <config_guidance>`
-    - `"abandon"`: transition to `FAILED` with the diagnosis `root_cause` as the terminal error
-  - In all cases, append remote failure learnings to `state.key_learnings` before transitioning
-  - Remote retries are the backend's responsibility via `remote_queue.retry_policy`; the orchestrator never re-enqueues a failed batch
-
-### `ANALYZE_RESULTS`
-
-This state is governed by `metaopt-remote-execution-control`. The control agent emits a `queue_op` directive for results fetch; the orchestrator dispatches `@hetzner-delegation-worker` and writes results to `.ml-metaopt/queue-results/results-<batch_id>.json`. The control agent reads that file, stages analysis tasks, and updates baseline state. See `references/control-protocol.md`.
-
-- `metaopt-remote-execution-control` emits a `queue_op` directive; orchestrator dispatches `@hetzner-delegation-worker` with `remote_queue.results_command`
-- The control agent reads the result file and stages raw completed-results payloads; semantic result judgment and baseline updates are its exclusive responsibility
-- Dispatch the `metaopt-analysis-worker` custom agent as one `strong_reasoner` subagent to compare the result against the aggregate baseline and extract learnings
-- If the aggregate result clears `objective.improvement_threshold` in the configured direction, update the baseline and reset `no_improve_iterations` to `0`
-- Otherwise leave the baseline unchanged and increment `no_improve_iterations`
-- Update completed experiments and learnings in both cases
-
-### `ROLL_ITERATION`
-
-This state is governed by `metaopt-iteration-close-control`. The control agent writes a staged rollover task, the orchestrator launches `metaopt-rollover-worker`, and the control agent integrates rollover output and evaluates stop conditions. See `references/control-protocol.md`.
-
-- Dispatch the `metaopt-rollover-worker` custom agent as one `strong_reasoner` subagent (inline dispatch — no slot consumed)
-- Input: `next_proposals`, fresh `key_learnings`, completed experiment results, and updated baseline
-- Output: filtered carry-over proposals with duplicates, invalidated ideas, and overlaps removed plus short rationale for each removal
-- Move the filtered survivors into `current_proposals`
-- Clear `next_proposals`
-- Increment iteration counters only when the campaign will continue into another iteration; if a stop condition is already met, keep `current_iteration` equal to the just-completed iteration number
-- Clear `selected_experiment` (set to `null`) after persisting the completed experiment record to `completed_experiments`
-- Check stop conditions using the aggregate metric
-- Stop when any configured stop condition is met: `target_metric`, `max_iterations`, `max_no_improve_iterations`, or `max_wallclock_hours` (elapsed time since `campaign_started_at`)
-- Emit the iteration report using the contract in `references/contracts.md`
-- Transition to `QUIESCE_SLOTS` regardless of whether the campaign continues or stops
-
-### `QUIESCE_SLOTS`
-
-This state is governed by `metaopt-iteration-close-control`. The orchestrator drains active slots and stages raw outcomes; the control agent decides whether the campaign continues or completes. See `references/control-protocol.md`.
-
-- Use the 60-second drain window emitted by `metaopt-iteration-close-control`; cancel leftovers after that window instead of waiting indefinitely or inventing new work.
-- The orchestrator executes `drain_slots` and `cancel_slots` directives from the `quiesce_slots` handoff; it stages raw outcomes (drain results, cancellation exit codes) as executor events in `.ml-metaopt/executor-events/` — it does not write to `state.json` autonomously
-- `metaopt-iteration-close-control` reads those executor events and returns cancellation reasons, `apply_results` updates, and the continue/stop decision in its `state_patch` and `recommended_next_machine_state`; record cancellation reasons in state alongside `apply_results` only from this control-agent patch
-- The orchestrator applies the `state_patch` (which records cancellation reasons and patch-application outcomes into `local_changeset.apply_results`) and transitions per `recommended_next_machine_state`
-- Do not launch new work during this state — execute only drain and cancel directives
-
-### Terminal States
-
-- `COMPLETE`: emit the final report using the contract in `references/contracts.md` after all slots have already been drained or canceled, remove the `AGENTS.md` hook, delete `.ml-metaopt/state.json`, and stop
-- `BLOCKED_CONFIG`: remove the `AGENTS.md` hook, leave state and artifacts intact so the campaign can resume after config repair, and stop
-- `BLOCKED_PROTOCOL`: remove the `AGENTS.md` hook, preserve state and all artifacts so the operator can diagnose and recover, and stop. This state is reached when the orchestrator or a control agent encounters unsupported semantic work that cannot be represented by the protocol. Rather than improvising, the machine fails closed to `BLOCKED_PROTOCOL` with a descriptive `next_action` explaining what went wrong and how to recover.
-- `FAILED`: remove the `AGENTS.md` hook, write the terminal error, preserve state, and stop
-
-All four terminal states remove the `AGENTS.md` hook using the same operation as the identity-drift path in `HYDRATE_STATE`: strip only the `<!-- ml-metaoptimization:begin -->...<!-- ml-metaoptimization:end -->` block. The difference is that terminal-state cleanup transitions the machine to a final state (`COMPLETE`, `BLOCKED_CONFIG`, `BLOCKED_PROTOCOL`, or `FAILED`), whereas the identity-drift path is a hard stop that does not advance the state machine.
-
-`BLOCKED_PROTOCOL` vs `BLOCKED_CONFIG`: `BLOCKED_CONFIG` signals that the campaign YAML or environment configuration needs repair (user-actionable). `BLOCKED_PROTOCOL` signals that the orchestrator or a control agent detected a protocol-level violation — such as lane drift, missing worker artifacts, or unsupported semantic operations — that cannot be resolved without manual intervention. The orchestrator must never attempt to improvise around a protocol violation.
-
-Any control agent that recommends a terminal state must emit the appropriate cleanup directives in its `pre_launch_directives` in its handoff so the orchestrator never infers cleanup intent from prose. The orchestrator executes these directives mechanically without semantic interpretation.
-
-| Terminal state | Required directives |
-|---------------|---------------------|
-| `COMPLETE` | `remove_agents_hook`, `delete_state_file`, `emit_final_report` |
-| `BLOCKED_CONFIG` | `remove_agents_hook` |
-| `BLOCKED_PROTOCOL` | `remove_agents_hook` |
-| `FAILED` | `remove_agents_hook` |
-
-The `COMPLETE` terminal state is only reachable via `QUIESCE_SLOTS` (after all slots have been drained or cancelled). The other terminal states may be recommended by any control agent from any state.
+    LOAD_CAMPAIGN
+      -> BLOCKED_CONFIG (invalid config or missing preflight)
+      -> HYDRATE_STATE (campaign valid)
+    HYDRATE_STATE
+      -> IDEATE (fresh or resumed)
+      -> BLOCKED_PROTOCOL (prior state protocol violation)
+      -> BLOCKED_CONFIG (missing worker target)
+    IDEATE
+      -> WAIT_FOR_PROPOSALS
+    WAIT_FOR_PROPOSALS
+      -> IDEATE (not enough proposals, need more workers)
+      -> SELECT_AND_DESIGN_SWEEP (threshold met)
+    SELECT_AND_DESIGN_SWEEP
+      -> LOCAL_SANITY
+    LOCAL_SANITY
+      -> LAUNCH_SWEEP (smoke test passed)
+      -> FAILED (exit_code != 0 or timed_out)
+    LAUNCH_SWEEP
+      -> WAIT_FOR_SWEEP
+    WAIT_FOR_SWEEP
+      -> WAIT_FOR_SWEEP (sweep still running, poll again)
+      -> ANALYZE (sweep completed)
+      -> FAILED (all agents crashed)
+      -> BLOCKED_CONFIG (budget exceeded)
+    ANALYZE
+      -> ROLL_ITERATION
+    ROLL_ITERATION
+      -> COMPLETE (stop condition met)
+      -> BLOCKED_CONFIG (budget exhausted)
+      -> IDEATE (next iteration)

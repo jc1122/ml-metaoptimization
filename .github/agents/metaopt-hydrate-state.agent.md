@@ -17,15 +17,16 @@ You are the HYDRATE_STATE agent for the `ml-metaoptimization` v4 orchestrator. Y
 
 ## Inputs
 
-1. **LOAD_CAMPAIGN handoff**: `.ml-metaopt/handoffs/metaopt-load-campaign-LOAD_CAMPAIGN.json` — contains `campaign_identity_hash` and `campaign_summary`
+1. **LOAD_CAMPAIGN handoff**: `.ml-metaopt/handoffs/metaopt-load-campaign-LOAD_CAMPAIGN.json` — contains `campaign_identity_hash`, `campaign_id`, and `objective_snapshot`
 2. **Existing state** (may not exist): `.ml-metaopt/state.json`
-3. **Campaign file**: `ml_metaopt_campaign.yaml` — for populating initial state fields
+3. **Skills manifest**: `agents/worker-skills.json` — for verifying worker availability
+4. **AGENTS.md** (may not exist): `AGENTS.md` — for resume hook management
 
 ## Steps
 
 ### Step 1: Read LOAD_CAMPAIGN handoff
 
-Parse `.ml-metaopt/handoffs/metaopt-load-campaign-LOAD_CAMPAIGN.json`. Extract `campaign_identity_hash`, `campaign_id`, and `objective_snapshot`. Verify that `campaign_valid` is `true` and `recommended_next_machine_state` is `"HYDRATE_STATE"`. If this file is missing, malformed, or the campaign was not validated → BLOCKED_PROTOCOL: `"Missing or invalid LOAD_CAMPAIGN handoff"`.
+Parse `.ml-metaopt/handoffs/metaopt-load-campaign-LOAD_CAMPAIGN.json`. Extract `campaign_identity_hash`, `campaign_id`, and `objective_snapshot`. Verify that `control_agent` is `"metaopt-load-campaign"`, `campaign_valid` is `true`, and `recommended_next_machine_state` is `"HYDRATE_STATE"`. If this file is missing, malformed, or validation fails → emit a runtime error with `recovery_action` describing the repair needed and `recommended_next_machine_state: null` (no state is written).
 
 ### Step 2: Check for existing state
 
@@ -42,39 +43,35 @@ Emit BLOCKED_CONFIG: `"Stale state file — campaign_identity_hash mismatch. Arc
 
 ### Step 3: Crash recovery (resume only)
 
-If the resumed state has `current_sweep` with a non-null `sweep_id`, AND `machine_state` is one of `LAUNCH_SWEEP`, `WAIT_FOR_SWEEP`, or `ANALYZE`:
+If the resumed state has `current_sweep` (a non-null dict) with a non-null `sweep_id`:
 
 The campaign was interrupted mid-sweep. Emit a `poll_sweep` directive so the orchestrator immediately reconnects to the existing WandB sweep:
 
 ```json
 {
-  "type": "poll_sweep",
-  "payload": {
-    "sweep_id": "<state.current_sweep.sweep_id>",
-    "sky_job_ids": "<state.current_sweep.sky_job_ids>",
-    "wandb_entity": "<wandb.entity from campaign YAML>",
-    "wandb_project": "<wandb.project from campaign YAML>",
-    "idle_timeout_minutes": "<compute.idle_timeout_minutes from campaign YAML>",
-    "max_budget_usd": "<compute.max_budget_usd from campaign YAML>",
-    "cumulative_spend_usd_so_far": "<state.current_sweep.cumulative_spend_usd>",
-    "result_file": ".ml-metaopt/worker-results/poll-sweep-recovery.json"
-  }
+  "action": "poll_sweep",
+  "reason": "crash recovery — reconnecting to existing WandB sweep",
+  "sweep_id": "<state.current_sweep.sweep_id>",
+  "sky_job_ids": "<state.current_sweep.sky_job_ids>",
+  "result_file": ".ml-metaopt/worker-results/poll-sweep-recovery.json"
 }
 ```
 
 Set `recommended_next_machine_state` to `WAIT_FOR_SWEEP` (to re-enter the poll loop).
 
-If the state does NOT have an active sweep, resume from the current `machine_state` with `directive: { "type": "none" }`.
+If the state does NOT have an active sweep, resume from the current `machine_state` with no directives.
 
 ### Step 4: Initialize fresh state (new campaign only)
 
-Use the LOAD_CAMPAIGN handoff fields to construct the full initial state as `state_patch`:
+Use the LOAD_CAMPAIGN handoff fields to construct the full initial state:
 
 ```json
 {
   "version": 4,
   "campaign_id": "<campaign_id from LOAD_CAMPAIGN handoff>",
   "campaign_identity_hash": "<from LOAD_CAMPAIGN handoff>",
+  "status": "RUNNING",
+  "machine_state": "IDEATE",
   "current_iteration": 1,
   "next_action": "maintain background pool",
   "objective_snapshot": "<objective_snapshot from LOAD_CAMPAIGN handoff>",
@@ -94,7 +91,7 @@ Use the LOAD_CAMPAIGN handoff fields to construct the full initial state as `sta
 }
 ```
 
-Note: `current_iteration` starts at `1` (first iteration), and `proposal_cycle.cycle_id` matches as `"iter-1-cycle-1"`. The `status` and `machine_state` fields are derived automatically by the orchestrator from the `recommended_next_machine_state` and are not included in `state_patch`.
+Note: `current_iteration` starts at `1` (first iteration), and `proposal_cycle.cycle_id` matches as `"iter-1-cycle-1"`. The `status` and `machine_state` fields are written to state.json but are excluded from `state_patch` — the orchestrator derives them from `recommended_next_machine_state` during state application.
 
 Set `recommended_next_machine_state` to `IDEATE`.
 
@@ -131,45 +128,48 @@ If `status` is terminal, invoke the `ml-metaoptimization` skill once so terminal
 
 Write a JSON handoff to: `.ml-metaopt/handoffs/metaopt-hydrate-state-HYDRATE_STATE.json`
 
-**Fresh initialization:**
+The handoff conforms to the control-protocol envelope:
+
 ```json
 {
-  "recommended_next_machine_state": "IDEATE",
-  "state_patch": { "...full initial state object from Step 4..." },
-  "directive": { "type": "none" },
-  "resume": false,
-  "summary": "Initialized fresh state for campaign <name>"
+  "schema_version": 1,
+  "handoff_type": "hydrate_state.hydrate",
+  "control_agent": "metaopt-hydrate-state",
+  "state_path": "<path to .ml-metaopt/state.json>",
+  "state_written": true,
+  "state_preserved": false,
+  "campaign_id": "<campaign_id>",
+  "campaign_identity_hash": "<hash>",
+  "resume_mode": "fresh | existing | none",
+  "effective_status": "RUNNING | BLOCKED_CONFIG | ...",
+  "effective_machine_state": "<machine_state>",
+  "recommended_next_machine_state": "<machine_state> | null",
+  "recovery_action": null,
+  "agents_hook_action": "created | updated | unchanged | remove_directive_emitted",
+  "state_patch": { "...computed diff..." },
+  "directives": [],
+  "launch_requests": [],
+  "warnings": [],
+  "summary": "<human-readable summary>"
 }
 ```
 
-**Resume (no crash recovery needed):**
-```json
-{
-  "recommended_next_machine_state": "<current machine_state from state.json>",
-  "state_patch": { "next_action": null },
-  "directive": { "type": "none" },
-  "resume": true,
-  "summary": "Resumed campaign at <machine_state>"
-}
-```
+**Outcome-specific behavior:**
 
-**Resume with crash recovery:**
-```json
-{
-  "recommended_next_machine_state": "WAIT_FOR_SWEEP",
-  "state_patch": { "next_action": null },
-  "directive": { "type": "poll_sweep", "payload": { "..." } },
-  "resume": true,
-  "crash_recovery": true,
-  "summary": "Resumed campaign — reconnecting to sweep <sweep_id>"
-}
-```
+| Outcome | `resume_mode` | `recommended_next_machine_state` | `directives` |
+|---------|---------------|----------------------------------|--------------|
+| Fresh init | `"fresh"` | `"IDEATE"` | `[]` |
+| Normal resume | `"existing"` | current `machine_state` | `[]` |
+| Crash recovery | `"existing"` | `"WAIT_FOR_SWEEP"` | `[{"action": "poll_sweep", ...}]` |
+| Terminal state | `"existing"` | terminal state preserved | `[{"action": "remove_agents_hook", ...}]` |
+| Identity mismatch | `"none"` | `"BLOCKED_CONFIG"` | `[{"action": "remove_agents_hook", ...}]` |
+| Missing required skill | `"fresh"` or `"existing"` | `"BLOCKED_CONFIG"` | `[{"action": "remove_agents_hook", ...}]` |
+| Runtime error | `"none"` | `null` | `[]` |
 
 ## Rules
 
 - Do NOT write directly to `.ml-metaopt/state.json`. Express all changes via `state_patch` in the handoff.
 - Do NOT dispatch workers or run remote commands.
 - You MAY write to `AGENTS.md` (hook management only).
-- You MAY read `ml_metaopt_campaign.yaml` for field values needed during initialization.
 - On resume, emit the minimal `state_patch` needed (do not re-emit the full state).
-- If the state file has `status` in a terminal state (`COMPLETE`, `FAILED`, `BLOCKED_CONFIG`, `BLOCKED_PROTOCOL`), emit BLOCKED_CONFIG: `"Campaign already in terminal state <status>. Delete .ml-metaopt/state.json to start fresh."`
+- If the state file has `status` in a terminal state (`COMPLETE`, `FAILED`, `BLOCKED_CONFIG`, `BLOCKED_PROTOCOL`), preserve the existing terminal status, emit a `remove_agents_hook` directive, and skip the blocking-skill check. Do not overwrite the status to `BLOCKED_CONFIG`.

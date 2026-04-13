@@ -181,7 +181,7 @@ class LoadCampaignHandoffTests(unittest.TestCase):
             "campaign_identity_hash": campaign_identity_hash or self.EXAMPLE_IDENTITY_HASH,
             "emitted_at": "2025-01-01T00:00:00Z",
             "preflight_duration_seconds": 1.5,
-            "checks_summary": {"total": 3, "passed": 3, "failed": 0, "bootstrapped": 0},
+            "checks_summary": {"total": 3, "passed": 3, "failed": 0, "bootstrapped": 0, "warnings": 0},
             "failures": failures or [],
             "next_action": next_action,
             "diagnostics": None,
@@ -328,6 +328,26 @@ class LoadCampaignHandoffTests(unittest.TestCase):
                 pr["exists"],
                 "preflight_readiness.exists must be True when the artifact file is on disk",
             )
+
+    def test_valid_campaign_unreadable_preflight_blocks_config(self) -> None:
+        """Valid campaign + unreadable preflight artifact (corrupt JSON) -> BLOCKED_CONFIG."""
+        with tempfile.TemporaryDirectory() as tempdir_str:
+            tempdir = Path(tempdir_str)
+            campaign = (ROOT / "ml_metaopt_campaign.example.yaml").read_text(encoding="utf-8")
+            artifact_path = tempdir / ".ml-metaopt" / "preflight-readiness.json"
+            artifact_path.parent.mkdir(parents=True, exist_ok=True)
+            artifact_path.write_text("NOT VALID JSON {{{{", encoding="utf-8")
+
+            payload = self._run_tool(tempdir, campaign_text=campaign)
+
+            self.assertEqual(payload["handoff_type"], "load_campaign.validate")
+            self.assertEqual(payload["recommended_next_machine_state"], "BLOCKED_CONFIG")
+            self.assertIn("metaopt-preflight", payload["recovery_action"])
+            pr = payload["preflight_readiness"]
+            self.assertTrue(pr["exists"])
+            self.assertFalse(pr["readable"])
+            self.assertFalse(pr["binding_fresh"])
+            self.assertEqual(pr["status"], "unreadable")
 
     def test_invalid_campaign_blocks_before_preflight_check(self) -> None:
         """Invalid campaign YAML must still block for campaign reasons first, ignoring preflight."""

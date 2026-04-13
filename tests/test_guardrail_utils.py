@@ -302,14 +302,11 @@ class ConstantsSanityTests(unittest.TestCase):
     def test_preferred_model_strong_reasoner(self) -> None:
         self.assertEqual(PREFERRED_MODEL_BY_CLASS["strong_reasoner"], "claude-opus-4.6")
 
-    def test_preferred_model_strong_coder(self) -> None:
-        self.assertEqual(PREFERRED_MODEL_BY_CLASS["strong_coder"], "claude-opus-4.6")
-
     def test_preferred_model_general_worker(self) -> None:
         self.assertEqual(PREFERRED_MODEL_BY_CLASS["general_worker"], "claude-sonnet-4")
 
     def test_all_model_classes_have_preferred_model(self) -> None:
-        expected_classes = {"general_worker", "strong_reasoner", "strong_coder"}
+        expected_classes = {"general_worker", "strong_reasoner"}
         self.assertEqual(set(PREFERRED_MODEL_BY_CLASS.keys()), expected_classes)
 
     def test_model_resolution_order_starts_with_preferred_model(self) -> None:

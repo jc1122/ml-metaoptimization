@@ -23,7 +23,6 @@ ALLOWED_WORKERS: frozenset[str] = frozenset({
 MODEL_RESOLUTION_ORDER_BY_CLASS: dict[str, tuple[str, ...]] = {
     "general_worker": ("claude-sonnet-4", "gpt-5.4"),
     "strong_reasoner": ("claude-opus-4.6", "gpt-5.4"),
-    "strong_coder": ("claude-opus-4.6", "gpt-5.4"),
 }
 
 # --- Preferred model per model class ---

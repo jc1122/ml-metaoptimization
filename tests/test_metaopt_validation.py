@@ -1138,14 +1138,12 @@ class MetaoptValidationTests(unittest.TestCase):
         self.assertIn("strong_reasoner", skill)
         self.assertIn("general_worker", skill)
 
-    def test_strong_coder_in_guardrail_preferred_model_map(self) -> None:
-        """_guardrail_utils.PREFERRED_MODEL_BY_CLASS must include strong_coder
-        so materialization launches are enriched correctly."""
+    def test_strong_coder_not_in_guardrail_preferred_model_map(self) -> None:
+        """v4 removed strong_coder — no code-writing workers are dispatched."""
         import sys
         sys.path.insert(0, str(ROOT / "scripts"))
         from _guardrail_utils import PREFERRED_MODEL_BY_CLASS
-        self.assertIn("strong_coder", PREFERRED_MODEL_BY_CLASS)
-        self.assertEqual(PREFERRED_MODEL_BY_CLASS["strong_coder"], "claude-opus-4.6")
+        self.assertNotIn("strong_coder", PREFERRED_MODEL_BY_CLASS)
 
     def test_worker_artifact_preconditions_in_worker_lanes(self) -> None:
         """worker-lanes.md must document lane drift rules for all worker types."""

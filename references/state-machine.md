@@ -29,7 +29,7 @@
 | SELECT_AND_DESIGN_SWEEP | metaopt-select-design | plan_select_design, finalize_select_design |
 | LOCAL_SANITY | metaopt-remote-execution-control | single (gate_local_sanity) |
 | LAUNCH_SWEEP | metaopt-remote-execution-control | single (plan_launch) |
-| WAIT_FOR_SWEEP | metaopt-remote-execution-control | poll (loops until non-null transition) |
+| WAIT_FOR_SWEEP | metaopt-remote-execution-control | poll_sweep (loops until non-null transition) |
 | ANALYZE | metaopt-remote-execution-control | single (analyze) |
 | ROLL_ITERATION | metaopt-iteration-close-control | plan_roll_iteration, gate_roll_iteration |
 

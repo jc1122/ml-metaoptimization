@@ -103,9 +103,9 @@ Write the updated state to .ml-metaopt/state.json. State must be persisted after
 | SELECT_AND_DESIGN_SWEEP | plan_select_design then finalize_select_design | Pick best proposal, finalize sweep config |
 | LOCAL_SANITY | single (gate_local_sanity) | Emit run_smoke_test, read result, advance or fail |
 | LAUNCH_SWEEP | single (plan_launch) | Emit launch_sweep, persist sweep state |
-| WAIT_FOR_SWEEP | poll (loops) | Emit poll_sweep, check completion/failure/budget |
+| WAIT_FOR_SWEEP | poll_sweep (loops) | Emit poll_sweep, check completion/failure/budget |
 | ANALYZE | single (analyze) | Dispatch analysis worker, update baseline |
-| ROLL_ITERATION | single (roll) | Filter proposals, check stops, emit report |
+| ROLL_ITERATION | plan_roll_iteration, gate_roll_iteration | Filter proposals, check stops, emit report |
 
 ## Null recommended_next_machine_state
 

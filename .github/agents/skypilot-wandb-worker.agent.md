@@ -100,15 +100,15 @@ Use the project's `sky_task.yaml` as the SkyPilot task config. This file defines
 
 Read `WANDB_API_KEY` from the local environment (`os.environ["WANDB_API_KEY"]`). It **must** be set; if absent, write an error result and stop.
 
-For each agent `i` in `1..num_sweep_agents`:
+For each agent `i` in `1..sky_task_spec.num_sweep_agents`:
 
 ```bash
 sky launch sky_task.yaml \
-  --idle-minutes-to-autostop <idle_timeout_minutes> \
+  --idle-minutes-to-autostop <sky_task_spec.idle_timeout_minutes> \
   --name metaopt-sweep-<sweep_id>-agent-<i> \
   --env WANDB_API_KEY=<from local env> \
-  --env WANDB_ENTITY=<wandb_entity> \
-  --env WANDB_PROJECT=<wandb_project> \
+  --env WANDB_ENTITY=<wandb_entity from local env/config> \
+  --env WANDB_PROJECT=<wandb_project from local env/config> \
   --env WANDB_SWEEP_ID=<sweep_id> \
   --env NUM_AGENTS=1 \
   -y
@@ -145,20 +145,19 @@ Remove `.ml-metaopt/sweep-config-tmp.yaml`.
 
 ### Inputs
 
-From `directive.payload`:
+From the directive (flat fields):
 
 ```json
 {
+  "action": "poll_sweep",
+  "reason": "checking sweep status",
   "sweep_id": "<sweep_id>",
-  "wandb_entity": "my-entity",
-  "wandb_project": "my-project",
   "sky_job_ids": ["job-1", "job-2"],
-  "idle_timeout_minutes": 15,
-  "max_budget_usd": 10,
-  "cumulative_spend_usd": 3.40,
-  "result_file": ".ml-metaopt/executor-events/poll-sweep-iter-1.json"
+  "result_file": ".ml-metaopt/executor-events/poll-sweep-iter-<N>.json"
 }
 ```
+
+Note: The directive does NOT include `wandb_entity`, `wandb_project`, `idle_timeout_minutes`, `max_budget_usd`, or `cumulative_spend_usd`. Read WandB entity/project from the local environment/config. Read `idle_timeout_minutes` and `max_budget_usd` from `ml_metaopt_campaign.yaml` or environment. Track `cumulative_spend_usd` internally.
 
 ### Steps
 
@@ -255,15 +254,18 @@ Write to the path specified in `result_file`.
 
 ### Inputs
 
-From `directive.payload`:
+From the directive (flat fields):
 
 ```json
 {
+  "action": "run_smoke_test",
+  "reason": "smoke test result not found; dispatching smoke test",
   "command": "python train.py --smoke",
-  "repo": "git@github.com:user/project.git",
-  "result_file": ".ml-metaopt/executor-events/smoke-test-iter-1.json"
+  "result_file": ".ml-metaopt/executor-events/smoke-test-iter-<N>.json"
 }
 ```
+
+Note: The directive does NOT include a `repo` field. The test runs in the current working directory.
 
 ### Steps
 

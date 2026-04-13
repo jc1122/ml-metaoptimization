@@ -84,7 +84,7 @@ Checked by metaopt-iteration-close-control during ROLL_ITERATION:
 | Target metric reached | Direction-aware: >= target_metric (maximize) or <= target_metric (minimize) | COMPLETE |
 | Max iterations reached | current_iteration >= stop_conditions.max_iterations | COMPLETE |
 | No improvement plateau | no_improve_iterations >= stop_conditions.max_no_improve_iterations | COMPLETE |
-| Budget exhausted | cumulative_spend_usd >= compute.max_budget_usd | BLOCKED_CONFIG |
+| Budget exhausted | current_sweep.cumulative_spend_usd >= compute.max_budget_usd | BLOCKED_CONFIG |
 
 ## Terminal State Cleanup
 

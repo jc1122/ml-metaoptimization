@@ -61,7 +61,6 @@ The orchestrator dispatches `skypilot-wandb-worker` with this directive. `recomm
   {
     "recommended_next_machine_state": "FAILED",
     "state_patch": {
-      "status": "FAILED",
       "next_action": "Smoke test failed (exit_code=<N>, timed_out=<bool>). Fix the training script. Last stderr: <stderr_tail last 5 lines>"
     },
     "directive": { "type": "none" }
@@ -108,7 +107,9 @@ The orchestrator dispatches `skypilot-wandb-worker` with this directive. `recomm
         "sweep_url": "<from result>",
         "sky_job_ids": ["<from result>"],
         "launched_at": "<from result>",
-        "cumulative_spend_usd": 0
+        "cumulative_spend_usd": 0.0,
+        "best_run_id": null,
+        "best_metric_value": null
       }
     },
     "directive": { "type": "none" }
@@ -119,7 +120,6 @@ The orchestrator dispatches `skypilot-wandb-worker` with this directive. `recomm
   {
     "recommended_next_machine_state": "FAILED",
     "state_patch": {
-      "status": "FAILED",
       "next_action": "Sweep launch failed: <error details>"
     },
     "directive": { "type": "none" }
@@ -154,12 +154,22 @@ The orchestrator dispatches `skypilot-wandb-worker` with this directive. `recomm
 
 **Step 2 (re-invocation):** Read the poll result file:
 
+Note: `state_patch` for `current_sweep` must include ALL fields (the orchestrator replaces the entire object). Read the existing `current_sweep` from state and include all fields, updating only the changed ones.
+
 - **`sweep_status == "running"`**: Update spend and stay in WAIT_FOR_SWEEP:
   ```json
   {
     "recommended_next_machine_state": null,
     "state_patch": {
-      "current_sweep": { "cumulative_spend_usd": "<from result>" }
+      "current_sweep": {
+        "sweep_id": "<preserve from state>",
+        "sweep_url": "<preserve from state>",
+        "sky_job_ids": ["<preserve from state>"],
+        "launched_at": "<preserve from state>",
+        "cumulative_spend_usd": "<updated from result>",
+        "best_run_id": "<preserve from state>",
+        "best_metric_value": "<preserve from state>"
+      }
     },
     "directive": { "type": "none" },
     "summary": "Sweep still running, spend $<N>"
@@ -173,9 +183,13 @@ The orchestrator dispatches `skypilot-wandb-worker` with this directive. `recomm
     "recommended_next_machine_state": "ANALYZE",
     "state_patch": {
       "current_sweep": {
-        "cumulative_spend_usd": "<from result>",
-        "best_run_id": "<from result>",
-        "best_metric_value": "<from result>"
+        "sweep_id": "<preserve from state>",
+        "sweep_url": "<preserve from state>",
+        "sky_job_ids": ["<preserve from state>"],
+        "launched_at": "<preserve from state>",
+        "cumulative_spend_usd": "<updated from result>",
+        "best_run_id": "<updated from result>",
+        "best_metric_value": "<updated from result>"
       }
     },
     "directive": { "type": "none" }
@@ -187,8 +201,15 @@ The orchestrator dispatches `skypilot-wandb-worker` with this directive. `recomm
   {
     "recommended_next_machine_state": "FAILED",
     "state_patch": {
-      "status": "FAILED",
-      "current_sweep": { "cumulative_spend_usd": "<from result>" },
+      "current_sweep": {
+        "sweep_id": "<preserve from state>",
+        "sweep_url": "<preserve from state>",
+        "sky_job_ids": ["<preserve from state>"],
+        "launched_at": "<preserve from state>",
+        "cumulative_spend_usd": "<updated from result>",
+        "best_run_id": "<preserve from state>",
+        "best_metric_value": "<preserve from state>"
+      },
       "next_action": "All sweep agents crashed with no successful runs. Check WandB logs."
     },
     "directive": { "type": "none" }
@@ -200,8 +221,15 @@ The orchestrator dispatches `skypilot-wandb-worker` with this directive. `recomm
   {
     "recommended_next_machine_state": "BLOCKED_CONFIG",
     "state_patch": {
-      "status": "BLOCKED_CONFIG",
-      "current_sweep": { "cumulative_spend_usd": "<from result>" },
+      "current_sweep": {
+        "sweep_id": "<preserve from state>",
+        "sweep_url": "<preserve from state>",
+        "sky_job_ids": ["<preserve from state>"],
+        "launched_at": "<preserve from state>",
+        "cumulative_spend_usd": "<updated from result>",
+        "best_run_id": "<preserve from state>",
+        "best_metric_value": "<preserve from state>"
+      },
       "next_action": "Budget cap of $<max_budget_usd> reached. Increase compute.max_budget_usd or reduce num_sweep_agents."
     },
     "directive": { "type": "none" }

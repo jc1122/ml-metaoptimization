@@ -112,6 +112,37 @@ def _validate_campaign(campaign: dict[str, Any]) -> list[str]:
     if _contains_sentinel(campaign.get("wandb")):
         issues.append("wandb contains a sentinel placeholder")
 
+    # Numeric range constraints
+    num_agents = _get_nested(campaign, ("compute", "num_sweep_agents"))
+    if num_agents is not None:
+        if not isinstance(num_agents, int) or not (1 <= num_agents <= 16):
+            issues.append("compute.num_sweep_agents must be an integer in [1, 16]")
+
+    max_budget = _get_nested(campaign, ("compute", "max_budget_usd"))
+    if max_budget is not None:
+        if not isinstance(max_budget, (int, float)) or max_budget <= 0 or max_budget > 100:
+            issues.append("compute.max_budget_usd must be a number in (0, 100]")
+
+    idle_timeout = _get_nested(campaign, ("compute", "idle_timeout_minutes"))
+    if idle_timeout is not None:
+        if not isinstance(idle_timeout, int) or not (5 <= idle_timeout <= 60):
+            issues.append("compute.idle_timeout_minutes must be an integer in [5, 60]")
+
+    improvement_threshold = _get_nested(campaign, ("objective", "improvement_threshold"))
+    if improvement_threshold is not None:
+        if not isinstance(improvement_threshold, (int, float)) or improvement_threshold <= 0:
+            issues.append("objective.improvement_threshold must be a positive number")
+
+    max_iterations = _get_nested(campaign, ("stop_conditions", "max_iterations"))
+    if max_iterations is not None:
+        if not isinstance(max_iterations, int) or max_iterations <= 0:
+            issues.append("stop_conditions.max_iterations must be a positive integer")
+
+    max_no_improve = _get_nested(campaign, ("stop_conditions", "max_no_improve_iterations"))
+    if max_no_improve is not None:
+        if not isinstance(max_no_improve, int) or max_no_improve <= 0:
+            issues.append("stop_conditions.max_no_improve_iterations must be a positive integer")
+
     return issues
 
 

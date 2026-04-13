@@ -67,9 +67,9 @@ If the WandB API call fails, write an error result to `result_file` and exit:
 **If `current_baseline` exists:**
 - Compute `delta = best_run_metric_value - current_baseline.value`
 - If `objective.direction == "maximize"`:
-  - `improved = (delta >= objective.improvement_threshold)`
+  - `improved = (delta > objective.improvement_threshold)`
 - If `objective.direction == "minimize"`:
-  - `improved = (-delta >= objective.improvement_threshold)` (i.e., the value decreased by at least the threshold)
+  - `improved = (-delta > objective.improvement_threshold)` (i.e., the value decreased by more than the threshold)
 
 ### Step 3: Extract key learnings
 

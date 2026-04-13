@@ -155,7 +155,7 @@ class LoadCampaignHandoffTests(unittest.TestCase):
         self.assertIn("description:", content)
         self.assertIn("tools:", content)
         self.assertIn("user-invocable: false", content)
-        self.assertIn("scripts/load_campaign_handoff.py", content)
+        self.assertIn(".ml-metaopt/handoffs/metaopt-load-campaign-LOAD_CAMPAIGN.json", content)
 
 
     # ------------------------------------------------------------------ #

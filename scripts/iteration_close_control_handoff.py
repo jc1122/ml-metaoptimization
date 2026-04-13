@@ -106,7 +106,7 @@ def _validate_rollover_result(payload: Any) -> list[str]:
     return warnings
 
 
-def _stop_reason(state: dict[str, Any], stop_conditions: dict[str, Any]) -> str:
+def _stop_reason(state: dict[str, Any], stop_conditions: dict[str, Any], load_handoff: dict[str, Any] | None = None) -> str:
     baseline = state.get("baseline") or {}
     baseline_value = baseline.get("value")
     direction = state["objective_snapshot"]["direction"]
@@ -118,6 +118,15 @@ def _stop_reason(state: dict[str, Any], stop_conditions: dict[str, Any]) -> str:
         return "max_iterations"
     if state["no_improve_iterations"] >= stop_conditions["max_no_improve_iterations"]:
         return "max_no_improve_iterations"
+    # Budget cap check
+    max_budget = (load_handoff or {}).get("compute", {}).get("max_budget_usd")
+    if max_budget is not None:
+        total_spend = sum(
+            entry.get("spend_usd", 0.0)
+            for entry in state.get("completed_iterations", [])
+        )
+        if total_spend >= max_budget:
+            return "budget_exhausted"
     return ""
 
 
@@ -203,13 +212,16 @@ def _gate_roll_iteration(load_handoff: dict[str, Any], state_path: Path, worker_
     state["current_proposals"] = current_pool
     state["next_proposals"] = []
 
-    stop_reason = _stop_reason(state, load_handoff["stop_conditions"])
+    stop_reason = _stop_reason(state, load_handoff["stop_conditions"], load_handoff)
     continue_campaign = not bool(stop_reason)
 
     if continue_campaign:
         state["current_iteration"] = next_iteration
         state["next_action"] = "maintain background pool"
         next_state = "IDEATE"
+    elif stop_reason == "budget_exhausted":
+        state["next_action"] = "budget cap reached"
+        next_state = "COMPLETE"
     else:
         state["next_action"] = "emit final report and remove orchestration hook"
         next_state = "COMPLETE"

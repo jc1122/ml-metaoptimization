@@ -50,7 +50,7 @@ Path: `.ml-metaopt/state.json`
 | `sweep_url` | string | Full WandB sweep URL |
 | `sky_job_ids` | list[string] | SkyPilot job identifiers for launched agents |
 | `launched_at` | string | ISO 8601 timestamp |
-| `cumulative_spend_usd` | float | `>= 0`; updated on each poll |
+| `cumulative_spend_usd` | float | `>= 0`; starts at `0.0` when a sweep is launched; updated on each `poll_sweep` result |
 
 ### `selected_sweep` object (when non-null)
 
@@ -119,7 +119,8 @@ Schema:
   "directive": {
     "type": "launch_sweep",
     "payload": { "sweep_config": { "..." } }
-  }
+  },
+  "launch_requests": []
 }
 ```
 
@@ -127,8 +128,9 @@ Schema:
 |-------|------|------------|
 | `recommended_next_machine_state` | string or null | `null` = stay in current state (poll again); non-null must be a valid machine state |
 | `state_patch` | object | Keys must match `STATE_PATCH_OWNERSHIP` for the invoking agent |
-| `directive.type` | string | One of: `launch_sweep`, `poll_sweep`, `run_smoke_test`, `remove_agents_hook`, `delete_state_file`, `emit_final_report`, `emit_iteration_report`, `none` |
+| `directive.type` | string | One of: `launch_sweep`, `poll_sweep`, `run_smoke_test`, `none` |
 | `directive.payload` | object | Action-specific fields (see `references/backend-contract.md` for execution directives) |
+| `launch_requests` | list[WorkerLaunchRequest] | Optional; workers to dispatch. Each entry: `{ "skill": "<worker_ref>", "payload": { ... }, "result_file": "<path>" }` |
 
 ## Section 3 — Worker Result File Schema
 

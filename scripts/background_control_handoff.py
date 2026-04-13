@@ -17,6 +17,24 @@ _PLAN_HANDOFF_TYPE = "background_control.plan_background_work"
 _GATE_HANDOFF_TYPE = "background_control.gate_background_work"
 
 
+def _runtime_error(
+    output_path: Path,
+    handoff_type: str,
+    recovery_action: str,
+    summary: str,
+    warnings: list[str] | None = None,
+) -> dict[str, Any]:
+    payload = {
+        "schema_version": 1,
+        "recommended_next_machine_state": None,
+        "recovery_action": recovery_action,
+        "state_patch": None,
+        "warnings": warnings or [],
+        "summary": summary,
+    }
+    return emit_handoff(output_path, payload, handoff_type=handoff_type, control_agent=_CONTROL_AGENT)
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate Steps 3/4 background control handoffs.")
     parser.add_argument("--mode", required=True, choices=("plan_background_work", "gate_background_work"))
@@ -172,6 +190,14 @@ def _gate_background_work(
     sequence = _proposal_sequence(state)
     processed_results: list[str] = []
 
+    # Build set of existing proposal IDs for idempotent processing
+    existing_ids: set[str] = set()
+    for pool_name in ("current_proposals", "next_proposals"):
+        for proposal in state.get(pool_name, []):
+            pid = proposal.get("proposal_id")
+            if isinstance(pid, str):
+                existing_ids.add(pid)
+
     for result_file in sorted(worker_results_dir.glob("bg-*.json")):
         result = read_json(result_file)
         processed_results.append(result_file.stem)
@@ -180,13 +206,17 @@ def _gate_background_work(
             candidates = result.get("proposal_candidates", [])
             for candidate in candidates:
                 sequence += 1
+                proposal_id = f"{state['campaign_id']}-p{sequence}"
+                if proposal_id in existing_ids:
+                    continue
                 enriched = dict(candidate)
-                enriched["proposal_id"] = f"{state['campaign_id']}-p{sequence}"
+                enriched["proposal_id"] = proposal_id
                 enriched["source_slot_id"] = result_file.stem
                 enriched["creation_iteration"] = state["current_iteration"]
                 enriched["created_at"] = timestamp()
                 destination = "current_proposals" if not state["proposal_cycle"]["current_pool_frozen"] else "next_proposals"
                 state[destination].append(enriched)
+                existing_ids.add(proposal_id)
 
     if _ready_for_selection(state, load_handoff):
         state["next_action"] = "select experiment"
@@ -218,11 +248,27 @@ def main() -> int:
     args = _parse_args()
     if args.apply_state:
         os.environ["METAOPT_APPLY_STATE_HANDOFF"] = "1"
-    load_handoff = read_json(Path(args.load_handoff))
+    output_path = Path(args.output)
+    handoff_type = _PLAN_HANDOFF_TYPE if args.mode == "plan_background_work" else _GATE_HANDOFF_TYPE
+
+    try:
+        load_handoff = read_json(Path(args.load_handoff))
+        if not isinstance(load_handoff, dict) or "proposal_policy" not in load_handoff:
+            raise ValueError("load handoff missing required field: proposal_policy")
+    except Exception as exc:
+        payload = _runtime_error(
+            output_path,
+            handoff_type,
+            "repair or replace load_campaign.latest.json",
+            "load handoff unreadable or invalid",
+            [str(exc)],
+        )
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0
+
     state_path = Path(args.state_path)
     tasks_dir = Path(args.tasks_dir)
     worker_results_dir = Path(args.worker_results_dir)
-    output_path = Path(args.output)
 
     if args.mode == "plan_background_work":
         payload = _plan_background_work(load_handoff, state_path, tasks_dir, output_path, secondary=args.secondary)

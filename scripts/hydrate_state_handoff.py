@@ -283,7 +283,15 @@ def build_handoff(
         if state["status"] in _TERMINAL_STATUSES:
             outcome = "terminal"
         else:
-            outcome = "resumed"
+            # Crash recovery: if current_sweep has an active sweep_id, reconnect
+            current_sweep = state.get("current_sweep")
+            if (
+                isinstance(current_sweep, dict)
+                and current_sweep.get("sweep_id") is not None
+            ):
+                outcome = "crash_recovery"
+            else:
+                outcome = "resumed"
     else:
         state = _fresh_state(load_handoff)
         resume_mode = "fresh"
@@ -303,6 +311,19 @@ def build_handoff(
         agents_action = "remove_directive_emitted"
         directives = [_remove_hook_directive()]
 
+    # Crash recovery: override recommended_next_machine_state and add poll_sweep directive
+    recommended_machine_state = state["machine_state"]
+    if outcome == "crash_recovery":
+        recommended_machine_state = "WAIT_FOR_SWEEP"
+        current_sweep = state.get("current_sweep", {})
+        directives.append({
+            "action": "poll_sweep",
+            "reason": "crash recovery — reconnecting to existing WandB sweep",
+            "sweep_id": current_sweep.get("sweep_id", ""),
+            "sky_job_ids": current_sweep.get("sky_job_ids", []),
+            "result_file": ".ml-metaopt/worker-results/poll-sweep-recovery.json",
+        })
+
     payload = {
         "schema_version": 1,
         "state_path": str(state_path),
@@ -313,7 +334,7 @@ def build_handoff(
         "resume_mode": resume_mode,
         "effective_status": state["status"],
         "effective_machine_state": state["machine_state"],
-        "recommended_next_machine_state": state["machine_state"],
+        "recommended_next_machine_state": recommended_machine_state,
         "recovery_action": None,
         "agents_hook_action": agents_action,
         "directives": directives,
@@ -321,6 +342,8 @@ def build_handoff(
         "summary": (
             "fresh orchestrator state initialized"
             if outcome == "initialized"
+            else "existing orchestrator state resumed — reconnecting to active sweep"
+            if outcome == "crash_recovery"
             else "existing orchestrator state resumed"
             if outcome == "resumed"
             else f"existing state is terminal ({state['status']}); hook removal directive emitted"

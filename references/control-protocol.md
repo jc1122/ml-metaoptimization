@@ -31,7 +31,7 @@ Every control-agent handoff must conform to this envelope:
 |-------|------|------------|
 | recommended_next_machine_state | string or null | Valid machine state or null |
 | state_patch | object | Only keys from STATE_PATCH_OWNERSHIP for this agent |
-| directive.type | string | One of: launch_sweep, poll_sweep, run_smoke_test, remove_agents_hook, delete_state_file, emit_final_report, emit_iteration_report, none |
+| directive.type | string | One of: launch_sweep, poll_sweep, run_smoke_test, none |
 | directive.payload | object | Action-specific fields |
 
 ## Orchestrator Execution Sequence
@@ -64,11 +64,11 @@ Execute the single directive mechanically:
 - launch_sweep: dispatch skypilot-wandb-worker, write result to .ml-metaopt/worker-results/launch-sweep.json
 - poll_sweep: dispatch skypilot-wandb-worker, write result to .ml-metaopt/worker-results/poll-sweep.json
 - run_smoke_test: dispatch skypilot-wandb-worker, write result to .ml-metaopt/worker-results/smoke-test.json
-- remove_agents_hook: remove the ml-metaoptimization marked block from AGENTS.md
-- delete_state_file: delete .ml-metaopt/state.json
-- emit_final_report: write .ml-metaopt/final_report.md
-- emit_iteration_report: write iteration summary to console/log
 - none: no operation
+
+Terminal cleanup (remove_agents_hook, delete_state_file, emit_final_report, emit_iteration_report) is orchestrator-internal bookkeeping triggered by transitioning to a terminal state (COMPLETE, BLOCKED_CONFIG, BLOCKED_PROTOCOL, FAILED). The orchestrator performs these steps directly without dispatching an agent or requiring a directive. Specifically:
+- On any terminal state: remove_agents_hook — remove the ml-metaoptimization marked block from AGENTS.md
+- On COMPLETE only: emit_final_report — write .ml-metaopt/final_report.md, then delete_state_file — delete .ml-metaopt/state.json
 
 ### Step 6 -- Apply state patch
 

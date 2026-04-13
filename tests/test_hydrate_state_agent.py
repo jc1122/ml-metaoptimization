@@ -379,7 +379,7 @@ class HydrateStateHandoffTests(unittest.TestCase):
         self.assertIn("description:", content)
         self.assertIn("tools:", content)
         self.assertIn("user-invocable: false", content)
-        self.assertIn("scripts/hydrate_state_handoff.py", content)
+        self.assertIn(".ml-metaopt/handoffs/metaopt-hydrate-state-HYDRATE_STATE.json", content)
 
     def test_invalid_load_handoff_returns_runtime_error_without_state_write(self):
         with tempfile.TemporaryDirectory() as td:

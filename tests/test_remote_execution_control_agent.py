@@ -142,8 +142,10 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             state = _v4_state()
             payload, _, _ = self._run(td, "gate_local_sanity", state=state)
-            self.assertIsNone(payload["recommended_next_machine_state"])
-            self.assertIn("missing", payload["summary"])
+            self.assertEqual(payload["recommended_next_machine_state"], "LAUNCH_SWEEP")
+            directives = payload.get("directives", [])
+            self.assertTrue(len(directives) >= 1)
+            self.assertEqual(directives[0]["action"], "run_smoke_test")
 
     # ── plan_launch ────────────────────────────────────────────────────
 

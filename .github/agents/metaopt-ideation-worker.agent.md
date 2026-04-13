@@ -5,6 +5,7 @@ model: claude-sonnet-4
 tools:
   - read
   - search
+  - execute
 user-invocable: false
 ---
 

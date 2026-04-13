@@ -88,7 +88,25 @@ def _gate_local_sanity(
     iteration = state["current_iteration"]
     smoke_result_path = executor_events_dir / f"smoke-test-iter-{iteration}.json"
     if not smoke_result_path.exists():
-        return _runtime_error(output_path, _GATE_SANITY_HANDOFF_TYPE, "stage smoke test result", "smoke test result missing")
+        smoke_command = load_handoff.get("project", {}).get("smoke_test_command", "")
+        result_file = f".ml-metaopt/worker-results/smoke-test-iter-{iteration}.json"
+        state["next_action"] = "run smoke test"
+        payload = {
+            "schema_version": 1,
+            "recommended_next_machine_state": "LAUNCH_SWEEP",
+            "directives": [
+                {
+                    "action": "run_smoke_test",
+                    "reason": "smoke test result not found; dispatching smoke test",
+                    "command": smoke_command,
+                    "result_file": result_file,
+                },
+            ],
+            "warnings": [],
+            "summary": "run_smoke_test directive emitted",
+        }
+        persist_state_handoff(state_path, previous_state, state, payload, control_agent=_CONTROL_AGENT)
+        return emit_handoff(output_path, payload, handoff_type=_GATE_SANITY_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
     smoke_result = read_json(smoke_result_path)
     exit_code = smoke_result.get("exit_code", 1)
@@ -140,6 +158,15 @@ def _plan_launch(
         "max_budget_usd": compute.get("max_budget_usd", 10),
     }
 
+    state["current_sweep"] = {
+        "sweep_id": None,
+        "sweep_url": None,
+        "sky_job_ids": [],
+        "launched_at": None,
+        "cumulative_spend_usd": 0.0,
+        "best_run_id": None,
+        "best_metric_value": None,
+    }
     state["next_action"] = "execute launch sweep directive"
     payload = {
         "schema_version": 1,

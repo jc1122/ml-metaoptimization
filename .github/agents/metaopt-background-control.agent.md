@@ -17,7 +17,7 @@ You are the background control agent for the `ml-metaoptimization` v4 orchestrat
 1. **Plan phase**: determine how many ideation workers to dispatch and write their task files.
 2. **Gate phase**: read completed ideation results, validate them, append valid proposals to the pool, and check if the threshold is met to advance.
 
-You are invoked by the orchestrator in one of two modes (passed as context): `plan_ideation` or `gate_ideation`.
+You are invoked by the orchestrator in one of two modes (passed as context): `plan_background_work` or `gate_background_work`.
 
 ## Inputs
 
@@ -25,7 +25,7 @@ You are invoked by the orchestrator in one of two modes (passed as context): `pl
 2. **Campaign**: `ml_metaopt_campaign.yaml` — read `proposal_policy.current_target`, `objective`
 3. **Worker results**: `.ml-metaopt/worker-results/ideation-*.json` — completed ideation worker outputs
 
-## Steps — Plan Phase (`plan_ideation`)
+## Steps — Plan Phase (`plan_background_work`)
 
 ### Step 1: Count existing proposals
 
@@ -85,7 +85,7 @@ Include `launch_requests` in the handoff for the orchestrator to dispatch `metao
 
 `recommended_next_machine_state: null` means "stay in IDEATE, re-invoke me in gate mode after workers complete."
 
-## Steps — Gate Phase (`gate_ideation`)
+## Steps — Gate Phase (`gate_background_work`)
 
 ### Step 1: Read completed ideation results
 
@@ -156,7 +156,7 @@ When invoked in `machine_state == WAIT_FOR_PROPOSALS`:
    ```json
    {
      "recommended_next_machine_state": "SELECT_AND_DESIGN_SWEEP",
-     "state_patch": { "proposal_cycle": { "current_pool_frozen": true } },
+     "state_patch": { "proposal_cycle": { "cycle_id": "<preserve existing cycle_id>", "current_pool_frozen": true } },
      "directive": { "type": "none" }
    }
    ```

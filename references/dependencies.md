@@ -111,12 +111,14 @@ Enforced by `metaopt-load-campaign` during `LOAD_CAMPAIGN`. Any violation transi
 
 ## Worker-Target Dependencies
 
-Required worker targets (block on missing):
+Required worker targets (verified on-demand when dispatched):
 - `metaopt-ideation-worker` — background ideation lane
 - `metaopt-analysis-worker` — analysis lane
+
+Required worker target (verified at `HYDRATE_STATE`, block on missing):
 - `skypilot-wandb-worker` — execution lane (directive-dispatched)
 
-These are verified during `HYDRATE_STATE`. If any is missing, transition to `BLOCKED_CONFIG`.
+These are referenced during `HYDRATE_STATE` for the execution worker. The ideation and analysis workers are verified on-demand when their respective control agents attempt to dispatch them.
 
 ## Failure Behavior
 

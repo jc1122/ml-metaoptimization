@@ -5,6 +5,7 @@ model: claude-sonnet-4
 tools:
   - read
   - search
+  - execute
 user-invocable: false
 ---
 
@@ -81,7 +82,6 @@ If NO stop condition is met → continue to next iteration.
 
 ```json
 {
-  "status": "COMPLETE",
   "current_sweep": null,
   "selected_sweep": null,
   "next_action": "Campaign complete. <stop reason>. Best metric: <baseline.value>. See .ml-metaopt/final_report.md"
@@ -92,47 +92,24 @@ If NO stop condition is met → continue to next iteration.
 
 ```json
 {
-  "status": "BLOCKED_CONFIG",
   "next_action": "<blocking reason>"
 }
 ```
 
-### Step 5: Emit iteration report directive
+### Step 5: Write iteration report (in-process)
 
-Always emit an `emit_iteration_report` directive (even when stopping):
+Always write an iteration report as an in-process action using the `execute` tool (even when stopping). This is NOT a directive — the agent writes it directly:
 
-```json
-{
-  "type": "emit_iteration_report",
-  "payload": {
-    "iteration": "<current_iteration>",
-    "best_metric": "<baseline.value>",
-    "spend_usd": "<current_sweep.cumulative_spend_usd for this iteration>",
-    "sweep_url": "<current_sweep.sweep_url>",
-    "proposal_rationale": "<selected_sweep rationale from the proposal that was selected>"
-  }
-}
-```
+Write to `.ml-metaopt/iteration-report-<current_iteration>.md` with content summarizing:
+- Iteration number
+- Best metric value (`baseline.value`)
+- Spend this iteration (`current_sweep.cumulative_spend_usd`)
+- Sweep URL (`current_sweep.sweep_url`)
+- Selected proposal rationale
 
-### Step 6: Emit cleanup directives (if stopping)
+### Step 6: Cleanup on stop (orchestrator-internal)
 
-If the campaign is stopping (COMPLETE or BLOCKED_CONFIG), also note these additional directives for the orchestrator to execute on subsequent re-invocations:
-
-- `{ "type": "remove_agents_hook" }` — remove the `<!-- ml-metaoptimization:begin -->` block from AGENTS.md
-- `{ "type": "emit_final_report" }` — write `.ml-metaopt/final_report.md` with full campaign summary
-- `{ "type": "delete_state_file" }` — (only on COMPLETE) remove `.ml-metaopt/state.json`
-
-Include these as `pending_cleanup_directives` in the handoff so the orchestrator knows to execute them:
-
-```json
-{
-  "pending_cleanup_directives": [
-    { "type": "remove_agents_hook" },
-    { "type": "emit_final_report" },
-    { "type": "delete_state_file" }
-  ]
-}
-```
+If the campaign is stopping (COMPLETE or BLOCKED_CONFIG), terminal cleanup (removing the AGENTS.md hook, deleting the state file, writing the final report) is orchestrator-internal bookkeeping triggered by transitioning to COMPLETE. The agent does NOT emit directives for these — the orchestrator performs them directly after seeing the terminal `recommended_next_machine_state`.
 
 ## Output
 
@@ -143,7 +120,7 @@ Write handoff to: `.ml-metaopt/handoffs/metaopt-iteration-close-control-ROLL_ITE
 {
   "recommended_next_machine_state": "IDEATE",
   "state_patch": { "...from Step 4..." },
-  "directive": { "type": "emit_iteration_report", "payload": { "..." } },
+  "directive": { "type": "none" },
   "summary": "Iteration <N> complete. Improved: <yes/no>. Continuing to iteration <N+1>.",
   "filtered_proposals": { "kept": "<count>", "discarded": "<count>", "discard_reasons": ["..."] }
 }
@@ -154,8 +131,7 @@ Write handoff to: `.ml-metaopt/handoffs/metaopt-iteration-close-control-ROLL_ITE
 {
   "recommended_next_machine_state": "COMPLETE",
   "state_patch": { "...from Step 4..." },
-  "directive": { "type": "emit_iteration_report", "payload": { "..." } },
-  "pending_cleanup_directives": [ "..." ],
+  "directive": { "type": "none" },
   "stop_reason": "<which condition triggered>",
   "summary": "Campaign complete after <N> iterations. Stop reason: <reason>. Best: <metric>=<value>"
 }
@@ -169,4 +145,4 @@ Write handoff to: `.ml-metaopt/handoffs/metaopt-iteration-close-control-ROLL_ITE
 - Increment `current_iteration` ONLY when the campaign will continue. Do not increment on stop.
 - Stop condition checks are direction-aware: `>=` for maximize, `<=` for minimize.
 - When discarding proposals, log the reason for each discard in the handoff for auditability.
-- The `emit_iteration_report` directive is ALWAYS emitted, whether continuing or stopping.
+- The iteration report is ALWAYS written (in-process via `execute` tool), whether continuing or stopping.

@@ -22,15 +22,20 @@ You are NEVER invoked directly by users. The orchestrator dispatches you via dir
 
 ## Inputs
 
-You will be invoked with a directive payload. The payload contains an `operation` field that determines which operation to execute, plus operation-specific fields.
+You will be invoked with a handoff file from `.ml-metaopt/handoffs/`. The handoff contains a `directive` object with:
+- `directive.type`: one of `launch_sweep`, `poll_sweep`, or `run_smoke_test` — determines which operation to execute
+- `directive.payload`: operation-specific parameters (described per-operation below)
+
+Dispatch on `directive.type` to select the operation. Read parameters from `directive.payload`.
 
 ## Operation: `launch_sweep`
 
 ### Inputs
 
+From `directive.payload`:
+
 ```json
 {
-  "operation": "launch_sweep",
   "sweep_config": { "method": "bayes", "metric": {...}, "parameters": {...} },
   "wandb_entity": "my-entity",
   "wandb_project": "my-project",
@@ -129,9 +134,10 @@ Remove `.ml-metaopt/sweep-config-tmp.yaml`.
 
 ### Inputs
 
+From `directive.payload`:
+
 ```json
 {
-  "operation": "poll_sweep",
   "sweep_id": "<sweep_id>",
   "wandb_entity": "my-entity",
   "wandb_project": "my-project",
@@ -237,9 +243,10 @@ Write to the path specified in `result_file`.
 
 ### Inputs
 
+From `directive.payload`:
+
 ```json
 {
-  "operation": "run_smoke_test",
   "command": "python train.py --smoke",
   "result_file": ".ml-metaopt/worker-results/smoke-iter-0.json"
 }

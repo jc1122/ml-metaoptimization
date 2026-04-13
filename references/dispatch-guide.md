@@ -123,7 +123,7 @@ For worker lane contracts (inputs, outputs, drift rules), see references/worker-
    - sweep_status = completed: recommended_next_machine_state = ANALYZE
    - sweep_status = failed: recommended_next_machine_state = FAILED
    - sweep_status = budget_exceeded: recommended_next_machine_state = BLOCKED_CONFIG
-7. Apply state_patch (updates cumulative_spend_usd) and transition accordingly
+7. Apply state_patch (updates current_sweep.cumulative_spend_usd) and transition accordingly
 
 ## ANALYZE
 

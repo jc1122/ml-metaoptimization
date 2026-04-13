@@ -75,7 +75,6 @@ Read `ml_metaopt_campaign.yaml` for field values. Construct the full initial sta
   "version": 4,
   "campaign_id": "<campaign.name slugified>-<short-uuid>",
   "campaign_identity_hash": "<from LOAD_CAMPAIGN handoff>",
-  "machine_state": "IDEATE",
   "current_iteration": 0,
   "next_action": null,
   "objective_snapshot": {

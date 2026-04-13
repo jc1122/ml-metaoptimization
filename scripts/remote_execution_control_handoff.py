@@ -89,7 +89,7 @@ def _gate_local_sanity(
     smoke_result_path = executor_events_dir / f"smoke-test-iter-{iteration}.json"
     if not smoke_result_path.exists():
         smoke_command = load_handoff.get("project", {}).get("smoke_test_command", "")
-        result_file = f".ml-metaopt/worker-results/smoke-test-iter-{iteration}.json"
+        result_file = f".ml-metaopt/executor-events/smoke-test-iter-{iteration}.json"
         state["next_action"] = "run smoke test"
         payload = {
             "schema_version": 1,
@@ -242,7 +242,7 @@ def _poll_sweep(
 
     poll_result_path = executor_events_dir / f"poll-sweep-iter-{iteration}.json"
     if not poll_result_path.exists():
-        result_file = f".ml-metaopt/worker-results/poll-sweep-iter-{iteration}.json"
+        result_file = f".ml-metaopt/executor-events/poll-sweep-iter-{iteration}.json"
         state["next_action"] = "poll WandB sweep status"
         payload = {
             "schema_version": 1,

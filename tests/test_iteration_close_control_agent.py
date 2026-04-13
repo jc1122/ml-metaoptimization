@@ -153,7 +153,91 @@ class IterationCloseControlAgentTests(unittest.TestCase):
             self.assertIsNone(updated["selected_sweep"])
             self.assertIsNone(updated["current_sweep"])
 
-    def test_gate_roll_iteration_stops_on_max_iterations(self):
+    def test_gate_roll_iteration_non_null_sweep_clears_sweep(self):
+        """gate_roll_iteration must clear current_sweep and selected_sweep even when non-null."""
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            sweep = {
+                "sweep_id": "sweep-abc", "sweep_url": "https://wandb.ai/s",
+                "sky_job_ids": ["job-1"], "launched_at": "2026-04-13T10:00:00Z",
+                "cumulative_spend_usd": 2.5, "best_run_id": "run-x",
+                "best_run_url": "https://wandb.ai/r", "best_metric_value": 0.941,
+            }
+            selected = {"proposal_id": "test-campaign-p1", "sweep_config": {"method": "bayes"}}
+            state = _v4_state(current_sweep=sweep, selected_sweep=selected)
+            rp = tmp / ".ml-metaopt" / "worker-results" / "rollover-iter-1.json"
+            rp.parent.mkdir(parents=True, exist_ok=True)
+            rp.write_text(json.dumps({
+                "filtered_proposals": [{"proposal_id": "test-campaign-p1", "title": "P1"}],
+                "merged_proposals": [],
+                "needs_fresh_ideation": False,
+                "summary": "ok",
+            }))
+            payload, updated, _ = self._run(td, "gate_roll_iteration", state=state)
+            self.assertEqual(payload["recommended_next_machine_state"], "IDEATE")
+            self.assertIsNone(updated["current_sweep"])
+            self.assertIsNone(updated["selected_sweep"])
+
+    def test_gate_roll_iteration_budget_exhausted_blocks_config(self):
+        """gate_roll_iteration must emit BLOCKED_CONFIG and stop_reason=budget_exhausted."""
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            state = _v4_state(
+                completed_iterations=[{"iteration": 1, "sweep_id": "s", "best_metric_value": 0.93, "spend_usd": 11.0, "improved_baseline": True}],
+            )
+            rp = tmp / ".ml-metaopt" / "worker-results" / "rollover-iter-1.json"
+            rp.parent.mkdir(parents=True, exist_ok=True)
+            rp.write_text(json.dumps({
+                "filtered_proposals": [],
+                "merged_proposals": [],
+                "needs_fresh_ideation": False,
+                "summary": "ok",
+            }))
+            payload, _, _ = self._run(td, "gate_roll_iteration", state=state)
+            self.assertEqual(payload["recommended_next_machine_state"], "BLOCKED_CONFIG")
+            self.assertFalse(payload["continue_campaign"])
+            self.assertEqual(payload["stop_reason"], "budget_exhausted")
+
+    def test_gate_roll_iteration_resets_proposal_cycle_for_next_iteration(self):
+        """gate_roll_iteration must reset proposal_cycle.cycle_id when continuing."""
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            state = _v4_state()
+            rp = tmp / ".ml-metaopt" / "worker-results" / "rollover-iter-1.json"
+            rp.parent.mkdir(parents=True, exist_ok=True)
+            rp.write_text(json.dumps({
+                "filtered_proposals": [{"proposal_id": "test-campaign-p1", "title": "P1"}],
+                "merged_proposals": [],
+                "needs_fresh_ideation": False,
+                "summary": "ok",
+            }))
+            _, updated, _ = self._run(td, "gate_roll_iteration", state=state)
+            self.assertEqual(updated["proposal_cycle"]["cycle_id"], "iter-2-cycle-1")
+            self.assertFalse(updated["proposal_cycle"]["current_pool_frozen"])
+
+    def test_gate_roll_iteration_next_proposals_become_current_proposals(self):
+        """next_proposals carried forward must appear in current_proposals after rollover."""
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            state = _v4_state(
+                current_proposals=[{"proposal_id": "test-campaign-p1", "title": "P1"}],
+                next_proposals=[{"title": "Carried P3"}],
+            )
+            rp = tmp / ".ml-metaopt" / "worker-results" / "rollover-iter-1.json"
+            rp.parent.mkdir(parents=True, exist_ok=True)
+            rp.write_text(json.dumps({
+                "filtered_proposals": [{"proposal_id": "test-campaign-p1", "title": "P1"}],
+                "merged_proposals": [{"title": "Carried P3"}],
+                "needs_fresh_ideation": False,
+                "summary": "ok",
+            }))
+            _, updated, _ = self._run(td, "gate_roll_iteration", state=state)
+            titles = [p["title"] for p in updated["current_proposals"]]
+            self.assertIn("P1", titles)
+            self.assertIn("Carried P3", titles)
+            self.assertEqual(updated["next_proposals"], [])
+
+
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             state = _v4_state(current_iteration=20)

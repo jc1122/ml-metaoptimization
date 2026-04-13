@@ -52,6 +52,7 @@ STATE_PATCH_OWNERSHIP: dict[str, tuple[tuple[str, ...], ...]] = {
         ("next_action",),
     ),
     "metaopt-select-design": (
+        ("proposal_cycle",),
         ("selected_sweep",),
         ("next_action",),
     ),
@@ -70,6 +71,8 @@ STATE_PATCH_OWNERSHIP: dict[str, tuple[tuple[str, ...], ...]] = {
         ("current_proposals",),
         ("completed_iterations",),
         ("proposal_cycle",),
+        ("selected_sweep",),
+        ("current_sweep",),
         ("next_action",),
     ),
 }

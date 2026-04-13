@@ -83,7 +83,7 @@ Take the winning proposal's `sweep_config` and refine it for launch:
 
 ## Output
 
-Write handoff to: `.ml-metaopt/handoffs/metaopt-select-design-SELECT_DESIGN.json`
+Write handoff to: `.ml-metaopt/handoffs/metaopt-select-design-SELECT_AND_DESIGN_SWEEP.json`
 
 ## Rules
 

@@ -217,6 +217,10 @@ def _gate_roll_iteration(load_handoff: dict[str, Any], state_path: Path, worker_
 
     if continue_campaign:
         state["current_iteration"] = next_iteration
+        state["proposal_cycle"] = {
+            "cycle_id": f"iter-{next_iteration}-cycle-1",
+            "current_pool_frozen": False,
+        }
         state["next_action"] = "maintain background pool"
         next_state = "IDEATE"
     elif stop_reason == "budget_exhausted":

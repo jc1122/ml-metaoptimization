@@ -224,6 +224,14 @@ class SelectDesignAgentTests(unittest.TestCase):
             payload, _, _ = self._run(td, "plan_select_design", state=state)
             self.assertEqual(payload["launch_requests"], [])
 
+    def test_plan_select_design_unfrozen_pool_freezes_it(self):
+        """plan_select_design must freeze the pool even when it starts unfrozen."""
+        with tempfile.TemporaryDirectory() as td:
+            state = _v4_state(proposal_cycle={"cycle_id": "iter-1-cycle-1", "current_pool_frozen": False})
+            payload, updated, _ = self._run(td, "plan_select_design", state=state)
+            self.assertEqual(payload["recommended_next_machine_state"], "SELECT_AND_DESIGN_SWEEP")
+            self.assertTrue(updated["proposal_cycle"]["current_pool_frozen"])
+
 
 if __name__ == "__main__":
     unittest.main()

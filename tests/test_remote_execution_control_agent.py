@@ -269,6 +269,26 @@ class RemoteExecutionControlAgentTests(unittest.TestCase):
             # Baseline unchanged
             self.assertEqual(updated["baseline"]["value"], 0.923)
 
+    def test_analyze_first_iteration_null_baseline_establishes_baseline(self):
+        """When baseline is null (first iteration), improved=True from analysis must establish it."""
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            state = _v4_state(baseline=None)
+            analysis = tmp / ".ml-metaopt" / "worker-results" / "sweep-analysis-iter-1.json"
+            analysis.parent.mkdir(parents=True, exist_ok=True)
+            analysis.write_text(json.dumps({
+                "improved": True,
+                "best_metric_value": 0.94,
+                "best_run_id": "run-first",
+                "best_run_url": "https://wandb.ai/first",
+                "learnings": [],
+            }))
+            payload, updated, _ = self._run(td, "analyze", state=state)
+            self.assertEqual(payload["recommended_next_machine_state"], "ROLL_ITERATION")
+            self.assertIsNotNone(updated["baseline"])
+            self.assertEqual(updated["baseline"]["value"], 0.94)
+            self.assertEqual(updated["no_improve_iterations"], 0)
+
     # ── envelope ───────────────────────────────────────────────────────
 
     def test_envelope_keys_present(self):

@@ -51,6 +51,9 @@ Path: `.ml-metaopt/state.json`
 | `sky_job_ids` | list[string] | SkyPilot job identifiers for launched agents |
 | `launched_at` | string | ISO 8601 timestamp |
 | `cumulative_spend_usd` | float | `>= 0`; starts at `0.0` when a sweep is launched; updated on each `poll_sweep` result |
+| `best_run_id` | string or null | WandB run ID of the current best run; updated on each `poll_sweep` result |
+| `best_run_url` | string or null | WandB run URL of the current best run |
+| `best_metric_value` | float or null | Best observed metric value so far; updated on each `poll_sweep` result |
 
 ### `selected_sweep` object (when non-null)
 
@@ -149,13 +152,17 @@ Each entry in `launch_requests`:
 
 ## Section 3 — Worker Result File Schema
 
-All worker and directive results are written to:
+Background worker results (dispatched via `launch_requests`) are written to:
 
 ```
 .ml-metaopt/worker-results/<name>.json
 ```
 
-No other output path is valid. Each result file is a single JSON object. The `name` component identifies the operation (e.g. `smoke-test`, `launch-sweep`, `poll-sweep`, `analysis-iter-3`).
+Directive execution results (from `run_smoke_test`, `poll_sweep`, and similar orchestrator-dispatched actions) are written to:
+
+```
+.ml-metaopt/executor-events/<name>.json
+```
 
 Workers must not write results to handoff paths, task paths, or arbitrary locations.
 

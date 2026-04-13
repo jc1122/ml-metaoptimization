@@ -1,87 +1,35 @@
-version: 3
-campaign_id: market-forecast-v3
-goal: Improve out-of-sample forecast quality without temporal leakage.
+# ml_metaopt_campaign.example.yaml
+# v4 — WandB Sweeps + SkyPilot + Vast.ai
+
+campaign:
+  name: gnn-mnist-optimization
+  description: "Optimize GNN hyperparameters for MNIST graph classification accuracy"
+
+project:
+  repo: git@github.com:my-org/dg_image.git
+  # Must not crash within 60 seconds. Reads wandb.config, logs to wandb.
+  smoke_test_command: "python train.py --smoke --max-steps 10"
+
+wandb:
+  entity: my-wandb-entity
+  project: gnn-mnist-metaopt
+
+compute:
+  provider: vast_ai          # SkyPilot cloud provider
+  accelerator: A100:1        # Instance type requested from Vast.ai
+  num_sweep_agents: 4        # Parallel WandB agents per sweep
+  idle_timeout_minutes: 15   # Kill agent if no WandB logs for this long
+  max_budget_usd: 10         # Hard spend cap — enforced on every poll
 
 objective:
-  metric: rmse
-  direction: minimize
-  aggregation:
-    method: weighted_mean
-    weights:
-      ds_main: 0.7
-      ds_holdout: 0.3
-  improvement_threshold: 0.0005
+  metric: val/accuracy
+  direction: maximize        # maximize | minimize
+  improvement_threshold: 0.005  # Minimum gain to count as improvement
 
-datasets:
-  - id: ds_main
-    local_path: data/main.parquet
-    role: train_eval
-    fingerprint: sha256:1111111111111111111111111111111111111111111111111111111111111111
-  - id: ds_holdout
-    local_path: data/holdout.parquet
-    role: eval_only
-    fingerprint: sha256:2222222222222222222222222222222222222222222222222222222222222222
-
-baseline:
-  aggregate: 0.1284
-  by_dataset:
-    ds_main: 0.1269
-    ds_holdout: 0.1320
+proposal_policy:
+  current_target: 5          # Proposals needed in pool before selection
 
 stop_conditions:
   max_iterations: 20
-  max_no_improve_iterations: 4
-  target_metric: 0.1200
-  max_wallclock_hours: 72
-
-proposal_policy:
-  current_target: 8
-  current_floor: 4
-  next_cap: 200
-  distinctness_rule: non_overlapping
-
-dispatch_policy:
-  background_slots: 8
-  auxiliary_slots: 2
-
-sanity:
-  # Project-provided fast sanity entrypoint.
-  command: python3 scripts/local_sanity.py --fast
-  max_duration_seconds: 60
-  require_zero_temporal_leakage: true
-  require_config_load: true
-
-artifacts:
-  code_roots:
-    - .
-  data_roots:
-    - data
-  exclude:
-    - .git
-    - .venv
-    - logs
-    - .ml-metaopt
-
-remote_queue:
-  backend: ray-hetzner
-  retry_policy:
-    max_attempts: 2
-  # The orchestrator appends one shell-escaped value after the command string:
-  #   enqueue_command --manifest <manifest_path>
-  #   status_command --batch-id <batch_id>
-  #   results_command --batch-id <batch_id>
-  enqueue_command: python3 /opt/ray-hetzner/metaopt/enqueue_batch.py --manifest
-  status_command: python3 /opt/ray-hetzner/metaopt/get_batch_status.py --batch-id
-  results_command: python3 /opt/ray-hetzner/metaopt/fetch_batch_results.py --batch-id
-
-execution:
-  runner_type: ray_queue_runner
-  # This path is container-specific and must match where the backend materializes the immutable artifact.
-  entrypoint: python3 /srv/metaopt/project/scripts/ray_runner.py
-  target_cluster_utilization: 0.95
-  trial_budget:
-    kind: fixed_trials
-    value: 128
-  search_strategy:
-    kind: optuna_tpe
-    seed: 1337
+  target_metric: 0.990       # Stop when baseline reaches this value
+  max_no_improve_iterations: 5

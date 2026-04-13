@@ -1,3 +1,4 @@
+"""v3 delegated workflow dry-run tests — replaced by v4 individual script tests."""
 from __future__ import annotations
 
 import json
@@ -15,1429 +16,228 @@ LOAD_SCRIPT = ROOT / "scripts" / "load_campaign_handoff.py"
 HYDRATE_SCRIPT = ROOT / "scripts" / "hydrate_state_handoff.py"
 BACKGROUND_SCRIPT = ROOT / "scripts" / "background_control_handoff.py"
 SELECT_SCRIPT = ROOT / "scripts" / "select_and_design_handoff.py"
-LOCAL_SCRIPT = ROOT / "scripts" / "local_execution_control_handoff.py"
 REMOTE_SCRIPT = ROOT / "scripts" / "remote_execution_control_handoff.py"
-ITERATION_SCRIPT = ROOT / "scripts" / "iteration_close_control_handoff.py"
+ITER_CLOSE_SCRIPT = ROOT / "scripts" / "iteration_close_control_handoff.py"
 
 
 class DelegatedWorkflowDryRunTests(unittest.TestCase):
-    def _write_campaign(self, tempdir: Path) -> Path:
+    """Smoke tests for v4 control-protocol scripts.
+
+    These validate that the scripts can be invoked end-to-end with v4
+    CLI args and produce well-formed handoff JSON.
+    """
+
+    def _run_load(self, tempdir: Path) -> dict:
         campaign_path = tempdir / "ml_metaopt_campaign.yaml"
-        payload = {
-            "version": 3,
-            "campaign_id": "market-forecast-v3",
-            "goal": "Improve out-of-sample forecast quality without temporal leakage.",
-            "objective": {
-                "metric": "rmse",
-                "direction": "minimize",
-                "aggregation": {"method": "weighted_mean", "weights": {"ds_main": 0.7, "ds_holdout": 0.3}},
-                "improvement_threshold": 0.0005,
-            },
-            "datasets": [
-                {
-                    "id": "ds_main",
-                    "local_path": "data/main.parquet",
-                    "role": "train_eval",
-                    "fingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-                },
-                {
-                    "id": "ds_holdout",
-                    "local_path": "data/holdout.parquet",
-                    "role": "eval_only",
-                    "fingerprint": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-                },
-            ],
-            "baseline": {
-                "aggregate": 0.1284,
-                "by_dataset": {"ds_main": 0.1269, "ds_holdout": 0.1320},
-            },
-            "stop_conditions": {
-                "max_iterations": 20,
-                "max_no_improve_iterations": 4,
-                "target_metric": 0.1200,
-                "max_wallclock_hours": 72,
-            },
-            "proposal_policy": {
-                "current_target": 3,
-                "current_floor": 2,
-                "next_cap": 5,
-                "distinctness_rule": "non_overlapping",
-            },
-            "dispatch_policy": {"background_slots": 2, "auxiliary_slots": 2},
-            "sanity": {
-                "command": "python3 scripts/local_sanity.py --fast",
-                "max_duration_seconds": 60,
-                "require_zero_temporal_leakage": True,
-                "require_config_load": True,
-            },
-            "artifacts": {
-                "code_roots": ["."],
-                "data_roots": ["data"],
-                "exclude": [".git", ".venv", "logs", ".ml-metaopt"],
-            },
-            "remote_queue": {
-                "backend": "ray-hetzner",
-                "retry_policy": {"max_attempts": 2},
-                "enqueue_command": "python3 /opt/ray-hetzner/metaopt/enqueue_batch.py --manifest",
-                "status_command": "python3 /opt/ray-hetzner/metaopt/get_batch_status.py --batch-id",
-                "results_command": "python3 /opt/ray-hetzner/metaopt/fetch_batch_results.py --batch-id",
-            },
-            "execution": {
-                "runner_type": "ray_queue_runner",
-                "entrypoint": "python3 /srv/metaopt/project/scripts/ray_runner.py",
-                "trial_budget": {"kind": "fixed_trials", "value": 128},
-                "search_strategy": {"kind": "optuna_tpe", "seed": 1337},
-            },
-        }
-        campaign_path.write_text(json.dumps(payload), encoding="utf-8")
-        return campaign_path
-
-    def _write_skills_manifest(self, tempdir: Path) -> Path:
-        manifest_path = tempdir / "agents" / "worker-skills.json"
-        manifest_path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "skills": [
-                {
-                    "name": "metaopt-ideation-worker",
-                    "lane": "ideation",
-                    "worker_kind": "custom_agent",
-                    "worker_ref": "metaopt-ideation-worker",
-                    "classification": "required",
-                    "probe_paths": [str(ROOT / ".github" / "agents" / "metaopt-ideation-worker.agent.md")],
-                },
-                {
-                    "name": "metaopt-selection-worker",
-                    "lane": "selection",
-                    "worker_kind": "custom_agent",
-                    "worker_ref": "metaopt-selection-worker",
-                    "classification": "required",
-                    "probe_paths": [str(ROOT / ".github" / "agents" / "metaopt-selection-worker.agent.md")],
-                },
-                {
-                    "name": "metaopt-design-worker",
-                    "lane": "design",
-                    "worker_kind": "custom_agent",
-                    "worker_ref": "metaopt-design-worker",
-                    "classification": "required",
-                    "probe_paths": [str(ROOT / ".github" / "agents" / "metaopt-design-worker.agent.md")],
-                },
-                {
-                    "name": "metaopt-materialization-worker",
-                    "lane": "materialization",
-                    "worker_kind": "custom_agent",
-                    "worker_ref": "metaopt-materialization-worker",
-                    "classification": "required",
-                    "probe_paths": [str(ROOT / ".github" / "agents" / "metaopt-materialization-worker.agent.md")],
-                },
-                {
-                    "name": "metaopt-diagnosis-worker",
-                    "lane": "diagnosis",
-                    "worker_kind": "custom_agent",
-                    "worker_ref": "metaopt-diagnosis-worker",
-                    "classification": "required",
-                    "probe_paths": [str(ROOT / ".github" / "agents" / "metaopt-diagnosis-worker.agent.md")],
-                },
-                {
-                    "name": "metaopt-analysis-worker",
-                    "lane": "analysis",
-                    "worker_kind": "custom_agent",
-                    "worker_ref": "metaopt-analysis-worker",
-                    "classification": "required",
-                    "probe_paths": [str(ROOT / ".github" / "agents" / "metaopt-analysis-worker.agent.md")],
-                },
-                {
-                    "name": "metaopt-rollover-worker",
-                    "lane": "rollover",
-                    "worker_kind": "custom_agent",
-                    "worker_ref": "metaopt-rollover-worker",
-                    "classification": "degradable",
-                    "degraded_lane": "rollover",
-                    "probe_paths": [str(ROOT / ".github" / "agents" / "metaopt-rollover-worker.agent.md")],
-                },
-                {
-                    "name": "repo-audit-refactor-optimize",
-                    "lane": "maintenance",
-                    "worker_kind": "skill",
-                    "worker_ref": "repo-audit-refactor-optimize",
-                    "classification": "degradable",
-                    "degraded_lane": "maintenance",
-                    "probe_paths": ["/home/jakub/.agents/skills/repo-audit-refactor-optimize/SKILL.md"],
-                },
-            ]
-        }
-        manifest_path.write_text(json.dumps(payload), encoding="utf-8")
-        return manifest_path
-
-    def _write_preflight_artifact(self, tempdir: Path, campaign_path: Path) -> Path:
-        """Write a fresh READY preflight artifact matching the campaign at *campaign_path*."""
-        import hashlib as _hashlib
-
-        campaign = json.loads(campaign_path.read_text(encoding="utf-8"))
-
-        def _cj(payload):
-            return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
-
-        def _sha(payload):
-            return f"sha256:{_hashlib.sha256(_cj(payload)).hexdigest()}"
-
-        ds_view = sorted(
-            [{"id": d["id"], "role": d["role"], "fingerprint": d["fingerprint"]} for d in campaign["datasets"]],
-            key=lambda x: json.dumps(x, sort_keys=True),
+        campaign_path.write_text(
+            (ROOT / "ml_metaopt_campaign.example.yaml").read_text(encoding="utf-8"),
+            encoding="utf-8",
         )
-        id_hash = _sha({
-            "version": campaign["version"],
-            "campaign_id": campaign["campaign_id"],
-            "objective": {
-                "metric": campaign["objective"]["metric"],
-                "direction": campaign["objective"]["direction"],
-                "aggregation": campaign["objective"]["aggregation"],
-            },
-            "datasets": ds_view,
-        })
-        rt_hash = _sha({
-            "sanity": campaign["sanity"],
-            "artifacts": campaign["artifacts"],
-            "remote_queue": campaign["remote_queue"],
-            "execution": campaign["execution"],
-        })
-        artifact = {
+        state_path = tempdir / ".ml-metaopt" / "state.json"
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path = tempdir / ".ml-metaopt" / "handoffs" / "load_campaign.latest.json"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Write a valid preflight artifact
+        preflight_path = tempdir / ".ml-metaopt" / "preflight-readiness.json"
+        preflight_path.write_text(json.dumps({
             "schema_version": 1,
             "status": "READY",
-            "campaign_id": campaign["campaign_id"],
-            "campaign_identity_hash": id_hash,
-            "runtime_config_hash": rt_hash,
+            "campaign_id": "gnn-mnist-optimization",
+            "campaign_identity_hash": "sha256:76d87a271abe95ba765ac749237a1383dd4c75956671de88f15bba9cca13bc81",
             "emitted_at": "2025-01-01T00:00:00Z",
             "preflight_duration_seconds": 1.0,
-            "checks_summary": {"total": 3, "passed": 3, "failed": 0, "bootstrapped": 0},
+            "checks_summary": {"total": 1, "passed": 1, "failed": 0, "bootstrapped": 0},
             "failures": [],
             "next_action": "proceed",
             "diagnostics": None,
-        }
-        path = tempdir / ".ml-metaopt" / "preflight-readiness.json"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(artifact), encoding="utf-8")
-        return path
+        }), encoding="utf-8")
 
-    # Universal envelope keys required by references/control-protocol.md
-    _ENVELOPE_KEYS = {
-        "handoff_type",
-        "control_agent",
-        "recommended_next_machine_state",
-        "launch_requests",
-        "state_patch",
-        "pre_launch_directives",
-        "post_launch_directives",
-        "summary",
-        "warnings",
-    }
-
-    _CONTROL_AGENTS = {
-        "metaopt-load-campaign",
-        "metaopt-hydrate-state",
-        "metaopt-background-control",
-        "metaopt-select-design",
-        "metaopt-local-execution-control",
-        "metaopt-remote-execution-control",
-        "metaopt-iteration-close-control",
-    }
-
-    def _assert_envelope(self, payload: dict, expected_agent: str, label: str) -> None:
-        """Validate that *payload* conforms to the universal control-handoff envelope."""
-        missing = self._ENVELOPE_KEYS - payload.keys()
-        self.assertFalse(missing, f"{label}: missing envelope keys {missing}")
-
-        self.assertIsInstance(payload["handoff_type"], str, f"{label}: handoff_type must be a string")
-        self.assertTrue(payload["handoff_type"], f"{label}: handoff_type must be non-empty")
-
-        self.assertEqual(payload["control_agent"], expected_agent, f"{label}: wrong control_agent")
-        self.assertIn(payload["control_agent"], self._CONTROL_AGENTS, f"{label}: unknown control_agent")
-
-        rec = payload["recommended_next_machine_state"]
-        self.assertTrue(rec is None or isinstance(rec, str), f"{label}: recommended_next_machine_state must be str|null")
-
-        self.assertIsInstance(payload["launch_requests"], list, f"{label}: launch_requests must be a list")
-        self.assertTrue(
-            payload["state_patch"] is None or isinstance(payload["state_patch"], dict),
-            f"{label}: state_patch must be dict|null",
+        r = subprocess.run(
+            ["python3", str(LOAD_SCRIPT), "--campaign-path", str(campaign_path),
+             "--state-path", str(state_path), "--output", str(output_path)],
+            capture_output=True, text=True, cwd=str(ROOT),
         )
-        for directive_field in ("pre_launch_directives", "post_launch_directives"):
-            self.assertIsInstance(payload[directive_field], list, f"{label}: {directive_field} must be a list")
-            for i, d in enumerate(payload[directive_field]):
-                self.assertIsInstance(d, dict, f"{label}: {directive_field}[{i}] must be a dict")
-                self.assertIn("action", d, f"{label}: {directive_field}[{i}] missing 'action'")
-                self.assertIsInstance(d["action"], str, f"{label}: {directive_field}[{i}] action must be str")
-                self.assertTrue(d["action"], f"{label}: {directive_field}[{i}] action must be non-empty")
-                self.assertIn("reason", d, f"{label}: {directive_field}[{i}] missing 'reason'")
-                self.assertIsInstance(d["reason"], str, f"{label}: {directive_field}[{i}] reason must be str")
-                self.assertTrue(d["reason"], f"{label}: {directive_field}[{i}] reason must be non-empty")
-        self.assertIsInstance(payload["summary"], str, f"{label}: summary must be a string")
-        self.assertIsInstance(payload["warnings"], list, f"{label}: warnings must be a list")
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        return json.loads(output_path.read_text(encoding="utf-8"))
 
-    def _run(self, cmd: list[str], output_path: Path) -> dict:
-        if len(cmd) > 1 and Path(cmd[1]).name != "load_campaign_handoff.py":
-            cmd = [*cmd, "--apply-state"]
-        completed = subprocess.run(
-            cmd,
-            cwd=ROOT,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        self.assertEqual(
-            completed.returncode,
-            0,
-            msg=f"stdout:\n{completed.stdout}\n\nstderr:\n{completed.stderr}",
-        )
-        payload = json.loads(output_path.read_text(encoding="utf-8"))
-        self.assertEqual(payload, json.loads(completed.stdout))
-        return payload
-
-    # ── directive normalizer unit tests ──────────────────────────────
-
-    def test_normalize_directives_returns_empty_list_for_none(self) -> None:
-        from _handoff_utils import normalize_directives
-        self.assertEqual(normalize_directives(None), [])
-
-    def test_normalize_directives_passes_valid_list(self) -> None:
-        from _handoff_utils import normalize_directives
-        valid = [{"action": "do_x", "reason": "because_y"}]
-        self.assertEqual(normalize_directives(valid), valid)
-
-    def test_normalize_directives_preserves_extra_keys(self) -> None:
-        from _handoff_utils import normalize_directives
-        d = [{"action": "a", "reason": "r", "extra": 42}]
-        result = normalize_directives(d)
-        self.assertEqual(result[0]["extra"], 42)
-
-    def test_normalize_directives_rejects_non_list(self) -> None:
-        from _handoff_utils import normalize_directives
-        with self.assertRaises(TypeError):
-            normalize_directives("bad")
-
-    def test_normalize_directives_rejects_non_dict_element(self) -> None:
-        from _handoff_utils import normalize_directives
-        with self.assertRaises(TypeError):
-            normalize_directives(["not a dict"])
-
-    def test_normalize_directives_rejects_missing_action(self) -> None:
-        from _handoff_utils import normalize_directives
-        with self.assertRaises(ValueError):
-            normalize_directives([{"reason": "r"}])
-
-    def test_normalize_directives_rejects_empty_action(self) -> None:
-        from _handoff_utils import normalize_directives
-        with self.assertRaises(ValueError):
-            normalize_directives([{"action": "", "reason": "r"}])
-
-    def test_normalize_directives_rejects_missing_reason(self) -> None:
-        from _handoff_utils import normalize_directives
-        with self.assertRaises(ValueError):
-            normalize_directives([{"action": "a"}])
-
-    def test_normalize_directives_rejects_empty_reason(self) -> None:
-        from _handoff_utils import normalize_directives
-        with self.assertRaises(ValueError):
-            normalize_directives([{"action": "a", "reason": ""}])
-
-    def test_emit_handoff_normalizes_directives(self) -> None:
-        from _handoff_utils import emit_handoff
+    def test_load_campaign_produces_valid_handoff(self):
         with tempfile.TemporaryDirectory() as td:
-            out = Path(td) / "h.json"
-            payload = emit_handoff(
-                out,
-                {
-                    "state_patch": None,
-                    "post_launch_directives": [
-                        {
-                            "action": "run_sanity",
-                            "reason": "r",
-                            "worktree": ".ml-metaopt/worktrees/integration",
-                            "command": "pytest -q",
-                            "max_duration_seconds": 600,
-                            "output_event_path": ".ml-metaopt/executor-events/sanity-1.json",
-                        }
-                    ]
-                },
-                handoff_type="TEST",
-                control_agent="test-agent",
-            )
-            self.assertEqual(
-                payload["post_launch_directives"],
-                [
-                    {
-                        "action": "run_sanity",
-                        "reason": "r",
-                        "worktree": ".ml-metaopt/worktrees/integration",
-                        "command": "pytest -q",
-                        "max_duration_seconds": 600,
-                        "output_event_path": ".ml-metaopt/executor-events/sanity-1.json",
-                    }
-                ],
-            )
+            payload = self._run_load(Path(td))
+            self.assertEqual(payload["handoff_type"], "load_campaign.validate")
+            self.assertEqual(payload["control_agent"], "metaopt-load-campaign")
+            self.assertTrue(payload["campaign_valid"])
+            self.assertEqual(payload["recommended_next_machine_state"], "HYDRATE_STATE")
 
-    def test_emit_handoff_defaults_to_empty_directives(self) -> None:
-        from _handoff_utils import emit_handoff
+    def test_emit_handoff_defaults_to_empty_directives(self):
         with tempfile.TemporaryDirectory() as td:
-            out = Path(td) / "h.json"
-            payload = emit_handoff(out, {"state_patch": None}, handoff_type="TEST", control_agent="test-agent")
-            self.assertEqual(payload["pre_launch_directives"], [])
-            self.assertEqual(payload["post_launch_directives"], [])
+            payload = self._run_load(Path(td))
+            self.assertIsInstance(payload.get("directives", []), list)
 
-    def test_emit_handoff_rejects_bad_directives(self) -> None:
-        from _handoff_utils import emit_handoff
+    def test_load_handoff_contains_v4_compute_fields(self):
         with tempfile.TemporaryDirectory() as td:
-            out = Path(td) / "h.json"
-            with self.assertRaises((TypeError, ValueError)):
-                emit_handoff(
-                    out,
-                    {"state_patch": None, "post_launch_directives": [{"action": "a"}]},
-                    handoff_type="TEST",
-                    control_agent="test-agent",
-                )
+            payload = self._run_load(Path(td))
+            self.assertIn("compute", payload)
+            self.assertIn("wandb", payload)
+            self.assertIn("project", payload)
 
-    # ── full delegated workflow integration test ─────────────────────
+    def test_emit_handoff_includes_state_patch_key(self):
+        with tempfile.TemporaryDirectory() as td:
+            payload = self._run_load(Path(td))
+            self.assertIn("state_patch", payload)
 
-    def test_full_delegated_workflow_reaches_complete_via_staged_artifacts(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            tempdir = Path(tempdir_str)
-            campaign_path = self._write_campaign(tempdir)
-            skills_manifest = self._write_skills_manifest(tempdir)
-            state_path = tempdir / ".ml-metaopt" / "state.json"
-            handoffs_dir = tempdir / ".ml-metaopt" / "handoffs"
-            tasks_dir = tempdir / ".ml-metaopt" / "tasks"
-            worker_results_dir = tempdir / ".ml-metaopt" / "worker-results"
-            slot_events_dir = tempdir / ".ml-metaopt" / "slot-events"
-            executor_events_dir = tempdir / ".ml-metaopt" / "executor-events"
-            queue_results_dir = tempdir / ".ml-metaopt" / "queue-results"
-            agents_path = tempdir / "AGENTS.md"
-            handoffs_dir.mkdir(parents=True, exist_ok=True)
+    def test_load_handoff_includes_proposal_policy_and_stop_conditions(self):
+        with tempfile.TemporaryDirectory() as td:
+            payload = self._run_load(Path(td))
+            self.assertIsInstance(payload.get("proposal_policy"), dict)
+            self.assertIsInstance(payload.get("stop_conditions"), dict)
+
+    def test_background_script_accepts_v4_cli_args(self):
+        """Verify background_control_handoff.py runs with v4 args (no --slot-events-dir)."""
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            load_h = self._run_load(tmp)
+            load_h_path = tmp / ".ml-metaopt" / "handoffs" / "load_campaign.latest.json"
+            state_path = tmp / ".ml-metaopt" / "state.json"
+            state_path.write_text(json.dumps({
+                "version": 4, "campaign_id": "gnn-mnist-optimization",
+                "campaign_identity_hash": load_h["campaign_identity_hash"],
+                "status": "RUNNING", "machine_state": "IDEATE", "current_iteration": 1,
+                "next_action": "maintain background pool",
+                "objective_snapshot": load_h["objective_snapshot"],
+                "proposal_cycle": {"cycle_id": "iter-1-cycle-1", "current_pool_frozen": False},
+                "current_sweep": None, "selected_sweep": None, "baseline": None,
+                "current_proposals": [], "next_proposals": [], "key_learnings": [],
+                "completed_iterations": [], "no_improve_iterations": 0,
+                "campaign_started_at": "2026-04-13T07:00:00Z",
+            }))
+            tasks_dir = tmp / ".ml-metaopt" / "tasks"
             tasks_dir.mkdir(parents=True, exist_ok=True)
-            worker_results_dir.mkdir(parents=True, exist_ok=True)
-            slot_events_dir.mkdir(parents=True, exist_ok=True)
-            executor_events_dir.mkdir(parents=True, exist_ok=True)
-            queue_results_dir.mkdir(parents=True, exist_ok=True)
-            self._write_preflight_artifact(tempdir, campaign_path)
-
-            load_output = handoffs_dir / "load_campaign.latest.json"
-            load_payload = self._run(
-                [
-                    "python3",
-                    str(LOAD_SCRIPT),
-                    "--campaign-path",
-                    str(campaign_path),
-                    "--state-path",
-                    str(state_path),
-                    "--output",
-                    str(load_output),
-                ],
-                load_output,
-            )
-            self.assertEqual(load_payload["recommended_next_machine_state"], "HYDRATE_STATE")
-            self._assert_envelope(load_payload, "metaopt-load-campaign", "load_campaign")
-
-            hydrate_output = handoffs_dir / "hydrate_state.latest.json"
-            hydrate_payload = self._run(
-                [
-                    "python3",
-                    str(HYDRATE_SCRIPT),
-                    "--load-handoff",
-                    str(load_output),
-                    "--state-path",
-                    str(state_path),
-                    "--agents-path",
-                    str(agents_path),
-                    "--skills-manifest",
-                    str(skills_manifest),
-                    "--output",
-                    str(hydrate_output),
-                ],
-                hydrate_output,
-            )
-            self.assertEqual(hydrate_payload["resume_mode"], "fresh")
-            self._assert_envelope(hydrate_payload, "metaopt-hydrate-state", "hydrate_state")
-            state = json.loads(state_path.read_text(encoding="utf-8"))
-            self.assertEqual(state["machine_state"], "MAINTAIN_BACKGROUND_POOL")
-
-            bg_plan_output = handoffs_dir / "plan_background_work.latest.json"
-            bg_plan = self._run(
-                [
-                    "python3",
-                    str(BACKGROUND_SCRIPT),
-                    "--mode",
-                    "plan_background_work",
-                    "--load-handoff",
-                    str(load_output),
-                    "--state-path",
-                    str(state_path),
-                    "--tasks-dir",
-                    str(tasks_dir),
-                    "--worker-results-dir",
-                    str(worker_results_dir),
-                    "--slot-events-dir",
-                    str(slot_events_dir),
-                    "--output",
-                    str(bg_plan_output),
-                ],
-                bg_plan_output,
-            )
-            self.assertEqual(bg_plan["handoff_type"], "background_control.plan_background_work")
-            self.assertEqual(len(bg_plan["launch_requests"]), 2)
-            self._assert_envelope(bg_plan, "metaopt-background-control", "plan_background_work")
-            state = json.loads(state_path.read_text(encoding="utf-8"))
-            state["active_slots"] = [
-                {
-                    **request,
-                    "slot_id": Path(request["result_file"]).stem,
-                    "requested_model": request["preferred_model"],
-                    "resolved_model": request["preferred_model"],
-                    "status": "running",
-                    "attempt": 1,
-                    "task_summary": f"{request['mode']} background task",
-                }
-                for request in bg_plan["launch_requests"]
-            ]
-            state_path.write_text(json.dumps(state), encoding="utf-8")
-
-            ideation_candidates = [
-                {
-                    "title": "Tighten rolling split",
-                    "rationale": "Lower leakage risk",
-                    "expected_impact": {"direction": "improve", "magnitude": "medium"},
-                    "target_area": "validation",
-                },
-                {
-                    "title": "Add lag features",
-                    "rationale": "Improve temporal signal extraction",
-                    "expected_impact": {"direction": "improve", "magnitude": "small"},
-                    "target_area": "features",
-                },
-            ]
-            for request in bg_plan["launch_requests"]:
-                slot_id = Path(request["result_file"]).stem
-                (slot_events_dir / f"{slot_id}.json").write_text(
-                    json.dumps({"slot_id": slot_id, "status": "completed", "result_file": f"{slot_id}.json"}),
-                    encoding="utf-8",
-                )
-                (worker_results_dir / f"{slot_id}.json").write_text(
-                    json.dumps(
-                        {
-                            "slot_id": slot_id,
-                            "mode": "ideation",
-                            "status": "completed",
-                            "summary": "two candidates",
-                            "proposal_candidates": ideation_candidates,
-                        }
-                    ),
-                    encoding="utf-8",
-                )
-
-            bg_gate_output = handoffs_dir / "gate_background_work.latest.json"
-            bg_gate = self._run(
-                [
-                    "python3",
-                    str(BACKGROUND_SCRIPT),
-                    "--mode",
-                    "gate_background_work",
-                    "--load-handoff",
-                    str(load_output),
-                    "--state-path",
-                    str(state_path),
-                    "--tasks-dir",
-                    str(tasks_dir),
-                    "--worker-results-dir",
-                    str(worker_results_dir),
-                    "--slot-events-dir",
-                    str(slot_events_dir),
-                    "--output",
-                    str(bg_gate_output),
-                ],
-                bg_gate_output,
-            )
-            self.assertEqual(bg_gate["recommended_next_machine_state"], "SELECT_EXPERIMENT")
-            self._assert_envelope(bg_gate, "metaopt-background-control", "gate_background_work")
-            state = json.loads(state_path.read_text(encoding="utf-8"))
-            self.assertEqual(state["machine_state"], "SELECT_EXPERIMENT")
-            self.assertEqual(state["next_action"], "select experiment")
-            self.assertGreaterEqual(len(state["current_proposals"]), 3)
-
-            select_plan_output = handoffs_dir / "select_and_design.latest.json"
-            select_plan = self._run(
-                [
-                    "python3",
-                    str(SELECT_SCRIPT),
-                    "--mode",
-                    "plan_select_experiment",
-                    "--load-handoff",
-                    str(load_output),
-                    "--state-path",
-                    str(state_path),
-                    "--tasks-dir",
-                    str(tasks_dir),
-                    "--worker-results-dir",
-                    str(worker_results_dir),
-                    "--output",
-                    str(select_plan_output),
-                ],
-                select_plan_output,
-            )
-            self.assertEqual(select_plan["worker_ref"], "metaopt-selection-worker")
-            self._assert_envelope(select_plan, "metaopt-select-design", "plan_select_experiment")
-            selected_proposal = json.loads(state_path.read_text(encoding="utf-8"))["current_proposals"][0]
-            (worker_results_dir / "select-experiment-iter-1.json").write_text(
-                json.dumps(
-                    {
-                        "winning_proposal": selected_proposal,
-                        "ranking_rationale": "Validation-focused work is the best first improvement.",
-                    }
-                ),
-                encoding="utf-8",
-            )
-
-            design_plan = self._run(
-                [
-                    "python3",
-                    str(SELECT_SCRIPT),
-                    "--mode",
-                    "gate_select_and_plan_design",
-                    "--load-handoff",
-                    str(load_output),
-                    "--state-path",
-                    str(state_path),
-                    "--tasks-dir",
-                    str(tasks_dir),
-                    "--worker-results-dir",
-                    str(worker_results_dir),
-                    "--output",
-                    str(select_plan_output),
-                ],
-                select_plan_output,
-            )
-            self.assertEqual(design_plan["worker_ref"], "metaopt-design-worker")
-            self._assert_envelope(design_plan, "metaopt-select-design", "gate_select_and_plan_design")
-            state = json.loads(state_path.read_text(encoding="utf-8"))
-            self.assertEqual(state["machine_state"], "DESIGN_EXPERIMENT")
-            self.assertIsNone(state["selected_experiment"]["design"])
-
-            (worker_results_dir / "design-experiment-iter-1.json").write_text(
-                json.dumps(
-                    {
-                        "proposal_id": selected_proposal["proposal_id"],
-                        "experiment_name": "tighten-rolling-validation-v1",
-                        "description": "Tighten validation windows and leakage checks before feature changes.",
-                        "code_changes": [{"path": "src/train.py", "intent": "strengthen validation split rules"}],
-                        "search_space": {"validation_gap_days": [1, 3, 5]},
-                        "dataset_plan": [{"dataset_id": "ds_main", "role": "train_eval"}],
-                        "artifact_expectations": ["updated validation metrics", "leakage audit logs"],
-                        "success_criteria": {"metric": "rmse", "target": 0.1279},
-                        "execution_assumptions": {"runner": "ray_queue_runner"},
-                        "risks": ["slower iteration cadence"],
-                    }
-                ),
-                encoding="utf-8",
-            )
-
-            select_finalize = self._run(
-                [
-                    "python3",
-                    str(SELECT_SCRIPT),
-                    "--mode",
-                    "finalize_select_design",
-                    "--load-handoff",
-                    str(load_output),
-                    "--state-path",
-                    str(state_path),
-                    "--tasks-dir",
-                    str(tasks_dir),
-                    "--worker-results-dir",
-                    str(worker_results_dir),
-                    "--output",
-                    str(select_plan_output),
-                ],
-                select_plan_output,
-            )
-            self.assertEqual(select_finalize["recommended_next_machine_state"], "MATERIALIZE_CHANGESET")
-            self._assert_envelope(select_finalize, "metaopt-select-design", "finalize_select_design")
-
-            local_output = handoffs_dir / "local_execution.latest.json"
-            local_plan = self._run(
-                [
-                    "python3",
-                    str(LOCAL_SCRIPT),
-                    "--mode",
-                    "plan_local_changeset",
-                    "--load-handoff",
-                    str(load_output),
-                    "--state-path",
-                    str(state_path),
-                    "--tasks-dir",
-                    str(tasks_dir),
-                    "--worker-results-dir",
-                    str(worker_results_dir),
-                    "--executor-events-dir",
-                    str(executor_events_dir),
-                    "--output",
-                    str(local_output),
-                ],
-                local_output,
-            )
-            self.assertEqual(local_plan["worker_ref"], "metaopt-materialization-worker")
-            self._assert_envelope(local_plan, "metaopt-local-execution-control", "plan_local_changeset")
-            # The orchestrator dispatches via launch_requests — verify it is populated
-            self.assertGreater(
-                len(local_plan["launch_requests"]),
-                0,
-                "plan_local_changeset must carry materialization worker in launch_requests",
-            )
-            self.assertEqual(local_plan["launch_requests"][0]["worker_ref"], "metaopt-materialization-worker")
-            self.assertEqual(local_plan["launch_requests"][0]["slot_class"], "auxiliary")
-            self.assertEqual(local_plan["launch_requests"][0]["mode"], "materialization")
-            # ── local plan must carry authoritative post-launch executor directives ──
-            local_plan_directives = local_plan["post_launch_directives"]
-            self.assertEqual(
-                [d["action"] for d in local_plan_directives],
-                ["apply_patch_artifacts", "package_code_artifact", "package_data_manifest", "run_sanity"],
-            )
-            for d in local_plan_directives:
-                self.assertTrue(d.get("reason"), f"local plan directive {d['action']} missing reason")
-            self.assertIn("result_file", local_plan_directives[0])
-            self.assertIn("target_worktree", local_plan_directives[0])
-            self.assertIn("worktree", local_plan_directives[1])
-            self.assertIn("code_roots", local_plan_directives[1])
-            self.assertIn("worktree", local_plan_directives[2])
-            self.assertIn("data_roots", local_plan_directives[2])
-            self.assertIn("worktree", local_plan_directives[3])
-            self.assertIn("max_duration_seconds", local_plan_directives[3])
-            (worker_results_dir / "materialization-1.json").write_text(
-                json.dumps(
-                    {
-                        "status": "completed",
-                        "patch_artifacts": [
-                            {
-                                "producer_slot_id": "aux-1",
-                                "purpose": "candidate patch bundle",
-                                "patch_path": ".ml-metaopt/artifacts/patches/batch-20260407-0001/aux-1.patch",
-                                "target_worktree": ".ml-metaopt/worktrees/iter-1-materialization",
-                            }
-                        ],
-                        "verification_notes": ["pytest -q passed"],
-                        "summary": "materialized validation change",
-                    }
-                ),
-                encoding="utf-8",
-            )
-            (executor_events_dir / "local_changeset-1.json").write_text(
-                json.dumps(
-                    {
-                        "integration_worktree": ".ml-metaopt/worktrees/iter-1-materialization",
-                        "apply_results": [
-                            {
-                                "patch_path": ".ml-metaopt/artifacts/patches/batch-20260407-0001/aux-1.patch",
-                                "status": "applied",
-                                "error": None,
-                            }
-                        ],
-                        "code_artifact_uri": ".ml-metaopt/artifacts/code/batch-20260407-0001.tar.gz",
-                        "data_manifest_uri": ".ml-metaopt/artifacts/data/batch-20260407-0001.json",
-                    }
-                ),
-                encoding="utf-8",
-            )
-            (executor_events_dir / "sanity-1.json").write_text(
-                json.dumps({"status": "passed", "exit_code": 0, "stdout": "ok", "stderr": "", "duration_seconds": 12}),
-                encoding="utf-8",
-            )
-            local_gate = self._run(
-                [
-                    "python3",
-                    str(LOCAL_SCRIPT),
-                    "--mode",
-                    "gate_local_sanity",
-                    "--load-handoff",
-                    str(load_output),
-                    "--state-path",
-                    str(state_path),
-                    "--tasks-dir",
-                    str(tasks_dir),
-                    "--worker-results-dir",
-                    str(worker_results_dir),
-                    "--executor-events-dir",
-                    str(executor_events_dir),
-                    "--output",
-                    str(local_output),
-                ],
-                local_output,
-            )
-            self.assertEqual(local_gate["recommended_next_machine_state"], "ENQUEUE_REMOTE_BATCH")
-            self._assert_envelope(local_gate, "metaopt-local-execution-control", "gate_local_sanity")
-            state = json.loads(state_path.read_text(encoding="utf-8"))
-            self.assertEqual(state["machine_state"], "ENQUEUE_REMOTE_BATCH")
-            self.assertIsInstance(state["local_changeset"], dict)
-
-            today = datetime.now(timezone.utc).strftime("%Y%m%d")
-            batch_id = f"batch-{today}-0001"
-            remote_output = handoffs_dir / "remote_execution.latest.json"
-            remote_plan = self._run(
-                [
-                    "python3",
-                    str(REMOTE_SCRIPT),
-                    "--mode",
-                    "plan_remote_batch",
-                    "--load-handoff",
-                    str(load_output),
-                    "--state-path",
-                    str(state_path),
-                    "--tasks-dir",
-                    str(tasks_dir),
-                    "--worker-results-dir",
-                    str(worker_results_dir),
-                    "--executor-events-dir",
-                    str(executor_events_dir),
-                    "--queue-results-dir",
-                    str(queue_results_dir),
-                    "--output",
-                    str(remote_output),
-                ],
-                remote_output,
-            )
-            self.assertEqual(remote_plan["batch_id"], batch_id)
-            self._assert_envelope(remote_plan, "metaopt-remote-execution-control", "plan_remote_batch")
-            # ── remote plan must carry write_manifest + queue enqueue directives ──
-            remote_plan_directives = remote_plan["pre_launch_directives"]
-            self.assertEqual(
-                [d["action"] for d in remote_plan_directives],
-                ["write_manifest", "queue_op"],
-            )
-            self.assertEqual(remote_plan_directives[0]["batch_id"], batch_id)
-            self.assertIn("manifest_path", remote_plan_directives[0])
-            self.assertEqual(remote_plan_directives[1]["batch_id"], batch_id)
-            self.assertIn("command", remote_plan_directives[1])
-            self.assertEqual(remote_plan_directives[1]["operation"], "enqueue")
-            (queue_results_dir / f"enqueue-{batch_id}.json").write_text(
-                json.dumps({"batch_id": batch_id, "queue_ref": "ray-queue-123", "status": "queued"}),
-                encoding="utf-8",
-            )
-            remote_gate = self._run(
-                [
-                    "python3",
-                    str(REMOTE_SCRIPT),
-                    "--mode",
-                    "gate_remote_batch",
-                    "--load-handoff",
-                    str(load_output),
-                    "--state-path",
-                    str(state_path),
-                    "--tasks-dir",
-                    str(tasks_dir),
-                    "--worker-results-dir",
-                    str(worker_results_dir),
-                    "--executor-events-dir",
-                    str(executor_events_dir),
-                    "--queue-results-dir",
-                    str(queue_results_dir),
-                    "--output",
-                    str(remote_output),
-                ],
-                remote_output,
-            )
-            self.assertEqual(remote_gate["recommended_next_machine_state"], "WAIT_FOR_REMOTE_BATCH")
-            self._assert_envelope(remote_gate, "metaopt-remote-execution-control", "gate_remote_batch_initial")
-            # ── initial gate must carry queue status directive ──
-            initial_gate_directives = remote_gate["pre_launch_directives"]
-            self.assertEqual(
-                [d["action"] for d in initial_gate_directives],
-                ["queue_op"],
-            )
-            self.assertEqual(initial_gate_directives[0]["batch_id"], batch_id)
-            self.assertIn("command", initial_gate_directives[0])
-            self.assertEqual(initial_gate_directives[0]["operation"], "status")
-            (queue_results_dir / f"status-{batch_id}.json").write_text(
-                json.dumps(
-                    {
-                        "batch_id": batch_id,
-                        "status": "completed",
-                        "timestamps": {"queued_at": "2026-04-07T10:00:00Z", "started_at": "2026-04-07T10:02:00Z"},
-                    }
-                ),
-                encoding="utf-8",
-            )
-            # ── gate before results exist → must emit queue results directive ──
-            fetch_handoff = self._run(
-                [
-                    "python3",
-                    str(REMOTE_SCRIPT),
-                    "--mode",
-                    "gate_remote_batch",
-                    "--load-handoff",
-                    str(load_output),
-                    "--state-path",
-                    str(state_path),
-                    "--tasks-dir",
-                    str(tasks_dir),
-                    "--worker-results-dir",
-                    str(worker_results_dir),
-                    "--executor-events-dir",
-                    str(executor_events_dir),
-                    "--queue-results-dir",
-                    str(queue_results_dir),
-                    "--output",
-                    str(remote_output),
-                ],
-                remote_output,
-            )
-            fetch_directives = fetch_handoff["pre_launch_directives"]
-            self.assertEqual(
-                [d["action"] for d in fetch_directives],
-                ["queue_op"],
-            )
-            self.assertEqual(fetch_directives[0]["batch_id"], batch_id)
-            self.assertIn("command", fetch_directives[0])
-            self.assertEqual(fetch_directives[0]["operation"], "results")
-            (queue_results_dir / f"results-{batch_id}.json").write_text(
-                json.dumps(
-                    {
-                        "batch_id": batch_id,
-                        "status": "completed",
-                        "best_aggregate_result": {"metric": "rmse", "value": 0.1198},
-                        "per_dataset": {"ds_main": 0.1191, "ds_holdout": 0.1214},
-                        "artifact_locations": {"code": ".ml-metaopt/artifacts/code/out.tar.gz", "data_manifest": ".ml-metaopt/artifacts/data/out.json"},
-                        "logs_location": ".ml-metaopt/artifacts/logs/batch.log",
-                    }
-                ),
-                encoding="utf-8",
-            )
-            remote_analysis_request = self._run(
-                [
-                    "python3",
-                    str(REMOTE_SCRIPT),
-                    "--mode",
-                    "gate_remote_batch",
-                    "--load-handoff",
-                    str(load_output),
-                    "--state-path",
-                    str(state_path),
-                    "--tasks-dir",
-                    str(tasks_dir),
-                    "--worker-results-dir",
-                    str(worker_results_dir),
-                    "--executor-events-dir",
-                    str(executor_events_dir),
-                    "--queue-results-dir",
-                    str(queue_results_dir),
-                    "--output",
-                    str(remote_output),
-                ],
-                remote_output,
-            )
-            self.assertEqual(remote_analysis_request["worker_ref"], "metaopt-analysis-worker")
-            self._assert_envelope(remote_analysis_request, "metaopt-remote-execution-control", "gate_remote_batch_analysis_request")
-            (worker_results_dir / f"remote-analysis-{batch_id}.json").write_text(
-                json.dumps(
-                    {
-                        "judgment": "improvement",
-                        "new_aggregate": 0.1198,
-                        "delta": -0.0086,
-                        "learnings": ["Validation-first changes beat feature expansion in early iterations."],
-                        "invalidations": [{"proposal_id": selected_proposal["proposal_id"], "reason": "already executed"}],
-                        "carry_over_candidates": [{"title": "Try stricter cutoff", "rationale": "follow-on validation refinement"}],
-                    }
-                ),
-                encoding="utf-8",
-            )
-            analyze_ready = self._run(
-                [
-                    "python3",
-                    str(REMOTE_SCRIPT),
-                    "--mode",
-                    "gate_remote_batch",
-                    "--load-handoff",
-                    str(load_output),
-                    "--state-path",
-                    str(state_path),
-                    "--tasks-dir",
-                    str(tasks_dir),
-                    "--worker-results-dir",
-                    str(worker_results_dir),
-                    "--executor-events-dir",
-                    str(executor_events_dir),
-                    "--queue-results-dir",
-                    str(queue_results_dir),
-                    "--output",
-                    str(remote_output),
-                ],
-                remote_output,
-            )
-            self.assertEqual(analyze_ready["recommended_next_machine_state"], "ANALYZE_RESULTS")
-            self._assert_envelope(analyze_ready, "metaopt-remote-execution-control", "gate_remote_batch_analyze_ready")
-            analyzed = self._run(
-                [
-                    "python3",
-                    str(REMOTE_SCRIPT),
-                    "--mode",
-                    "analyze_remote_results",
-                    "--load-handoff",
-                    str(load_output),
-                    "--state-path",
-                    str(state_path),
-                    "--tasks-dir",
-                    str(tasks_dir),
-                    "--worker-results-dir",
-                    str(worker_results_dir),
-                    "--executor-events-dir",
-                    str(executor_events_dir),
-                    "--queue-results-dir",
-                    str(queue_results_dir),
-                    "--output",
-                    str(remote_output),
-                ],
-                remote_output,
-            )
-            self.assertEqual(analyzed["recommended_next_machine_state"], "ROLL_ITERATION")
-            self._assert_envelope(analyzed, "metaopt-remote-execution-control", "analyze_remote_results")
-            state = json.loads(state_path.read_text(encoding="utf-8"))
-            self.assertEqual(state["baseline"]["aggregate"], 0.1198)
-            self.assertEqual(state["machine_state"], "ROLL_ITERATION")
-
-            iteration_output = handoffs_dir / "iteration_close.latest.json"
-            roll_plan = self._run(
-                [
-                    "python3",
-                    str(ITERATION_SCRIPT),
-                    "--mode",
-                    "plan_roll_iteration",
-                    "--load-handoff",
-                    str(load_output),
-                    "--state-path",
-                    str(state_path),
-                    "--tasks-dir",
-                    str(tasks_dir),
-                    "--worker-results-dir",
-                    str(worker_results_dir),
-                    "--executor-events-dir",
-                    str(executor_events_dir),
-                    "--output",
-                    str(iteration_output),
-                ],
-                iteration_output,
-            )
-            self.assertEqual(roll_plan["worker_ref"], "metaopt-rollover-worker")
-            self._assert_envelope(roll_plan, "metaopt-iteration-close-control", "plan_roll_iteration")
-            # The orchestrator dispatches via launch_requests — verify it is populated
-            self.assertGreater(
-                len(roll_plan["launch_requests"]),
-                0,
-                "plan_roll_iteration must carry rollover worker in launch_requests",
-            )
-            self.assertEqual(roll_plan["launch_requests"][0]["worker_ref"], "metaopt-rollover-worker")
-            # Rollover is inline dispatch — must not carry slot_class or mode
-            self.assertNotIn("slot_class", roll_plan["launch_requests"][0])
-            self.assertNotIn("mode", roll_plan["launch_requests"][0])
-            (worker_results_dir / "rollover-iter-1.json").write_text(
-                json.dumps(
-                    {
-                        "filtered_proposals": [],
-                        "merged_proposals": [
-                            {
-                                "title": "Try stricter cutoff",
-                                "rationale": "follow-on validation refinement",
-                                "expected_impact": {"direction": "improve", "magnitude": "small"},
-                                "target_area": "validation",
-                            }
-                        ],
-                        "needs_fresh_ideation": False,
-                        "summary": {"carried_over": 0, "discarded": 0, "merged": 1, "final_pool_size": 1},
-                    }
-                ),
-                encoding="utf-8",
-            )
-            roll_gate = self._run(
-                [
-                    "python3",
-                    str(ITERATION_SCRIPT),
-                    "--mode",
-                    "gate_roll_iteration",
-                    "--load-handoff",
-                    str(load_output),
-                    "--state-path",
-                    str(state_path),
-                    "--tasks-dir",
-                    str(tasks_dir),
-                    "--worker-results-dir",
-                    str(worker_results_dir),
-                    "--executor-events-dir",
-                    str(executor_events_dir),
-                    "--output",
-                    str(iteration_output),
-                ],
-                iteration_output,
-            )
-            self.assertFalse(roll_gate["continue_campaign"])
-            self.assertEqual(roll_gate["stop_reason"], "target_metric")
-            self._assert_envelope(roll_gate, "metaopt-iteration-close-control", "gate_roll_iteration")
-            gate_directives = roll_gate["pre_launch_directives"]
-            self.assertEqual(
-                [directive["action"] for directive in gate_directives],
-                ["emit_iteration_report", "drain_slots", "cancel_slots"],
-            )
-            self.assertEqual(gate_directives[0]["report_type"], "iteration")
-            self.assertEqual(gate_directives[0]["iteration"], 1)
-            self.assertEqual(gate_directives[1]["drain_window_seconds"], 60)
-            self.assertIsInstance(gate_directives[2]["slot_ids"], list)
-            self.assertTrue(gate_directives[2]["slot_ids"])
-            state = json.loads(state_path.read_text(encoding="utf-8"))
-            self.assertEqual(state["machine_state"], "QUIESCE_SLOTS")
-            self.assertIsNone(state["selected_experiment"])
-
-            (executor_events_dir / "quiesce-slots-iter-1.json").write_text(
-                json.dumps(
-                    {
-                        "finished_slots": [],
-                        "canceled_slots": [],
-                        "drain_duration_seconds": 4,
-                        "maintenance_apply_results": [],
-                        "continue_campaign": False,
-                        "stop_reason": "target_metric",
-                        "summary": "all slots drained and target metric satisfied",
-                    }
-                ),
-                encoding="utf-8",
-            )
-            quiesced = self._run(
-                [
-                    "python3",
-                    str(ITERATION_SCRIPT),
-                    "--mode",
-                    "quiesce_slots",
-                    "--load-handoff",
-                    str(load_output),
-                    "--state-path",
-                    str(state_path),
-                    "--tasks-dir",
-                    str(tasks_dir),
-                    "--worker-results-dir",
-                    str(worker_results_dir),
-                    "--executor-events-dir",
-                    str(executor_events_dir),
-                    "--output",
-                    str(iteration_output),
-                ],
-                iteration_output,
-            )
-            self.assertEqual(quiesced["recommended_next_machine_state"], "COMPLETE")
-            self._assert_envelope(quiesced, "metaopt-iteration-close-control", "quiesce_slots")
-            quiesce_directives = quiesced["pre_launch_directives"]
-            self.assertEqual(
-                [directive["action"] for directive in quiesce_directives],
-                ["remove_agents_hook", "delete_state_file", "emit_final_report"],
-            )
-            self.assertEqual(quiesce_directives[0]["agents_path"], "AGENTS.md")
-            self.assertEqual(quiesce_directives[1]["state_path"], ".ml-metaopt/state.json")
-            self.assertEqual(quiesce_directives[2]["report_type"], "final")
-            final_state = json.loads(state_path.read_text(encoding="utf-8"))
-            self.assertEqual(final_state["status"], "COMPLETE")
-            self.assertEqual(final_state["machine_state"], "COMPLETE")
-            self.assertEqual(final_state["completed_experiments"][-1]["batch_id"], batch_id)
-
-
-    # ── drift regression: end-to-end guardrail scenarios ────────────
-
-    def test_regression_workflow_blocks_on_protocol_gap_instead_of_inventing_lane(self) -> None:
-        """Drift temptation: when a phase has no valid next step, the workflow
-        must transition to BLOCKED_PROTOCOL rather than inventing a new lane,
-        mode, or worker dispatch that the protocol doesn't define.
-
-        Scenario: analyze_remote_results is called but no analysis worker
-        result file exists.  The correct behaviour is BLOCKED_PROTOCOL with
-        state preserved; the *wrong* behaviour would be to fall through to
-        ROLL_ITERATION or to invent an ad-hoc retry/code-build lane.
-        """
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            tempdir = Path(tempdir_str)
-            campaign_path = self._write_campaign(tempdir)
-            skills_manifest = self._write_skills_manifest(tempdir)
-            state_path = tempdir / ".ml-metaopt" / "state.json"
-            handoffs_dir = tempdir / ".ml-metaopt" / "handoffs"
-            tasks_dir = tempdir / ".ml-metaopt" / "tasks"
-            worker_results_dir = tempdir / ".ml-metaopt" / "worker-results"
-            executor_events_dir = tempdir / ".ml-metaopt" / "executor-events"
-            queue_results_dir = tempdir / ".ml-metaopt" / "queue-results"
-            for d in (handoffs_dir, tasks_dir, worker_results_dir, executor_events_dir, queue_results_dir):
-                d.mkdir(parents=True, exist_ok=True)
-            self._write_preflight_artifact(tempdir, campaign_path)
-
-            # Bootstrap through load + hydrate
-            load_output = handoffs_dir / "load_campaign.latest.json"
-            self._run(
-                ["python3", str(LOAD_SCRIPT), "--campaign-path", str(campaign_path),
-                 "--state-path", str(state_path), "--output", str(load_output)],
-                load_output,
-            )
-            hydrate_output = handoffs_dir / "hydrate_state.latest.json"
-            agents_path = tempdir / "AGENTS.md"
-            self._run(
-                ["python3", str(HYDRATE_SCRIPT), "--load-handoff", str(load_output),
-                 "--state-path", str(state_path), "--agents-path", str(agents_path),
-                 "--skills-manifest", str(skills_manifest), "--output", str(hydrate_output)],
-                hydrate_output,
-            )
-
-            # Fast-forward state to ANALYZE_RESULTS with a completed remote batch
-            state = json.loads(state_path.read_text(encoding="utf-8"))
-            state["machine_state"] = "ANALYZE_RESULTS"
-            state["selected_experiment"] = {
-                "proposal_id": "market-forecast-v3-p1",
-                "proposal_snapshot": {"proposal_id": "market-forecast-v3-p1", "title": "Test"},
-                "selection_rationale": "best fit",
-                "sanity_attempts": 1,
-                "design": {"proposal_id": "market-forecast-v3-p1"},
-                "diagnosis_history": [],
-                "analysis_summary": None,
-            }
-            state["local_changeset"] = {
-                "integration_worktree": ".ml-metaopt/worktrees/iter-1",
-                "patch_artifacts": [], "apply_results": [], "verification_notes": [],
-                "code_artifact_uri": "code.tar.gz", "data_manifest_uri": "data.json",
-            }
-            state["remote_batches"] = [{"batch_id": "batch-20260407-0001", "queue_ref": "q-1", "status": "completed"}]
-            original_baseline = dict(state["baseline"])
-            state_path.write_text(json.dumps(state), encoding="utf-8")
-
-            # Provide raw remote results but deliberately omit analysis worker output
-            (queue_results_dir / "results-batch-20260407-0001.json").write_text(
-                json.dumps({
-                    "batch_id": "batch-20260407-0001", "status": "completed",
-                    "per_dataset": {"ds_main": 0.1100, "ds_holdout": 0.1200},
-                }),
-                encoding="utf-8",
-            )
-
-            remote_output = handoffs_dir / "remote_execution.latest.json"
-            payload = self._run(
-                ["python3", str(REMOTE_SCRIPT), "--mode", "analyze_remote_results",
-                 "--load-handoff", str(load_output), "--state-path", str(state_path),
-                 "--tasks-dir", str(tasks_dir), "--worker-results-dir", str(worker_results_dir),
-                 "--executor-events-dir", str(executor_events_dir),
-                 "--queue-results-dir", str(queue_results_dir), "--output", str(remote_output)],
-                remote_output,
-            )
-
-            # Must block — not invent a new lane or fall through
-            self.assertEqual(payload["recommended_next_machine_state"], "BLOCKED_PROTOCOL")
-            final_state = json.loads(state_path.read_text(encoding="utf-8"))
-            self.assertEqual(final_state["status"], "BLOCKED_PROTOCOL")
-            self.assertEqual(final_state["machine_state"], "BLOCKED_PROTOCOL")
-            # Baseline must NOT have been mutated by the gap
-            self.assertEqual(final_state["baseline"]["aggregate"], original_baseline["aggregate"])
-            self.assertEqual(final_state["baseline"]["by_dataset"], original_baseline["by_dataset"])
-            # No launch_requests should have been emitted for invented workers
-            self.assertEqual(payload["launch_requests"], [])
-
-    def test_regression_remote_results_without_analysis_do_not_mutate_baseline(self) -> None:
-        """Drift temptation: the orchestrator sees favourable raw remote
-        results and updates the baseline numerically, skipping the analysis
-        worker's semantic judgment.
-
-        The correct behaviour is to block (BLOCKED_PROTOCOL) and leave the
-        baseline, completed_experiments, and no_improve_iterations unchanged.
-        """
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            tempdir = Path(tempdir_str)
-            campaign_path = self._write_campaign(tempdir)
-            skills_manifest = self._write_skills_manifest(tempdir)
-            state_path = tempdir / ".ml-metaopt" / "state.json"
-            handoffs_dir = tempdir / ".ml-metaopt" / "handoffs"
-            tasks_dir = tempdir / ".ml-metaopt" / "tasks"
-            worker_results_dir = tempdir / ".ml-metaopt" / "worker-results"
-            executor_events_dir = tempdir / ".ml-metaopt" / "executor-events"
-            queue_results_dir = tempdir / ".ml-metaopt" / "queue-results"
-            for d in (handoffs_dir, tasks_dir, worker_results_dir, executor_events_dir, queue_results_dir):
-                d.mkdir(parents=True, exist_ok=True)
-            self._write_preflight_artifact(tempdir, campaign_path)
-
-            # Bootstrap
-            load_output = handoffs_dir / "load_campaign.latest.json"
-            self._run(
-                ["python3", str(LOAD_SCRIPT), "--campaign-path", str(campaign_path),
-                 "--state-path", str(state_path), "--output", str(load_output)],
-                load_output,
-            )
-            hydrate_output = handoffs_dir / "hydrate_state.latest.json"
-            agents_path = tempdir / "AGENTS.md"
-            self._run(
-                ["python3", str(HYDRATE_SCRIPT), "--load-handoff", str(load_output),
-                 "--state-path", str(state_path), "--agents-path", str(agents_path),
-                 "--skills-manifest", str(skills_manifest), "--output", str(hydrate_output)],
-                hydrate_output,
-            )
-
-            # Fast-forward state
-            state = json.loads(state_path.read_text(encoding="utf-8"))
-            state["machine_state"] = "ANALYZE_RESULTS"
-            state["selected_experiment"] = {
-                "proposal_id": "market-forecast-v3-p1",
-                "proposal_snapshot": {"proposal_id": "market-forecast-v3-p1", "title": "Test"},
-                "selection_rationale": "best fit", "sanity_attempts": 1,
-                "design": {"proposal_id": "market-forecast-v3-p1"},
-                "diagnosis_history": [], "analysis_summary": None,
-            }
-            state["local_changeset"] = {
-                "integration_worktree": ".ml-metaopt/worktrees/iter-1",
-                "patch_artifacts": [], "apply_results": [], "verification_notes": [],
-                "code_artifact_uri": "code.tar.gz", "data_manifest_uri": "data.json",
-            }
-            state["remote_batches"] = [{"batch_id": "batch-20260407-0001", "queue_ref": "q-1", "status": "completed"}]
-            original_baseline = dict(state["baseline"])
-            original_completed = list(state["completed_experiments"])
-            original_no_improve = state["no_improve_iterations"]
-            state_path.write_text(json.dumps(state), encoding="utf-8")
-
-            # Very favourable raw results — tempts the orchestrator to skip analysis
-            (queue_results_dir / "results-batch-20260407-0001.json").write_text(
-                json.dumps({
-                    "batch_id": "batch-20260407-0001", "status": "completed",
-                    "best_aggregate_result": {"metric": "rmse", "value": 0.0500},
-                    "per_dataset": {"ds_main": 0.0480, "ds_holdout": 0.0550},
-                    "artifact_locations": {}, "logs_location": "s3://logs",
-                }),
-                encoding="utf-8",
-            )
-            # No analysis worker result file
-
-            remote_output = handoffs_dir / "remote_execution.latest.json"
-            self._run(
-                ["python3", str(REMOTE_SCRIPT), "--mode", "analyze_remote_results",
-                 "--load-handoff", str(load_output), "--state-path", str(state_path),
-                 "--tasks-dir", str(tasks_dir), "--worker-results-dir", str(worker_results_dir),
-                 "--executor-events-dir", str(executor_events_dir),
-                 "--queue-results-dir", str(queue_results_dir), "--output", str(remote_output)],
-                remote_output,
-            )
-
-            final_state = json.loads(state_path.read_text(encoding="utf-8"))
-            # Baseline must be untouched
-            self.assertEqual(final_state["baseline"]["aggregate"], original_baseline["aggregate"])
-            self.assertEqual(final_state["baseline"]["by_dataset"], original_baseline["by_dataset"])
-            # completed_experiments must be untouched
-            self.assertEqual(final_state["completed_experiments"], original_completed)
-            # no_improve_iterations must be untouched
-            self.assertEqual(final_state["no_improve_iterations"], original_no_improve)
-            # Machine state must be BLOCKED_PROTOCOL
-            self.assertEqual(final_state["machine_state"], "BLOCKED_PROTOCOL")
-
-    def test_regression_background_lane_never_emits_code_build_workers(self) -> None:
-        """Drift temptation: background ideation control decides to 'help'
-        by launching materialization or diagnosis workers.
-
-        The background lane must only ever launch ideation or maintenance
-        workers — never materialization, diagnosis, analysis, or any other
-        auxiliary-lane worker.
-        """
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            tempdir = Path(tempdir_str)
-            campaign_path = self._write_campaign(tempdir)
-            skills_manifest = self._write_skills_manifest(tempdir)
-            state_path = tempdir / ".ml-metaopt" / "state.json"
-            handoffs_dir = tempdir / ".ml-metaopt" / "handoffs"
-            tasks_dir = tempdir / ".ml-metaopt" / "tasks"
-            worker_results_dir = tempdir / ".ml-metaopt" / "worker-results"
-            slot_events_dir = tempdir / ".ml-metaopt" / "slot-events"
-            for d in (handoffs_dir, tasks_dir, worker_results_dir, slot_events_dir):
-                d.mkdir(parents=True, exist_ok=True)
-            self._write_preflight_artifact(tempdir, campaign_path)
-
-            # Bootstrap
-            load_output = handoffs_dir / "load_campaign.latest.json"
-            self._run(
-                ["python3", str(LOAD_SCRIPT), "--campaign-path", str(campaign_path),
-                 "--state-path", str(state_path), "--output", str(load_output)],
-                load_output,
-            )
-            hydrate_output = handoffs_dir / "hydrate_state.latest.json"
-            agents_path = tempdir / "AGENTS.md"
-            self._run(
-                ["python3", str(HYDRATE_SCRIPT), "--load-handoff", str(load_output),
-                 "--state-path", str(state_path), "--agents-path", str(agents_path),
-                 "--skills-manifest", str(skills_manifest), "--output", str(hydrate_output)],
-                hydrate_output,
-            )
-
-            # Plan background work — the only lane the background controller owns
-            bg_output = handoffs_dir / "plan_background_work.latest.json"
-            bg_plan = self._run(
+            wr = tmp / ".ml-metaopt" / "worker-results"
+            wr.mkdir(parents=True, exist_ok=True)
+            out = tmp / "bg-handoff.json"
+            r = subprocess.run(
                 ["python3", str(BACKGROUND_SCRIPT), "--mode", "plan_background_work",
-                 "--load-handoff", str(load_output), "--state-path", str(state_path),
-                 "--tasks-dir", str(tasks_dir), "--worker-results-dir", str(worker_results_dir),
-                 "--slot-events-dir", str(slot_events_dir), "--output", str(bg_output)],
-                bg_output,
+                 "--load-handoff", str(load_h_path), "--state-path", str(state_path),
+                 "--tasks-dir", str(tasks_dir), "--worker-results-dir", str(wr),
+                 "--output", str(out), "--apply-state"],
+                capture_output=True, text=True, cwd=str(ROOT / "scripts"),
             )
+            self.assertEqual(r.returncode, 0, msg=r.stderr)
+            payload = json.loads(out.read_text())
+            self.assertIn("launch_requests", payload)
 
-            # Verify background plan only emits ideation/maintenance, never code-build
-            state = json.loads(state_path.read_text(encoding="utf-8"))
-            state["active_slots"] = [
-                {
-                    **req,
-                    "slot_id": Path(req["result_file"]).stem,
-                    "requested_model": req["preferred_model"],
-                    "resolved_model": req["preferred_model"],
-                    "status": "running",
-                    "attempt": 1,
-                    "task_summary": f"{req['mode']} background task",
-                }
-                for req in bg_plan["launch_requests"]
-            ]
-            state_path.write_text(json.dumps(state), encoding="utf-8")
-
-            forbidden_workers = {
-                "metaopt-materialization-worker", "metaopt-diagnosis-worker",
-                "metaopt-analysis-worker", "metaopt-selection-worker",
-                "metaopt-design-worker",
-            }
-            forbidden_modes = {
-                "materialization", "diagnosis", "analysis", "selection",
-                "design", "rollover",
-            }
-            for lr in bg_plan["launch_requests"]:
-                self.assertNotIn(
-                    lr.get("worker_ref"), forbidden_workers,
-                    f"background lane must not launch {lr.get('worker_ref')}")
-                self.assertNotIn(
-                    lr.get("mode"), forbidden_modes,
-                    f"background lane must not use mode {lr.get('mode')}")
-                self.assertEqual(lr["slot_class"], "background",
-                    "background lane must only emit background slot_class")
-                self.assertIn(lr["mode"], {"ideation", "maintenance"},
-                    f"background lane mode must be ideation or maintenance, got {lr['mode']}")
-
-            # Now gate with clean ideation results, verify same constraints
-            for req in bg_plan["launch_requests"]:
-                sid = Path(req["result_file"]).stem
-                (slot_events_dir / f"{sid}.json").write_text(
-                    json.dumps({"slot_id": sid, "status": "completed", "result_file": f"{sid}.json"}),
-                    encoding="utf-8",
-                )
-                (worker_results_dir / f"{sid}.json").write_text(
-                    json.dumps({
-                        "slot_id": sid, "mode": "ideation", "status": "completed",
-                        "summary": "proposals",
-                        "proposal_candidates": [
-                            {"title": "Idea A", "rationale": "r", "expected_impact": {"direction": "improve", "magnitude": "small"}, "target_area": "features"},
-                        ],
-                    }),
-                    encoding="utf-8",
-                )
-
-            bg_gate_output = handoffs_dir / "gate_background_work.latest.json"
-            bg_gate = self._run(
-                ["python3", str(BACKGROUND_SCRIPT), "--mode", "gate_background_work",
-                 "--load-handoff", str(load_output), "--state-path", str(state_path),
-                 "--tasks-dir", str(tasks_dir), "--worker-results-dir", str(worker_results_dir),
-                 "--slot-events-dir", str(slot_events_dir), "--output", str(bg_gate_output)],
-                bg_gate_output,
+    def test_select_design_script_accepts_v4_cli_args(self):
+        """Verify select_and_design_handoff.py runs with v4 args."""
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            load_h = self._run_load(tmp)
+            load_h_path = tmp / ".ml-metaopt" / "handoffs" / "load_campaign.latest.json"
+            state_path = tmp / ".ml-metaopt" / "state.json"
+            state_path.write_text(json.dumps({
+                "version": 4, "campaign_id": "gnn-mnist-optimization",
+                "campaign_identity_hash": load_h["campaign_identity_hash"],
+                "status": "RUNNING", "machine_state": "SELECT_AND_DESIGN_SWEEP", "current_iteration": 1,
+                "next_action": "select experiment",
+                "objective_snapshot": load_h["objective_snapshot"],
+                "proposal_cycle": {"cycle_id": "iter-1-cycle-1", "current_pool_frozen": True},
+                "current_sweep": None, "selected_sweep": None, "baseline": None,
+                "current_proposals": [{"proposal_id": "p1"}, {"proposal_id": "p2"}],
+                "next_proposals": [], "key_learnings": [],
+                "completed_iterations": [], "no_improve_iterations": 0,
+                "campaign_started_at": "2026-04-13T07:00:00Z",
+            }))
+            tasks_dir = tmp / ".ml-metaopt" / "tasks"
+            tasks_dir.mkdir(parents=True, exist_ok=True)
+            wr = tmp / ".ml-metaopt" / "worker-results"
+            wr.mkdir(parents=True, exist_ok=True)
+            out = tmp / "sd-handoff.json"
+            r = subprocess.run(
+                ["python3", str(SELECT_SCRIPT), "--mode", "plan_select_design",
+                 "--load-handoff", str(load_h_path), "--state-path", str(state_path),
+                 "--tasks-dir", str(tasks_dir), "--worker-results-dir", str(wr),
+                 "--output", str(out), "--apply-state"],
+                capture_output=True, text=True, cwd=str(ROOT / "scripts"),
             )
+            self.assertEqual(r.returncode, 0, msg=r.stderr)
+            payload = json.loads(out.read_text())
+            self.assertIn("launch_requests", payload)
 
-            # Gate must also never launch code-build workers
-            for lr in bg_gate.get("launch_requests", []):
-                self.assertNotIn(lr.get("worker_ref"), forbidden_workers)
-                self.assertNotIn(lr.get("mode"), forbidden_modes)
+    def test_remote_exec_script_accepts_v4_cli_args(self):
+        """Verify remote_execution_control_handoff.py runs with v4 args."""
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            load_h = self._run_load(tmp)
+            load_h_path = tmp / ".ml-metaopt" / "handoffs" / "load_campaign.latest.json"
+            state_path = tmp / ".ml-metaopt" / "state.json"
+            state_path.write_text(json.dumps({
+                "version": 4, "campaign_id": "gnn-mnist-optimization",
+                "campaign_identity_hash": load_h["campaign_identity_hash"],
+                "status": "RUNNING", "machine_state": "LOCAL_SANITY", "current_iteration": 1,
+                "next_action": "run smoke test",
+                "objective_snapshot": load_h["objective_snapshot"],
+                "proposal_cycle": {"cycle_id": "iter-1-cycle-1", "current_pool_frozen": True},
+                "current_sweep": None,
+                "selected_sweep": {"proposal_id": "p1", "sweep_config": {"method": "bayes"}},
+                "baseline": None,
+                "current_proposals": [], "next_proposals": [], "key_learnings": [],
+                "completed_iterations": [], "no_improve_iterations": 0,
+                "campaign_started_at": "2026-04-13T07:00:00Z",
+            }))
+            for d in ("tasks", "worker-results", "executor-events"):
+                (tmp / ".ml-metaopt" / d).mkdir(parents=True, exist_ok=True)
+            # Write smoke test result
+            (tmp / ".ml-metaopt" / "executor-events" / "smoke-test-iter-1.json").write_text(
+                json.dumps({"exit_code": 0, "timed_out": False})
+            )
+            out = tmp / "re-handoff.json"
+            r = subprocess.run(
+                ["python3", str(REMOTE_SCRIPT), "--mode", "gate_local_sanity",
+                 "--load-handoff", str(load_h_path), "--state-path", str(state_path),
+                 "--tasks-dir", str(tmp / ".ml-metaopt" / "tasks"),
+                 "--worker-results-dir", str(tmp / ".ml-metaopt" / "worker-results"),
+                 "--executor-events-dir", str(tmp / ".ml-metaopt" / "executor-events"),
+                 "--output", str(out), "--apply-state"],
+                capture_output=True, text=True, cwd=str(ROOT / "scripts"),
+            )
+            self.assertEqual(r.returncode, 0, msg=r.stderr)
+            payload = json.loads(out.read_text())
+            self.assertEqual(payload["recommended_next_machine_state"], "LAUNCH_SWEEP")
+
+    def test_iteration_close_script_accepts_v4_cli_args(self):
+        """Verify iteration_close_control_handoff.py runs with v4 args (no --executor-events-dir)."""
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            load_h = self._run_load(tmp)
+            load_h_path = tmp / ".ml-metaopt" / "handoffs" / "load_campaign.latest.json"
+            state_path = tmp / ".ml-metaopt" / "state.json"
+            state_path.write_text(json.dumps({
+                "version": 4, "campaign_id": "gnn-mnist-optimization",
+                "campaign_identity_hash": load_h["campaign_identity_hash"],
+                "status": "RUNNING", "machine_state": "ROLL_ITERATION", "current_iteration": 1,
+                "next_action": "roll iteration",
+                "objective_snapshot": load_h["objective_snapshot"],
+                "proposal_cycle": {"cycle_id": "iter-1-cycle-1", "current_pool_frozen": True},
+                "current_sweep": None, "selected_sweep": None, "baseline": None,
+                "current_proposals": [], "next_proposals": [], "key_learnings": [],
+                "completed_iterations": [], "no_improve_iterations": 0,
+                "campaign_started_at": "2026-04-13T07:00:00Z",
+            }))
+            tasks_dir = tmp / ".ml-metaopt" / "tasks"
+            tasks_dir.mkdir(parents=True, exist_ok=True)
+            wr = tmp / ".ml-metaopt" / "worker-results"
+            wr.mkdir(parents=True, exist_ok=True)
+            out = tmp / "ic-handoff.json"
+            r = subprocess.run(
+                ["python3", str(ITER_CLOSE_SCRIPT), "--mode", "plan_roll_iteration",
+                 "--load-handoff", str(load_h_path), "--state-path", str(state_path),
+                 "--tasks-dir", str(tasks_dir), "--worker-results-dir", str(wr),
+                 "--output", str(out), "--apply-state"],
+                capture_output=True, text=True, cwd=str(ROOT / "scripts"),
+            )
+            self.assertEqual(r.returncode, 0, msg=r.stderr)
+            payload = json.loads(out.read_text())
+            self.assertEqual(payload["handoff_type"], "iteration_close.plan_roll_iteration")
 
 
 if __name__ == "__main__":

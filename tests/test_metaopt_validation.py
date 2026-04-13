@@ -918,14 +918,13 @@ class MetaoptValidationTests(unittest.TestCase):
             self.assertIn(field, protocol, f"control-protocol.md must define envelope field '{field}'")
 
     def test_control_protocol_lists_all_control_agents(self) -> None:
-        """control-protocol.md must reference all seven control agents."""
+        """control-protocol.md must reference all six control agents."""
         protocol = _read_text("references/control-protocol.md")
         control_agents = [
             "metaopt-load-campaign",
             "metaopt-hydrate-state",
             "metaopt-background-control",
             "metaopt-select-design",
-            "metaopt-local-execution-control",
             "metaopt-remote-execution-control",
             "metaopt-iteration-close-control",
         ]
@@ -1026,7 +1025,6 @@ class MetaoptValidationTests(unittest.TestCase):
             ".github/agents/metaopt-hydrate-state.agent.md",
             ".github/agents/metaopt-background-control.agent.md",
             ".github/agents/metaopt-select-design.agent.md",
-            ".github/agents/metaopt-local-execution-control.agent.md",
             ".github/agents/metaopt-remote-execution-control.agent.md",
             ".github/agents/metaopt-iteration-close-control.agent.md",
         ]
@@ -1045,7 +1043,6 @@ class MetaoptValidationTests(unittest.TestCase):
             ".github/agents/metaopt-hydrate-state.agent.md",
             ".github/agents/metaopt-background-control.agent.md",
             ".github/agents/metaopt-select-design.agent.md",
-            ".github/agents/metaopt-local-execution-control.agent.md",
             ".github/agents/metaopt-remote-execution-control.agent.md",
             ".github/agents/metaopt-iteration-close-control.agent.md",
         ]
@@ -1064,7 +1061,6 @@ class MetaoptValidationTests(unittest.TestCase):
             ".github/agents/metaopt-hydrate-state.agent.md",
             ".github/agents/metaopt-background-control.agent.md",
             ".github/agents/metaopt-select-design.agent.md",
-            ".github/agents/metaopt-local-execution-control.agent.md",
             ".github/agents/metaopt-remote-execution-control.agent.md",
             ".github/agents/metaopt-iteration-close-control.agent.md",
         ]
@@ -1102,7 +1098,6 @@ class MetaoptValidationTests(unittest.TestCase):
             ".github/agents/metaopt-hydrate-state.agent.md",
             ".github/agents/metaopt-background-control.agent.md",
             ".github/agents/metaopt-select-design.agent.md",
-            ".github/agents/metaopt-local-execution-control.agent.md",
             ".github/agents/metaopt-remote-execution-control.agent.md",
             ".github/agents/metaopt-iteration-close-control.agent.md",
         ]

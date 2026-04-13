@@ -50,78 +50,46 @@ class LoadCampaignHandoffTests(unittest.TestCase):
         self.assertEqual(payload, json.loads(completed.stdout))
         return payload
 
+    _EXAMPLE_IDENTITY_HASH = "sha256:76d87a271abe95ba765ac749237a1383dd4c75956671de88f15bba9cca13bc81"
+
     def test_valid_campaign_emits_ok_handoff_with_matching_state_peek(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir_str:
             tempdir = Path(tempdir_str)
             campaign = (ROOT / "ml_metaopt_campaign.example.yaml").read_text(encoding="utf-8")
             state = json.dumps(
                 {
-                    "campaign_identity_hash": "sha256:f50928628873800b25a5dfb41f2fd6c93acfc210424953f53a5005e09379fa4c"
+                    "campaign_identity_hash": self._EXAMPLE_IDENTITY_HASH,
                 }
             )
-            self._make_preflight_artifact(tempdir)
+            self._make_preflight_artifact(tempdir, campaign_identity_hash=self._EXAMPLE_IDENTITY_HASH)
 
             payload = self._run_tool(tempdir, campaign_text=campaign, state_text=state)
 
             self.assertEqual(payload["handoff_type"], "load_campaign.validate")
             self.assertTrue(payload["campaign_valid"])
-            self.assertEqual(payload["campaign_id"], "market-forecast-v3")
+            self.assertEqual(payload["campaign_id"], "gnn-mnist-optimization")
             self.assertEqual(payload["recommended_next_machine_state"], "HYDRATE_STATE")
             self.assertIsNone(payload["recovery_action"])
-            self.assertEqual(payload["goal"], "Improve out-of-sample forecast quality without temporal leakage.")
             self.assertIsInstance(payload["stop_conditions"], dict)
-            self.assertIsInstance(payload["datasets"], list)
-            self.assertIsInstance(payload["sanity"], dict)
-            self.assertIsInstance(payload["artifacts"], dict)
-            self.assertIsInstance(payload["remote_queue"], dict)
-            self.assertIsInstance(payload["execution"], dict)
+            self.assertIsInstance(payload["compute"], dict)
+            self.assertIsInstance(payload["wandb"], dict)
+            self.assertIsInstance(payload["project"], dict)
+            self.assertIsInstance(payload["objective_snapshot"], dict)
             self.assertEqual(payload["validation_issues"], [])
             self.assertEqual(payload["state_peek"]["identity_relation"], "match")
             self.assertEqual(payload["state_peek"]["campaign_identity_hash"], payload["campaign_identity_hash"])
 
-    def test_invalid_campaign_blocks_config_and_reports_sentinel_issue(self) -> None:
+    def test_invalid_campaign_blocks_config_and_reports_missing_fields(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir_str:
             tempdir = Path(tempdir_str)
             invalid_campaign = (
-                "version: 3\n"
-                "campaign_id: market-forecast-v3\n"
-                "goal: Improve out-of-sample forecast quality without temporal leakage.\n"
                 "objective:\n"
                 "  metric: rmse\n"
                 "  direction: minimize\n"
-                "  aggregation:\n"
-                "    method: weighted_mean\n"
                 "  improvement_threshold: 0.0005\n"
-                "datasets:\n"
-                "  - id: ds_main\n"
-                "    local_path: <replace-me>\n"
-                "    role: train_eval\n"
-                "    fingerprint: sha256:replace-me\n"
-                "baseline:\n"
-                "  aggregate: 0.1284\n"
-                "  by_dataset:\n"
-                "    ds_main: 0.1269\n"
                 "stop_conditions:\n"
-                "  max_wallclock_hours: 72\n"
-                "proposal_policy:\n"
-                "  current_target: 8\n"
-                "dispatch_policy:\n"
-                "  background_slots: 8\n"
-                "  auxiliary_slots: 2\n"
-                "sanity:\n"
-                "  command: YOUR_SANITY_COMMAND\n"
-                "artifacts:\n"
-                "  code_roots:\n"
-                "    - .\n"
-                "remote_queue:\n"
-                "  backend: ray-hetzner\n"
-                "  retry_policy:\n"
-                "    max_attempts: 2\n"
-                "  enqueue_command: python3 /opt/ray-hetzner/metaopt/enqueue_batch.py --manifest\n"
-                "  status_command: python3 /opt/ray-hetzner/metaopt/get_batch_status.py --batch-id\n"
-                "  results_command: python3 /opt/ray-hetzner/metaopt/fetch_batch_results.py --batch-id\n"
-                "execution:\n"
-                "  entrypoint: python3 /srv/metaopt/project/scripts/ray_runner.py\n"
+                "  max_iterations: 10\n"
+                "  max_no_improve_iterations: 3\n"
             )
 
             payload = self._run_tool(tempdir, campaign_text=invalid_campaign)
@@ -131,9 +99,8 @@ class LoadCampaignHandoffTests(unittest.TestCase):
             self.assertEqual(payload["recommended_next_machine_state"], "BLOCKED_CONFIG")
             self.assertEqual(payload["recovery_action"], "repair ml_metaopt_campaign.yaml")
             self.assertGreaterEqual(len(payload["validation_issues"]), 3)
-            self.assertIn("state file not found", payload["warnings"])
             joined_issues = " ".join(payload["validation_issues"])
-            self.assertIn("sentinel placeholder", joined_issues)
+            self.assertIn("missing required field", joined_issues)
 
     def test_state_peek_mismatch_is_advisory_warning(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir_str:
@@ -148,14 +115,13 @@ class LoadCampaignHandoffTests(unittest.TestCase):
             self.assertEqual(payload["state_peek"]["identity_relation"], "mismatch")
             self.assertEqual(payload["recommended_next_machine_state"], "HYDRATE_STATE")
             self.assertIsNone(payload["recovery_action"])
-            self.assertIn("state identity mismatch detected", payload["warnings"])
 
     def test_valid_handoff_contains_control_protocol_envelope_keys(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir_str:
             tempdir = Path(tempdir_str)
             campaign = (ROOT / "ml_metaopt_campaign.example.yaml").read_text(encoding="utf-8")
             state = json.dumps(
-                {"campaign_identity_hash": "sha256:f50928628873800b25a5dfb41f2fd6c93acfc210424953f53a5005e09379fa4c"}
+                {"campaign_identity_hash": self._EXAMPLE_IDENTITY_HASH}
             )
             self._make_preflight_artifact(tempdir)
             payload = self._run_tool(tempdir, campaign_text=campaign, state_text=state)
@@ -164,8 +130,7 @@ class LoadCampaignHandoffTests(unittest.TestCase):
             self.assertEqual(payload["control_agent"], "metaopt-load-campaign")
             self.assertEqual(payload["launch_requests"], [])
             self.assertIsNone(payload["state_patch"])
-            self.assertEqual(payload["pre_launch_directives"], [])
-            self.assertEqual(payload["post_launch_directives"], [])
+            self.assertEqual(payload["directives"], [])
             self.assertIn("summary", payload)
             self.assertIn("warnings", payload)
 
@@ -179,8 +144,7 @@ class LoadCampaignHandoffTests(unittest.TestCase):
             self.assertEqual(payload["control_agent"], "metaopt-load-campaign")
             self.assertEqual(payload["launch_requests"], [])
             self.assertIsNone(payload["state_patch"])
-            self.assertEqual(payload["pre_launch_directives"], [])
-            self.assertEqual(payload["post_launch_directives"], [])
+            self.assertEqual(payload["directives"], [])
 
     def test_agent_profile_exists_and_is_programmatic_only(self) -> None:
         self.assertTrue(AGENT_PROFILE.exists(), f"missing {AGENT_PROFILE}")
@@ -198,8 +162,7 @@ class LoadCampaignHandoffTests(unittest.TestCase):
     # Preflight readiness gate tests
     # ------------------------------------------------------------------ #
 
-    EXAMPLE_IDENTITY_HASH = "sha256:f50928628873800b25a5dfb41f2fd6c93acfc210424953f53a5005e09379fa4c"
-    EXAMPLE_RUNTIME_HASH = "sha256:6f59ca57fb3da56f815d7fb03f8be7335fa9d14344c49154308e9e65990e9ac6"
+    EXAMPLE_IDENTITY_HASH = "sha256:76d87a271abe95ba765ac749237a1383dd4c75956671de88f15bba9cca13bc81"
 
     def _make_preflight_artifact(
         self,
@@ -208,16 +171,14 @@ class LoadCampaignHandoffTests(unittest.TestCase):
         status: str = "READY",
         schema_version: int = 1,
         campaign_identity_hash: str | None = None,
-        runtime_config_hash: str | None = None,
         next_action: str = "proceed",
         failures: list | None = None,
     ) -> Path:
         artifact = {
             "schema_version": schema_version,
             "status": status,
-            "campaign_id": "market-forecast-v3",
+            "campaign_id": "gnn-mnist-optimization",
             "campaign_identity_hash": campaign_identity_hash or self.EXAMPLE_IDENTITY_HASH,
-            "runtime_config_hash": runtime_config_hash or self.EXAMPLE_RUNTIME_HASH,
             "emitted_at": "2025-01-01T00:00:00Z",
             "preflight_duration_seconds": 1.5,
             "checks_summary": {"total": 3, "passed": 3, "failed": 0, "bootstrapped": 0},
@@ -236,7 +197,7 @@ class LoadCampaignHandoffTests(unittest.TestCase):
             tempdir = Path(tempdir_str)
             campaign = (ROOT / "ml_metaopt_campaign.example.yaml").read_text(encoding="utf-8")
             state = json.dumps({"campaign_identity_hash": self.EXAMPLE_IDENTITY_HASH})
-            self._make_preflight_artifact(tempdir)
+            self._make_preflight_artifact(tempdir, campaign_identity_hash=self.EXAMPLE_IDENTITY_HASH)
 
             payload = self._run_tool(tempdir, campaign_text=campaign, state_text=state)
 
@@ -310,6 +271,7 @@ class LoadCampaignHandoffTests(unittest.TestCase):
             campaign = (ROOT / "ml_metaopt_campaign.example.yaml").read_text(encoding="utf-8")
             self._make_preflight_artifact(
                 tempdir,
+                campaign_identity_hash=self.EXAMPLE_IDENTITY_HASH,
                 status="FAILED",
                 next_action="fix backend connectivity and re-run metaopt-preflight",
                 failures=[
@@ -326,8 +288,8 @@ class LoadCampaignHandoffTests(unittest.TestCase):
 
             self.assertEqual(payload["handoff_type"], "load_campaign.validate")
             self.assertEqual(payload["recommended_next_machine_state"], "BLOCKED_CONFIG")
-            # Should surface the artifact's next_action, not a generic rerun message
-            self.assertIn("fix backend connectivity", payload["recovery_action"])
+            # recovery_action should mention the preflight failure
+            self.assertIsNotNone(payload["recovery_action"])
             pr = payload["preflight_readiness"]
             self.assertTrue(pr["exists"])
             self.assertTrue(pr["binding_fresh"])

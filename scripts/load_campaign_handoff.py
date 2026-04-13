@@ -16,39 +16,31 @@ from _handoff_utils import emit_handoff
 _HANDOFF_TYPE = "load_campaign.validate"
 
 REQUIRED_TOP_LEVEL_FIELDS = (
-    "version",
-    "campaign_id",
-    "goal",
+    "campaign",
+    "project",
+    "wandb",
+    "compute",
     "objective",
-    "datasets",
-    "baseline",
-    "stop_conditions",
     "proposal_policy",
-    "dispatch_policy",
-    "sanity",
-    "artifacts",
-    "remote_queue",
-    "execution",
+    "stop_conditions",
 )
 REQUIRED_NESTED_FIELDS = (
+    ("campaign", "name"),
+    ("project", "repo"),
+    ("project", "smoke_test_command"),
+    ("wandb", "entity"),
+    ("wandb", "project"),
+    ("compute", "provider"),
+    ("compute", "accelerator"),
+    ("compute", "num_sweep_agents"),
+    ("compute", "max_budget_usd"),
     ("objective", "metric"),
     ("objective", "direction"),
-    ("objective", "aggregation"),
     ("objective", "improvement_threshold"),
-    ("baseline", "aggregate"),
-    ("baseline", "by_dataset"),
-    ("stop_conditions", "max_wallclock_hours"),
     ("proposal_policy", "current_target"),
-    ("dispatch_policy", "background_slots"),
-    ("dispatch_policy", "auxiliary_slots"),
-    ("sanity", "command"),
-    ("artifacts", "code_roots"),
-    ("remote_queue", "backend"),
-    ("remote_queue", "retry_policy"),
-    ("execution", "entrypoint"),
+    ("stop_conditions", "max_iterations"),
+    ("stop_conditions", "max_no_improve_iterations"),
 )
-REQUIRED_REMOTE_QUEUE_COMMANDS = ("enqueue_command", "status_command", "results_command")
-IDENTITY_DATASET_FIELDS = ("id", "role", "fingerprint")
 SENTINEL_SUBSTRINGS = ("YOUR_", "replace-me")
 
 
@@ -93,10 +85,6 @@ def _validate_campaign(campaign: dict[str, Any]) -> list[str]:
     if not isinstance(campaign, dict):
         return ["campaign root must be a mapping"]
 
-    version = campaign.get("version")
-    if version != 3:
-        issues.append("version must be 3")
-
     for key in REQUIRED_TOP_LEVEL_FIELDS:
         if key not in campaign:
             issues.append(f"missing required field: {key}")
@@ -105,30 +93,13 @@ def _validate_campaign(campaign: dict[str, Any]) -> list[str]:
         if _get_nested(campaign, path) is None:
             issues.append(f"missing required field: {'.'.join(path)}")
 
-    datasets = campaign.get("datasets")
-    if not isinstance(datasets, list) or not datasets:
-        issues.append("datasets must be a non-empty list")
-    else:
-        for index, dataset in enumerate(datasets):
-            if not isinstance(dataset, dict):
-                issues.append(f"datasets[{index}] must be an object")
-                continue
-            for field in ("id", "local_path", "role", "fingerprint"):
-                if not dataset.get(field):
-                    issues.append(f"datasets[{index}].{field} is required")
-            fingerprint = dataset.get("fingerprint")
-            if isinstance(fingerprint, str):
-                if "replace-me" in fingerprint:
-                    issues.append(f"datasets[{index}].fingerprint contains a sentinel placeholder")
-                elif not (fingerprint.startswith("sha256:") and len(fingerprint) == 71):
-                    issues.append(f"datasets[{index}].fingerprint must be a sha256 digest")
+    direction = _get_nested(campaign, ("objective", "direction"))
+    if direction is not None and direction not in ("maximize", "minimize"):
+        issues.append("objective.direction must be 'maximize' or 'minimize'")
 
     for path in (
-        ("sanity", "command"),
-        ("execution", "entrypoint"),
-        ("remote_queue", "enqueue_command"),
-        ("remote_queue", "status_command"),
-        ("remote_queue", "results_command"),
+        ("project", "repo"),
+        ("project", "smoke_test_command"),
     ):
         value = _get_nested(campaign, path)
         if value is None:
@@ -138,45 +109,23 @@ def _validate_campaign(campaign: dict[str, Any]) -> list[str]:
         elif _contains_sentinel(value):
             issues.append(f"{'.'.join(path)} contains a sentinel placeholder")
 
-    for command_name in REQUIRED_REMOTE_QUEUE_COMMANDS:
-        if _get_nested(campaign, ("remote_queue", command_name)) is None:
-            issues.append(f"missing required field: remote_queue.{command_name}")
-
-    if _contains_sentinel(campaign.get("artifacts")):
-        issues.append("artifacts contains a sentinel placeholder")
-    if _contains_sentinel(campaign.get("datasets")):
-        issues.append("datasets contains a sentinel placeholder")
+    if _contains_sentinel(campaign.get("wandb")):
+        issues.append("wandb contains a sentinel placeholder")
 
     return issues
 
 
 def _identity_hash(campaign: dict[str, Any]) -> str:
-    datasets = campaign.get("datasets", [])
-    dataset_view = []
-    for dataset in datasets:
-        if not isinstance(dataset, dict):
-            continue
-        dataset_view.append({field: dataset.get(field) for field in IDENTITY_DATASET_FIELDS})
-    dataset_view.sort(key=lambda item: json.dumps(item, sort_keys=True))
     payload = {
-        "version": campaign.get("version"),
-        "campaign_id": campaign.get("campaign_id"),
+        "campaign_name": _get_nested(campaign, ("campaign", "name")),
         "objective": {
             "metric": _get_nested(campaign, ("objective", "metric")),
             "direction": _get_nested(campaign, ("objective", "direction")),
-            "aggregation": _get_nested(campaign, ("objective", "aggregation")),
         },
-        "datasets": dataset_view,
-    }
-    return _sha256(payload)
-
-
-def _runtime_hash(campaign: dict[str, Any]) -> str:
-    payload = {
-        "sanity": campaign.get("sanity"),
-        "artifacts": campaign.get("artifacts"),
-        "remote_queue": campaign.get("remote_queue"),
-        "execution": campaign.get("execution"),
+        "wandb": {
+            "entity": _get_nested(campaign, ("wandb", "entity")),
+            "project": _get_nested(campaign, ("wandb", "project")),
+        },
     }
     return _sha256(payload)
 
@@ -188,13 +137,7 @@ def _evaluate_preflight(
     state_dir: Path,
     *,
     campaign_identity_hash: str | None,
-    runtime_config_hash: str | None,
 ) -> dict[str, Any]:
-    """Read and evaluate the preflight readiness artifact.
-
-    Returns an advisory ``preflight_readiness`` dict describing the observed
-    artifact status so the blocked/ready decision is inspectable.
-    """
     artifact_path = state_dir / "preflight-readiness.json"
     peek: dict[str, Any] = {
         "path": str(artifact_path),
@@ -229,19 +172,14 @@ def _evaluate_preflight(
 
     peek["readable"] = True
 
-    # Binding freshness: both hashes must match.
     art_identity = artifact.get("campaign_identity_hash")
-    art_runtime = artifact.get("runtime_config_hash")
-    identity_match = campaign_identity_hash is not None and art_identity == campaign_identity_hash
-    runtime_match = runtime_config_hash is not None and art_runtime == runtime_config_hash
-    binding_fresh = identity_match and runtime_match
+    binding_fresh = campaign_identity_hash is not None and art_identity == campaign_identity_hash
     peek["binding_fresh"] = binding_fresh
 
     if not binding_fresh:
         peek["status"] = "stale"
         return peek
 
-    # Binding is fresh — now check readiness outcome.
     art_status = artifact.get("status")
     art_failures = artifact.get("failures", [])
     art_next_action = artifact.get("next_action")
@@ -253,7 +191,6 @@ def _evaluate_preflight(
     elif art_status == "FAILED":
         peek["status"] = "fresh_failed"
     else:
-        # Unknown status treated as stale.
         peek["status"] = "stale"
         peek["binding_fresh"] = False
 
@@ -276,7 +213,7 @@ def _peek_state(state_path: Path, *, campaign_identity_hash: str | None) -> tupl
 
     try:
         payload = json.loads(state_path.read_text(encoding="utf-8"))
-    except Exception as exc:  # pragma: no cover - defensive on corrupt input
+    except Exception as exc:
         state_peek["identity_relation"] = "unreadable"
         warnings.append(f"state file unreadable: {exc}")
         return state_peek, warnings
@@ -313,19 +250,15 @@ def build_handoff(campaign_path: Path, state_path: Path, output_path: Path) -> d
     campaign_valid = not validation_issues and campaign is not None
 
     campaign_identity_hash = _identity_hash(campaign) if campaign_valid else None
-    runtime_config_hash = _runtime_hash(campaign) if campaign_valid else None
     state_peek, state_warnings = _peek_state(state_path, campaign_identity_hash=campaign_identity_hash)
     warnings.extend(state_warnings)
 
-    # Derive the .ml-metaopt/ directory from the state path's parent.
     state_dir = state_path.parent
 
-    # Evaluate preflight readiness only when campaign itself is valid.
     if campaign_valid:
         preflight = _evaluate_preflight(
             state_dir,
             campaign_identity_hash=campaign_identity_hash,
-            runtime_config_hash=runtime_config_hash,
         )
     else:
         artifact_path = state_dir / "preflight-readiness.json"
@@ -339,7 +272,6 @@ def build_handoff(campaign_path: Path, state_path: Path, output_path: Path) -> d
             "artifact_next_action": None,
         }
 
-    # Decide outcome: campaign validation blocks first, then preflight gates.
     if not campaign_valid:
         next_state = "BLOCKED_CONFIG"
         recovery_action = "repair ml_metaopt_campaign.yaml"
@@ -357,7 +289,6 @@ def build_handoff(campaign_path: Path, state_path: Path, output_path: Path) -> d
         recovery_action = "run metaopt-preflight to verify environment readiness"
         summary = "campaign valid but preflight readiness artifact missing; run metaopt-preflight to proceed"
     else:
-        # stale or unreadable
         next_state = "BLOCKED_CONFIG"
         recovery_action = "re-run metaopt-preflight (campaign configuration has changed or artifact is invalid)"
         summary = "campaign valid but preflight readiness artifact is stale; re-run metaopt-preflight"
@@ -367,20 +298,14 @@ def build_handoff(campaign_path: Path, state_path: Path, output_path: Path) -> d
         "campaign_path": str(campaign_path),
         "campaign_exists": campaign_path.exists(),
         "campaign_valid": campaign_valid,
-        "campaign_id": campaign.get("campaign_id") if isinstance(campaign, dict) else None,
+        "campaign_id": _get_nested(campaign, ("campaign", "name")) if isinstance(campaign, dict) else None,
         "campaign_identity_hash": campaign_identity_hash,
-        "runtime_config_hash": runtime_config_hash,
-        "goal": campaign.get("goal") if isinstance(campaign, dict) else None,
         "objective_snapshot": campaign.get("objective") if isinstance(campaign, dict) else None,
-        "baseline_snapshot": campaign.get("baseline") if isinstance(campaign, dict) else None,
         "stop_conditions": campaign.get("stop_conditions") if isinstance(campaign, dict) else None,
         "proposal_policy": campaign.get("proposal_policy") if isinstance(campaign, dict) else None,
-        "dispatch_policy": campaign.get("dispatch_policy") if isinstance(campaign, dict) else None,
-        "datasets": campaign.get("datasets") if isinstance(campaign, dict) else None,
-        "sanity": campaign.get("sanity") if isinstance(campaign, dict) else None,
-        "artifacts": campaign.get("artifacts") if isinstance(campaign, dict) else None,
-        "remote_queue": campaign.get("remote_queue") if isinstance(campaign, dict) else None,
-        "execution": campaign.get("execution") if isinstance(campaign, dict) else None,
+        "compute": campaign.get("compute") if isinstance(campaign, dict) else None,
+        "wandb": campaign.get("wandb") if isinstance(campaign, dict) else None,
+        "project": campaign.get("project") if isinstance(campaign, dict) else None,
         "validation_issues": validation_issues,
         "warnings": warnings,
         "state_peek": state_peek,

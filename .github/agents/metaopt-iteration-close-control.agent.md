@@ -20,7 +20,7 @@ In v4, this agent absorbs the work previously done by a separate `metaopt-rollov
 ## Inputs
 
 1. **State**: `.ml-metaopt/state.json` — read all fields, especially: `current_iteration`, `current_proposals`, `next_proposals`, `key_learnings`, `completed_iterations`, `baseline`, `no_improve_iterations`, `current_sweep`, `selected_sweep`, `objective_snapshot`
-2. **Campaign**: `ml_metaopt_campaign.yaml` — read `stop_conditions`, `compute.max_budget_usd`, `objective`
+2. **Load handoff**: `.ml-metaopt/handoffs/metaopt-load-campaign-LOAD_CAMPAIGN.json` — read `stop_conditions`, `compute.max_budget_usd`
 
 ## Steps
 
@@ -45,9 +45,10 @@ Build the new `current_proposals` list:
 Evaluate ALL stop conditions. The FIRST matching condition determines the outcome:
 
 1. **Target metric reached** (direction-aware):
-   - If `objective.direction == "maximize"` AND `baseline.value >= stop_conditions.target_metric` → COMPLETE
-   - If `objective.direction == "minimize"` AND `baseline.value <= stop_conditions.target_metric` → COMPLETE
+   - If `baseline` is null, skip this check (no metric to compare).
    - If `stop_conditions.target_metric` is not set, skip this check.
+   - If `objective_snapshot.direction == "maximize"` AND `baseline.value >= stop_conditions.target_metric` → COMPLETE
+   - If `objective_snapshot.direction == "minimize"` AND `baseline.value <= stop_conditions.target_metric` → COMPLETE
 
 2. **Max iterations reached**:
    - If `current_iteration >= stop_conditions.max_iterations` → COMPLETE

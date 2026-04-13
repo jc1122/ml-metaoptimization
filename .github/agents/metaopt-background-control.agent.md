@@ -22,7 +22,7 @@ You are invoked by the orchestrator in one of two modes (passed as context): `pl
 ## Inputs
 
 1. **State**: `.ml-metaopt/state.json` — read `current_proposals`, `next_proposals`, `key_learnings`, `baseline`, `completed_iterations`, `objective_snapshot`, `proposal_cycle`
-2. **Campaign**: `ml_metaopt_campaign.yaml` — read `proposal_policy.current_target`, `objective`
+2. **Load handoff**: `.ml-metaopt/handoffs/metaopt-load-campaign-LOAD_CAMPAIGN.json` — read `proposal_policy.current_target`, `objective_snapshot`
 3. **Worker results**: `.ml-metaopt/worker-results/ideation-*.json` — completed ideation worker outputs
 
 ## Steps — Plan Phase (`plan_background_work`)
@@ -81,7 +81,7 @@ Note: the field is `worker_ref` (not `skill`). The `payload` field is not used f
 
 ```json
 {
-  "recommended_next_machine_state": null,
+  "recommended_next_machine_state": "WAIT_FOR_PROPOSALS",
   "state_patch": {},
   "directive": { "type": "none" },
   "launch_requests": [ "..." ],
@@ -89,7 +89,7 @@ Note: the field is `worker_ref` (not `skill`). The `payload` field is not used f
 }
 ```
 
-`recommended_next_machine_state: null` means "stay in IDEATE, re-invoke me in gate mode after workers complete."
+`recommended_next_machine_state: "WAIT_FOR_PROPOSALS"` advances the state machine; the orchestrator re-invokes this agent in gate mode after workers complete.
 
 ## Steps — Gate Phase (`gate_background_work`)
 
@@ -136,16 +136,15 @@ Build a `state_patch` that appends all valid proposals to `current_proposals`:
 Let `total = len(current_proposals after append)`.
 
 - If `total >= proposal_policy.current_target`:
-  - Set `recommended_next_machine_state: "WAIT_FOR_PROPOSALS"`
-  - This triggers the WAIT_FOR_PROPOSALS gate on next invocation.
+  - Set `recommended_next_machine_state: "SELECT_AND_DESIGN_SWEEP"`
 - Else:
-  - Set `recommended_next_machine_state: null` (stay in IDEATE, dispatch more workers).
+  - Set `recommended_next_machine_state: "IDEATE"` (dispatch more workers).
 
 ### Step 6: Write gate handoff
 
 ```json
 {
-  "recommended_next_machine_state": "WAIT_FOR_PROPOSALS" or null,
+  "recommended_next_machine_state": "SELECT_AND_DESIGN_SWEEP" or "IDEATE",
   "state_patch": { "current_proposals": ["..."] },
   "directive": { "type": "none" },
   "summary": "Validated <N> proposals, pool at <total>/<target>",

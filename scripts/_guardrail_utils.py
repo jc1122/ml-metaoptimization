@@ -4,42 +4,19 @@ from __future__ import annotations
 from typing import Any
 
 
-# --- Semantic-lane fields that indicate worker lane drift ---
-# If a worker result contains fields from a different lane, the control agent
-# must reject or block rather than propagating cross-lane contamination.
-LANE_DRIFT_FIELDS: dict[str, frozenset[str]] = {
-    "ideation": frozenset({
-        "patch_artifacts",
-        "apply_results",
-        "code_patch",
-        "code_patches",
-        "code_changes",
-        "fix_recommendations",
-    }),
-    "design": frozenset({
-        "patch_artifacts",
-        "apply_results",
-    }),
-}
-
-
 # --- Allowed slot modes per slot class ---
-# Rollover is inline dispatch (no slot), so it is not a valid auxiliary slot mode.
+# v4: only ideation (background) and analysis (auxiliary) remain.
+# All other execution is via directives to skypilot-wandb-worker.
 ALLOWED_SLOT_MODES: dict[str, frozenset[str]] = {
-    "background": frozenset({"ideation", "maintenance"}),
-    "auxiliary": frozenset({"selection", "design", "materialization", "diagnosis", "analysis"}),
+    "background": frozenset({"ideation"}),
+    "auxiliary": frozenset({"analysis"}),
 }
 
 # --- Allowed workers (worker_ref values) ---
 ALLOWED_WORKERS: frozenset[str] = frozenset({
     "metaopt-ideation-worker",
-    "metaopt-selection-worker",
-    "metaopt-design-worker",
-    "metaopt-materialization-worker",
-    "metaopt-diagnosis-worker",
     "metaopt-analysis-worker",
-    "metaopt-rollover-worker",
-    "repo-audit-refactor-optimize",
+    "skypilot-wandb-worker",
 })
 
 # --- Deterministic model resolution order per class ---
@@ -56,241 +33,200 @@ PREFERRED_MODEL_BY_CLASS: dict[str, str] = {
 }
 
 # --- Worker dispatch contract ---
-WORKER_DISPATCH_POLICY: dict[str, dict[str, frozenset[str] | str]] = {
+# skypilot-wandb-worker has no slot_class — it is dispatched via directive, not launch_requests.
+WORKER_DISPATCH_POLICY: dict[str, dict[str, Any]] = {
     "metaopt-ideation-worker": {
         "slot_class": "background",
         "modes": frozenset({"ideation"}),
         "model_classes": frozenset({"general_worker"}),
-    },
-    "repo-audit-refactor-optimize": {
-        "slot_class": "background",
-        "modes": frozenset({"maintenance"}),
-        "model_classes": frozenset({"general_worker", "strong_coder"}),
-    },
-    "metaopt-selection-worker": {
-        "slot_class": "auxiliary",
-        "modes": frozenset({"selection"}),
-        "model_classes": frozenset({"strong_reasoner"}),
-    },
-    "metaopt-design-worker": {
-        "slot_class": "auxiliary",
-        "modes": frozenset({"design"}),
-        "model_classes": frozenset({"strong_reasoner"}),
-    },
-    "metaopt-materialization-worker": {
-        "slot_class": "auxiliary",
-        "modes": frozenset({"materialization"}),
-        "model_classes": frozenset({"strong_coder"}),
-    },
-    "metaopt-diagnosis-worker": {
-        "slot_class": "auxiliary",
-        "modes": frozenset({"diagnosis"}),
-        "model_classes": frozenset({"strong_reasoner"}),
     },
     "metaopt-analysis-worker": {
         "slot_class": "auxiliary",
         "modes": frozenset({"analysis"}),
         "model_classes": frozenset({"strong_reasoner"}),
     },
-    # metaopt-rollover-worker uses inline dispatch (no slot_class), so it has no
-    # slot-based dispatch policy entry.  The worker_ref is still in ALLOWED_WORKERS.
+    "skypilot-wandb-worker": {
+        "slot_class": None,  # directive-dispatched only
+        "modes": frozenset(),
+        "model_classes": frozenset({"general_worker"}),
+    },
 }
 
-# --- Allowed executor directive actions ---
+# --- Allowed directive actions ---
+# Blocked: queue_op, apply_patch_artifacts, package_code_artifact,
+#          package_data_manifest, write_manifest, run_sanity,
+#          drain_slots, cancel_slots, ssh_command, raw_ssh, kubectl_exec
 ALLOWED_DIRECTIVE_ACTIONS: frozenset[str] = frozenset({
-    "apply_patch_artifacts",
-    "cancel_slots",
+    "launch_sweep",
+    "poll_sweep",
+    "run_smoke_test",
+    "remove_agents_hook",
     "delete_state_file",
-    "drain_slots",
     "emit_final_report",
     "emit_iteration_report",
-    "package_code_artifact",
-    "package_data_manifest",
-    "queue_op",
-    "remove_agents_hook",
-    "run_sanity",
-    "write_manifest",
+    "none",
 })
 
-# Actions that represent raw-cluster bypass and must always be rejected.
-_BLOCKED_DIRECTIVE_ACTIONS: frozenset[str] = frozenset({
+# --- Required fields per directive action ---
+DIRECTIVE_REQUIRED_FIELDS: dict[str, frozenset[str]] = {
+    "launch_sweep": frozenset({"sweep_config", "sky_task_spec", "result_file"}),
+    "poll_sweep": frozenset({"sweep_id", "sky_job_ids", "result_file"}),
+    "run_smoke_test": frozenset({"command", "result_file"}),
+    "remove_agents_hook": frozenset({"agents_path"}),
+    "delete_state_file": frozenset({"state_path"}),
+    "emit_final_report": frozenset({"report_type"}),
+    "emit_iteration_report": frozenset({"report_type", "iteration"}),
+    "none": frozenset(),
+}
+
+# --- Blocked actions (raw cluster bypass) ---
+BLOCKED_DIRECTIVE_ACTIONS: frozenset[str] = frozenset({
     "ssh_command",
     "raw_ssh",
-    "shell_exec",
     "kubectl_exec",
+    "queue_op",
+    "apply_patch_artifacts",
+    "package_code_artifact",
+    "package_data_manifest",
+    "write_manifest",
+    "run_sanity",
+    "drain_slots",
+    "cancel_slots",
 })
 
-REQUIRED_LAUNCH_REQUEST_FIELDS: tuple[str, ...] = (
+_LAUNCH_REQUEST_REQUIRED_FIELDS = frozenset({
     "worker_ref",
     "model_class",
     "task_file",
     "result_file",
-)
-
-DIRECTIVE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
-    "apply_patch_artifacts": ("result_file", "target_worktree"),
-    "cancel_slots": ("slot_ids",),
-    "delete_state_file": ("state_path",),
-    "drain_slots": ("drain_window_seconds",),
-    "emit_final_report": ("report_type",),
-    "emit_iteration_report": ("report_type", "iteration"),
-    "package_code_artifact": ("worktree", "code_roots", "output_event_path"),
-    "package_data_manifest": ("worktree", "data_roots", "output_event_path"),
-    "queue_op": ("operation", "batch_id", "command", "result_file"),
-    "remove_agents_hook": ("agents_path",),
-    "run_sanity": ("worktree", "command", "max_duration_seconds", "output_event_path"),
-    "write_manifest": ("manifest_path", "batch_id"),
-}
+})
+_SLOT_REQUIRED_FIELDS = frozenset({"slot_id", "slot_class", "mode"})
 
 
-def _is_non_empty_string(value: Any) -> bool:
-    return isinstance(value, str) and bool(value)
+def normalize_launch_requests(launch_requests: Any) -> list[dict[str, Any]]:
+    """Validate and normalize a launch_requests list from a control-agent handoff.
 
-
-def _validate_required_fields(entry: dict[str, Any], fields: tuple[str, ...], *, label: str) -> None:
-    for field in fields:
-        if field not in entry:
-            raise ValueError(f"{label}: missing required field {field!r}")
-        value = entry[field]
-        if isinstance(value, str) and not value:
-            raise ValueError(f"{label}: field {field!r} must be a non-empty string")
-
-
-def normalize_launch_requests(raw: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
-    """Validate and enrich launch requests.
-
-    Rejects illegal slot/mode/worker/model combinations.
-    Adds ``preferred_model`` when absent.
-    Returns an empty list when *raw* is ``None``.
+    Adds ``preferred_model`` to each entry if not already present.
+    Raises TypeError for structural problems, ValueError for semantic violations.
     """
-    if raw is None:
+    if launch_requests is None:
         return []
-    if not isinstance(raw, list):
-        raise TypeError(f"launch_requests must be a list, got {type(raw).__name__}")
+    if not isinstance(launch_requests, list):
+        raise TypeError(f"launch_requests must be a list, got {type(launch_requests).__name__}")
 
-    for i, entry in enumerate(raw):
+    result = []
+    for entry in launch_requests:
         if not isinstance(entry, dict):
-            raise TypeError(f"launch_requests[{i}] must be a dict, got {type(entry).__name__}")
+            raise TypeError(f"each launch_requests entry must be a dict, got {type(entry).__name__}")
 
-        _validate_required_fields(
-            entry,
-            REQUIRED_LAUNCH_REQUEST_FIELDS,
-            label=f"launch_requests[{i}]",
-        )
+        entry = dict(entry)
 
-        slot_class = entry.get("slot_class")
-        mode = entry.get("mode")
-        if slot_class is not None:
-            if slot_class not in ALLOWED_SLOT_MODES:
-                raise ValueError(
-                    f"launch_requests[{i}]: unknown slot_class {slot_class!r}"
-                )
-            if not _is_non_empty_string(mode):
-                raise ValueError(
-                    f"launch_requests[{i}]: mode is required when slot_class is provided"
-                )
-            if mode not in ALLOWED_SLOT_MODES[slot_class]:
-                raise ValueError(
-                    f"launch_requests[{i}]: mode {mode!r} is not allowed "
-                    f"for slot_class {slot_class!r} "
-                    f"(allowed: {sorted(ALLOWED_SLOT_MODES[slot_class])})"
-                )
-        elif mode is not None:
-            raise ValueError(
-                f"launch_requests[{i}]: slot_class is required when mode is provided"
-            )
+        # Validate required base fields
+        missing = _LAUNCH_REQUEST_REQUIRED_FIELDS - entry.keys()
+        if missing:
+            raise ValueError(f"launch_requests entry missing required fields: {sorted(missing)}")
 
-        worker_ref = entry.get("worker_ref")
+        worker_ref = entry["worker_ref"]
         if worker_ref not in ALLOWED_WORKERS:
             raise ValueError(
-                f"launch_requests[{i}]: unknown worker_ref {worker_ref!r}"
+                f"unknown worker_ref {worker_ref!r}; allowed: {sorted(ALLOWED_WORKERS)}"
             )
 
-        model_class = entry.get("model_class")
-        if model_class not in PREFERRED_MODEL_BY_CLASS:
+        model_class = entry["model_class"]
+        if model_class not in MODEL_RESOLUTION_ORDER_BY_CLASS:
             raise ValueError(
-                f"launch_requests[{i}]: unknown model_class {model_class!r}"
+                f"unknown model_class {model_class!r}; allowed: "
+                f"{sorted(MODEL_RESOLUTION_ORDER_BY_CLASS)}"
             )
 
-        dispatch_policy = WORKER_DISPATCH_POLICY.get(worker_ref)
-        if dispatch_policy is not None and slot_class is not None:
-            expected_slot_class = dispatch_policy["slot_class"]
-            if slot_class != expected_slot_class:
+        policy = WORKER_DISPATCH_POLICY[worker_ref]
+
+        has_slot_class = "slot_class" in entry
+        has_mode = "mode" in entry
+
+        if has_slot_class != has_mode:
+            if not has_slot_class:
+                raise ValueError("slot_class is required when mode is present")
+            raise ValueError("mode is required when slot_class is present")
+
+        if has_slot_class:
+            slot_class = entry["slot_class"]
+            mode = entry["mode"]
+
+            if slot_class not in ALLOWED_SLOT_MODES:
                 raise ValueError(
-                    f"launch_requests[{i}]: worker_ref {worker_ref!r} requires "
-                    f"slot_class {expected_slot_class!r}, got {slot_class!r}"
+                    f"unknown slot_class {slot_class!r}; allowed: {sorted(ALLOWED_SLOT_MODES)}"
                 )
 
-            allowed_modes = dispatch_policy["modes"]
+            if policy["slot_class"] is None:
+                raise ValueError(
+                    f"worker {worker_ref!r} is directive-dispatched and must not appear in "
+                    "slot-based launch_requests"
+                )
+
+            if slot_class != policy["slot_class"]:
+                raise ValueError(
+                    f"worker {worker_ref!r} requires slot_class {policy['slot_class']!r}, "
+                    f"got {slot_class!r}"
+                )
+
+            allowed_modes = ALLOWED_SLOT_MODES[slot_class]
             if mode not in allowed_modes:
                 raise ValueError(
-                    f"launch_requests[{i}]: worker_ref {worker_ref!r} requires one of "
-                    f"{sorted(allowed_modes)}, got {mode!r}"
+                    f"slot_class {slot_class!r} does not allow mode {mode!r}; "
+                    f"allowed: {sorted(allowed_modes)}"
                 )
 
-            allowed_model_classes = dispatch_policy["model_classes"]
-            if model_class not in allowed_model_classes:
+            if mode not in policy["modes"]:
                 raise ValueError(
-                    f"launch_requests[{i}]: worker_ref {worker_ref!r} requires one of "
-                    f"{sorted(allowed_model_classes)} model classes, got {model_class!r}"
+                    f"worker {worker_ref!r} requires one of modes {sorted(policy['modes'])}, "
+                    f"got {mode!r}"
                 )
 
-        # Enrich with preferred_model when absent.
-        if "preferred_model" not in entry and model_class in PREFERRED_MODEL_BY_CLASS:
+            if model_class not in policy["model_classes"]:
+                raise ValueError(
+                    f"worker {worker_ref!r} requires model classes "
+                    f"{sorted(policy['model_classes'])}, got {model_class!r}"
+                )
+
+        # Inject preferred_model if not set
+        if "preferred_model" not in entry:
             entry["preferred_model"] = PREFERRED_MODEL_BY_CLASS[model_class]
 
-    return raw
+        result.append(entry)
+
+    return result
 
 
 def validate_executor_policy(
-    control_agent: str,
-    handoff_type: str | None,
+    agent_name: str,
+    phase: str | None,
     directives: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Reject unsupported executor actions, especially raw-cluster bypasses.
+    """Validate a list of executor directives from a control-agent handoff.
 
-    This runs *after* ``normalize_directives()`` has verified structural
-    validity (action/reason presence).  It enforces semantic policy.
+    Raises ValueError for blocked actions or schema violations.
+    Returns the validated directive list unchanged on success.
     """
-    for i, entry in enumerate(directives):
-        action = entry.get("action", "")
+    for directive in directives:
+        action = directive.get("action", "")
 
-        if action in _BLOCKED_DIRECTIVE_ACTIONS:
+        if action in BLOCKED_DIRECTIVE_ACTIONS:
             raise ValueError(
-                f"directives[{i}]: action {action!r} is a blocked "
-                f"raw-cluster bypass (control_agent={control_agent!r}, "
-                f"handoff_type={handoff_type!r})"
+                f"directive action {action!r} is blocked (raw-cluster bypass or v3 artifact "
+                f"operation); agent={agent_name!r} phase={phase!r}"
             )
 
         if action not in ALLOWED_DIRECTIVE_ACTIONS:
             raise ValueError(
-                f"directives[{i}]: action {action!r} is not in "
-                f"ALLOWED_DIRECTIVE_ACTIONS (control_agent={control_agent!r}, "
-                f"handoff_type={handoff_type!r})"
+                f"unknown directive action {action!r}; allowed: {sorted(ALLOWED_DIRECTIVE_ACTIONS)}"
             )
 
-        required_fields = DIRECTIVE_REQUIRED_FIELDS.get(action, ())
-        _validate_required_fields(
-            entry,
-            required_fields,
-            label=f"directives[{i}]",
-        )
-
-        if action == "queue_op":
-            operation = entry.get("operation")
-            if operation not in {"enqueue", "status", "results"}:
-                raise ValueError(
-                    f"directives[{i}]: queue_op.operation must be one of "
-                    f"'enqueue', 'status', 'results', got {operation!r}"
-                )
+        required = DIRECTIVE_REQUIRED_FIELDS.get(action, frozenset())
+        missing = required - directive.keys()
+        if missing:
+            raise ValueError(
+                f"directive {action!r} missing required fields: {sorted(missing)}"
+            )
 
     return directives
-
-
-def check_lane_drift(lane: str, result: dict[str, Any]) -> list[str]:
-    """Return sorted list of forbidden fields found in *result* for *lane*.
-
-    An empty list means no drift was detected.
-    """
-    forbidden = LANE_DRIFT_FIELDS.get(lane, frozenset())
-    return sorted(forbidden & result.keys())

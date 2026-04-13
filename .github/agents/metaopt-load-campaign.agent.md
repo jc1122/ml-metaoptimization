@@ -32,7 +32,7 @@ Verify ALL of these top-level keys exist:
 - `campaign` (must contain `name`)
 - `project` (must contain `repo`, `smoke_test_command`)
 - `wandb` (must contain `entity`, `project`)
-- `compute` (must contain `accelerator`, `num_sweep_agents`, `idle_timeout_minutes`, `max_budget_usd`)
+- `compute` (must contain `provider`, `accelerator`, `num_sweep_agents`, `max_budget_usd`)
 - `objective` (must contain `metric`, `direction`, `improvement_threshold`)
 - `proposal_policy` (must contain `current_target`)
 - `stop_conditions` (must contain `max_iterations`, `max_no_improve_iterations`)
@@ -71,26 +71,43 @@ If any sentinel is found → BLOCKED_CONFIG listing every field that contains a 
 
 ### Step 8: Compute campaign_identity_hash
 
-Construct a canonical JSON object containing these fields from the campaign YAML, in this exact key order:
+Build a hash payload using exactly 5 subfields from the campaign YAML:
+- `campaign_name` ← `campaign.name`
+- `objective.metric` ← `objective.metric`
+- `objective.direction` ← `objective.direction`
+- `wandb.entity` ← `wandb.entity`
+- `wandb.project` ← `wandb.project`
+
+The canonical JSON structure (sorted keys, compact separators):
 ```json
 {
-  "campaign": { "name": "..." },
-  "objective": { "direction": "...", "improvement_threshold": ..., "metric": "..." },
-  "project": { "repo": "...", "smoke_test_command": "..." },
-  "wandb": { "entity": "...", "project": "..." }
+  "campaign_name": "<campaign.name>",
+  "objective": {
+    "direction": "<objective.direction>",
+    "metric": "<objective.metric>"
+  },
+  "wandb": {
+    "entity": "<wandb.entity>",
+    "project": "<wandb.project>"
+  }
 }
 ```
 
-Keys at every level must be sorted alphabetically. Serialize with no extra whitespace (compact JSON). Compute SHA-256 of the UTF-8 bytes. The hash is `"sha256:<64 hex chars>"`.
+Serialize with compact separators (`","`, `":"`), `ensure_ascii=true`. Compute SHA-256 of the UTF-8 bytes. Store as `"sha256:<64 lowercase hex chars>"`.
+
+**Fields NOT included in the hash:** `improvement_threshold`, `project.repo`, `project.smoke_test_command`, `compute.*`, `proposal_policy.*`, `stop_conditions.*`. Changes to those fields do not change the identity hash and must not discard progress.
 
 ### Step 9: Check preflight readiness
 
-Read `.ml-metaopt/preflight-readiness.json`:
-- **File missing** → BLOCKED_CONFIG: `"Run metaopt-preflight to verify WandB and SkyPilot connectivity"`
-- **File exists, parse it.** Expected fields: `status`, `campaign_identity_hash`, `checked_at`.
-  - If `status == "FAILED"` → BLOCKED_CONFIG with the artifact's `next_action` field as the message.
-  - If `campaign_identity_hash` does not match the hash computed in Step 8 → BLOCKED_CONFIG: `"Campaign config changed since last preflight — re-run metaopt-preflight"`
-  - If `status == "READY"` and hash matches → proceed to emit HYDRATE_STATE recommendation.
+Evaluate `.ml-metaopt/preflight-readiness.json` (see `_evaluate_preflight()` in `scripts/load_campaign_handoff.py`). The evaluation yields one of 5 statuses:
+
+- **`missing`** — artifact file does not exist → BLOCKED_CONFIG: `"Run metaopt-preflight to verify environment readiness"`
+- **`unreadable`** — file exists but cannot be parsed as JSON or is not a dict → BLOCKED_CONFIG: `"Preflight artifact is corrupt — re-run metaopt-preflight"`
+- **`stale`** — file is readable but `schema_version` is unrecognized, `campaign_identity_hash` does not match the hash from Step 8, or `status` is neither `"READY"` nor `"FAILED"` → BLOCKED_CONFIG: `"Campaign config changed or artifact is invalid — re-run metaopt-preflight"`
+- **`fresh_failed`** — hash matches and `status == "FAILED"` → BLOCKED_CONFIG with the artifact's `next_action` and `failures` surfaced in the handoff
+- **`fresh_ready`** — hash matches and `status == "READY"` → proceed to emit HYDRATE_STATE recommendation
+
+Key artifact fields consumed by v4: `schema_version` (must be `1`), `status`, `campaign_identity_hash`, `failures`, `next_action`.
 
 ## Output
 

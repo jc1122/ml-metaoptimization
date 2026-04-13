@@ -170,8 +170,13 @@ Workers must not write results to handoff paths, task paths, or arbitrary locati
 
 `campaign_identity_hash` is computed as follows:
 
-1. Extract the `campaign`, `project`, `wandb`, and `objective` top-level fields from `ml_metaopt_campaign.yaml`
-2. Serialize as canonical JSON: sorted keys, compact separators (`","`, `":"`), `ensure_ascii=true`
+1. Build a payload from specific subfields of `ml_metaopt_campaign.yaml`:
+   - `campaign_name` ← `campaign.name`
+   - `objective.metric` ← `objective.metric`
+   - `objective.direction` ← `objective.direction`
+   - `wandb.entity` ← `wandb.entity`
+   - `wandb.project` ← `wandb.project`
+2. Serialize the payload as canonical JSON: sorted keys, compact separators (`","`, `":"`), `ensure_ascii=true`
 3. Encode the JSON string as UTF-8 bytes
 4. Hash with SHA-256
 5. Store as `sha256:<64 lowercase hex chars>`
@@ -222,3 +227,5 @@ Produced by `metaopt-preflight`, consumed by `_evaluate_preflight()` in `load_ca
 | `failed` | integer | Checks that remain failed after bootstrap |
 | `bootstrapped` | integer | Checks that passed after bootstrap mutation |
 | `warnings` | integer | Non-blocking warning count |
+
+Invariant: `passed + failed + bootstrapped + warnings == total`.

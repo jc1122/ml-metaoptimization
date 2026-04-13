@@ -143,7 +143,7 @@ From `directive.payload`:
   "idle_timeout_minutes": 15,
   "max_budget_usd": 10,
   "cumulative_spend_usd": 3.40,
-  "result_file": ".ml-metaopt/worker-results/poll-sweep.json"
+  "result_file": ".ml-metaopt/executor-events/poll-sweep-iter-1.json"
 }
 ```
 
@@ -247,7 +247,8 @@ From `directive.payload`:
 ```json
 {
   "command": "python train.py --smoke",
-  "result_file": ".ml-metaopt/worker-results/smoke-test.json"
+  "repo": "git@github.com:user/project.git",
+  "result_file": ".ml-metaopt/executor-events/smoke-test-iter-1.json"
 }
 ```
 

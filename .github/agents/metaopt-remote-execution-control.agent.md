@@ -37,7 +37,8 @@ The orchestrator invokes you with the current `machine_state` as context. You ha
   "directive": {
     "type": "run_smoke_test",
     "payload": {
-      "command": "<project.smoke_test_command from campaign YAML>",
+      "command": "<project.smoke_test_command from load handoff>",
+      "repo": "<project.repo from load handoff>",
       "result_file": ".ml-metaopt/executor-events/smoke-test-iter-<current_iteration>.json"
     }
   }

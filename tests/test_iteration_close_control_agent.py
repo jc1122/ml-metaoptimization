@@ -4,893 +4,329 @@ import json
 import subprocess
 import tempfile
 import unittest
+from copy import deepcopy
 from pathlib import Path
-
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "iteration_close_control_handoff.py"
-AGENT_PROFILE = ROOT / ".github" / "agents" / "metaopt-iteration-close-control.agent.md"
-WORKER_PROFILE = ROOT / ".github" / "agents" / "metaopt-rollover-worker.agent.md"
+
+
+def _v4_state(**overrides):
+    base = {
+        "version": 4,
+        "campaign_id": "test-campaign",
+        "campaign_identity_hash": "sha256:" + "a" * 64,
+        "status": "RUNNING",
+        "machine_state": "ROLL_ITERATION",
+        "current_iteration": 1,
+        "next_action": "roll iteration",
+        "objective_snapshot": {
+            "metric": "val/accuracy",
+            "direction": "maximize",
+            "improvement_threshold": 0.005,
+        },
+        "proposal_cycle": {"cycle_id": "iter-1-cycle-1", "current_pool_frozen": True},
+        "current_sweep": None,
+        "selected_sweep": None,
+        "baseline": {"metric": "val/accuracy", "value": 0.923, "wandb_run_id": "run-001", "wandb_run_url": "https://wandb.ai/x", "established_at": "2026-04-13T08:00:00Z"},
+        "current_proposals": [
+            {"proposal_id": "test-campaign-p1", "title": "P1"},
+            {"proposal_id": "test-campaign-p2", "title": "P2"},
+        ],
+        "next_proposals": [
+            {"proposal_id": "test-campaign-p3", "title": "P3"},
+        ],
+        "key_learnings": [],
+        "completed_iterations": [],
+        "no_improve_iterations": 0,
+        "campaign_started_at": "2026-04-13T07:00:00Z",
+    }
+    base.update(overrides)
+    return base
+
+
+def _v4_load_handoff(**overrides):
+    base = {
+        "schema_version": 1,
+        "handoff_type": "load_campaign.validate",
+        "control_agent": "metaopt-load-campaign",
+        "campaign_id": "test-campaign",
+        "campaign_valid": True,
+        "campaign_identity_hash": "sha256:" + "a" * 64,
+        "objective_snapshot": {"metric": "val/accuracy", "direction": "maximize", "improvement_threshold": 0.005},
+        "compute": {"provider": "vast_ai", "accelerator": "A100:1", "num_sweep_agents": 4, "idle_timeout_minutes": 15, "max_budget_usd": 10},
+        "wandb": {"entity": "my-entity", "project": "my-project"},
+        "project": {"repo": "git@github.com:org/repo.git", "smoke_test_command": "python train.py --smoke"},
+        "proposal_policy": {"current_target": 5},
+        "stop_conditions": {"max_iterations": 20, "target_metric": 0.99, "max_no_improve_iterations": 5},
+        "recommended_next_machine_state": "HYDRATE_STATE",
+        "state_patch": None,
+        "directives": [],
+        "warnings": [],
+        "summary": "ok",
+    }
+    base.update(overrides)
+    return base
 
 
 class IterationCloseControlAgentTests(unittest.TestCase):
-    def _write_load_handoff(self, tempdir: Path) -> Path:
-        handoff = tempdir / ".ml-metaopt" / "handoffs" / "load_campaign.latest.json"
-        handoff.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "schema_version": 1,
-            "handoff_type": "load_campaign.validate",
-            "control_agent": "metaopt-load-campaign",
-            "campaign_id": "market-forecast-v3",
-            "campaign_valid": True,
-            "campaign_identity_hash": "sha256:f50928628873800b25a5dfb41f2fd6c93acfc210424953f53a5005e09379fa4c",
-            "runtime_config_hash": "sha256:6f59ca57fb3da56f815d7fb03f8be7335fa9d14344c49154308e9e65990e9ac6",
-            "proposal_policy": {
-                "current_target": 8,
-                "current_floor": 4,
-                "next_cap": 200,
-                "distinctness_rule": "non_overlapping",
-            },
-            "stop_conditions": {
-                "max_iterations": 20,
-                "max_no_improve_iterations": 4,
-                "target_metric": 0.1200,
-                "max_wallclock_hours": 72,
-            },
-            "recommended_next_machine_state": "HYDRATE_STATE",
-            "state_patch": None,
-            "warnings": [],
-            "summary": "ok",
-        }
-        handoff.write_text(json.dumps(payload), encoding="utf-8")
-        return handoff
 
-    def _base_state(self) -> dict:
-        return {
-            "version": 3,
-            "campaign_id": "market-forecast-v3",
-            "campaign_identity_hash": "sha256:f50928628873800b25a5dfb41f2fd6c93acfc210424953f53a5005e09379fa4c",
-            "runtime_config_hash": "sha256:6f59ca57fb3da56f815d7fb03f8be7335fa9d14344c49154308e9e65990e9ac6",
-            "status": "RUNNING",
-            "machine_state": "ROLL_ITERATION",
-            "current_iteration": 3,
-            "next_action": "roll iteration",
-            "objective_snapshot": {
-                "metric": "rmse",
-                "direction": "minimize",
-                "aggregation": {"method": "weighted_mean", "weights": {"ds_main": 0.7, "ds_holdout": 0.3}},
-                "improvement_threshold": 0.0005,
-            },
-            "proposal_cycle": {
-                "cycle_id": "iter-3-cycle-1",
-                "current_pool_frozen": True,
-                "ideation_rounds_by_slot": {"bg-1": 2, "bg-2": 2},
-                "shortfall_reason": "",
-            },
-            "active_slots": [
-                {
-                    "slot_id": "bg-1",
-                    "slot_class": "background",
-                    "mode": "maintenance",
-                    "model_class": "general_worker",
-                    "requested_model": "Auto",
-                    "resolved_model": "Auto",
-                    "status": "running",
-                    "attempt": 1,
-                    "task_summary": "Read-only maintenance audit while quiescing",
-                },
-                {
-                    "slot_id": "bg-2",
-                    "slot_class": "background",
-                    "mode": "maintenance",
-                    "model_class": "general_worker",
-                    "requested_model": "Auto",
-                    "resolved_model": "Auto",
-                    "status": "running",
-                    "attempt": 1,
-                    "task_summary": "Second maintenance lane",
-                },
-            ],
-            "current_proposals": [],
-            "next_proposals": [
-                {
-                    "proposal_id": "market-forecast-v3-p17",
-                    "source_slot_id": "bg-1",
-                    "creation_iteration": 3,
-                    "created_at": "2026-04-06T09:00:00Z",
-                    "title": "Try stricter validation cutoff",
-                    "rationale": "Reduce temporal leakage margin",
-                    "expected_impact": {"direction": "improve", "magnitude": "small"},
-                    "target_area": "validation",
-                }
-            ],
-            "selected_experiment": {
-                "proposal_id": "market-forecast-v3-p16",
-                "proposal_snapshot": {"proposal_id": "market-forecast-v3-p16", "title": "Tighten rolling validation"},
-                "selection_rationale": "best fit",
-                "sanity_attempts": 1,
-                "design": {"proposal_id": "market-forecast-v3-p16"},
-                "diagnosis_history": [],
-                "analysis_summary": {
-                    "judgment": "improvement",
-                    "new_aggregate": 0.1213,
-                    "delta": -0.0071,
-                    "learnings": ["Rolling validation tightened the aggregate metric."],
-                    "invalidations": [{"proposal_id": "market-forecast-v3-p9", "reason": "validation issue addressed"}],
-                    "carry_over_candidates": [{"title": "Try stricter cutoff", "rationale": "Follow-on validation refinement"}],
-                },
-            },
-            "local_changeset": {
-                "integration_worktree": ".ml-metaopt/worktrees/iter-3-materialization",
-                "patch_artifacts": [
-                    {
-                        "producer_slot_id": "bg-1",
-                        "purpose": "maintenance patch bundle",
-                        "patch_path": ".ml-metaopt/artifacts/patches/batch-20260406-0002/bg-1.patch",
-                        "target_worktree": ".ml-metaopt/worktrees/iter-3-materialization",
-                    }
-                ],
-                "apply_results": [
-                    {
-                        "patch_path": ".ml-metaopt/artifacts/patches/batch-20260406-0002/bg-1.patch",
-                        "status": "applied",
-                        "error": None,
-                    }
-                ],
-                "verification_notes": ["pytest passed"],
-                "code_artifact_uri": ".ml-metaopt/artifacts/code/batch-20260406-0002.tar.gz",
-                "data_manifest_uri": ".ml-metaopt/artifacts/data/batch-20260406-0002.json",
-            },
-            "remote_batches": [
-                {"batch_id": "batch-20260406-0002", "queue_ref": "ray-queue-123", "status": "completed"}
-            ],
-            "baseline": {
-                "aggregate": 0.1213,
-                "by_dataset": {"ds_main": 0.1208, "ds_holdout": 0.1225},
-            },
-            "completed_experiments": [
-                {"batch_id": "batch-20260401-0004", "aggregate": 0.1279},
-                {
-                    "batch_id": "batch-20260406-0002",
-                    "proposal_id": "market-forecast-v3-p16",
-                    "aggregate": 0.1213,
-                    "judgment": "improvement",
-                },
-            ],
-            "key_learnings": [
-                "Leakage checks must run in local sanity before enqueue",
-                "Rolling validation tightened the aggregate metric.",
-            ],
-            "no_improve_iterations": 0,
-            "runtime_capabilities": {
-                "verified_at": "2026-04-06T00:00:00Z",
-                "available_skills": ["metaopt-rollover-worker"],
-                "missing_skills": [],
-                "degraded_lanes": [],
-            },
-        }
-
-    def _run(
-        self,
-        tempdir: Path,
-        *,
-        mode: str,
-        state: dict,
-        worker_results: dict[str, dict] | None = None,
-        executor_events: dict[str, dict] | None = None,
-    ) -> tuple[dict, dict, Path]:
-        load_handoff = self._write_load_handoff(tempdir)
-        state_path = tempdir / ".ml-metaopt" / "state.json"
+    def _run(self, tempdir, mode, *, state=None, load_handoff=None):
+        tmp = Path(tempdir)
+        state_path = tmp / ".ml-metaopt" / "state.json"
         state_path.parent.mkdir(parents=True, exist_ok=True)
-        state_path.write_text(json.dumps(state), encoding="utf-8")
-
-        tasks_dir = tempdir / ".ml-metaopt" / "tasks"
+        if state is not None:
+            state_path.write_text(json.dumps(state), encoding="utf-8")
+        load_h_path = tmp / ".ml-metaopt" / "handoffs" / "load_campaign.latest.json"
+        load_h_path.parent.mkdir(parents=True, exist_ok=True)
+        load_h_path.write_text(json.dumps(load_handoff or _v4_load_handoff()), encoding="utf-8")
+        tasks_dir = tmp / ".ml-metaopt" / "tasks"
         tasks_dir.mkdir(parents=True, exist_ok=True)
-        worker_results_dir = tempdir / ".ml-metaopt" / "worker-results"
+        worker_results_dir = tmp / ".ml-metaopt" / "worker-results"
         worker_results_dir.mkdir(parents=True, exist_ok=True)
-        executor_events_dir = tempdir / ".ml-metaopt" / "executor-events"
-        executor_events_dir.mkdir(parents=True, exist_ok=True)
-        output_path = tempdir / ".ml-metaopt" / "handoffs" / f"{mode}.latest.json"
-        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path = tmp / "handoff.json"
+        cmd = [
+            "python3", str(SCRIPT),
+            "--mode", mode,
+            "--load-handoff", str(load_h_path),
+            "--state-path", str(state_path),
+            "--tasks-dir", str(tasks_dir),
+            "--worker-results-dir", str(worker_results_dir),
+            "--output", str(output_path),
+            "--apply-state",
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(ROOT / "scripts"))
+        self.assertEqual(result.returncode, 0, msg=f"stdout:\n{result.stdout}\n\nstderr:\n{result.stderr}")
+        payload = json.loads(output_path.read_text()) if output_path.exists() else {}
+        updated_state = json.loads(state_path.read_text()) if state_path.exists() else {}
+        return payload, updated_state, result
 
-        for name, payload in (worker_results or {}).items():
-            (worker_results_dir / f"{name}.json").write_text(json.dumps(payload), encoding="utf-8")
-        for name, payload in (executor_events or {}).items():
-            (executor_events_dir / f"{name}.json").write_text(json.dumps(payload), encoding="utf-8")
+    # ── plan_roll_iteration ────────────────────────────────────────────
 
-        completed = subprocess.run(
-            [
-                "python3",
-                str(SCRIPT),
-                "--mode",
-                mode,
-                "--load-handoff",
-                str(load_handoff),
-                "--state-path",
-                str(state_path),
-                "--tasks-dir",
-                str(tasks_dir),
-                "--worker-results-dir",
-                str(worker_results_dir),
-                "--executor-events-dir",
-                str(executor_events_dir),
-                "--output",
-                str(output_path),
-                "--apply-state",
-            ],
-            cwd=ROOT,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        self.assertEqual(
-            completed.returncode,
-            0,
-            msg=f"stdout:\n{completed.stdout}\n\nstderr:\n{completed.stderr}",
-        )
-        payload = json.loads(output_path.read_text(encoding="utf-8"))
-        self.assertEqual(payload, json.loads(completed.stdout))
-        updated_state = json.loads(state_path.read_text(encoding="utf-8"))
-        return payload, updated_state, tasks_dir
-
-    def test_plan_roll_iteration_emits_rollover_task(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            payload, updated_state, tasks_dir = self._run(
-                Path(tempdir_str),
-                mode="plan_roll_iteration",
-                state=self._base_state(),
-            )
-
-            self.assertEqual(payload["handoff_type"], "iteration_close.plan_roll_iteration")
-            self.assertEqual(payload["worker_kind"], "custom_agent")
-            self.assertEqual(payload["worker_ref"], "metaopt-rollover-worker")
+    def test_plan_roll_iteration_emits_rollover_task(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            state = _v4_state()
+            payload, _, _ = self._run(td, "plan_roll_iteration", state=state)
             self.assertEqual(payload["recommended_next_machine_state"], "ROLL_ITERATION")
-            task_file = tasks_dir / "rollover-iter-3.md"
-            self.assertTrue(task_file.exists())
-            task_text = task_file.read_text(encoding="utf-8")
-            self.assertIn("metaopt-rollover-worker", task_text)
-            self.assertIn("Objective Context", task_text)
-            self.assertIn("Proposal Context", task_text)
-            self.assertIn("Analysis Context", task_text)
-            self.assertIn("Stop Progress Context", task_text)
-            self.assertIn("Expected JSON fields", task_text)
-            self.assertEqual(updated_state["machine_state"], "ROLL_ITERATION")
+            task_files = list((tmp / ".ml-metaopt" / "tasks").glob("rollover-iter-*.md"))
+            self.assertEqual(len(task_files), 1)
 
-    def test_gate_roll_iteration_continuing_clears_selected_experiment_and_advances_to_quiesce(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            payload, updated_state, _ = self._run(
-                Path(tempdir_str),
-                mode="gate_roll_iteration",
-                state=self._base_state(),
-                worker_results={
-                    "rollover-iter-3": {
-                        "filtered_proposals": [
-                            {
-                                "proposal_id": "market-forecast-v3-p17",
-                                "source_slot_id": "bg-1",
-                                "creation_iteration": 3,
-                                "created_at": "2026-04-06T09:00:00Z",
-                                "title": "Try stricter validation cutoff",
-                                "rationale": "Reduce temporal leakage margin",
-                                "expected_impact": {"direction": "improve", "magnitude": "small"},
-                                "target_area": "validation",
-                            }
-                        ],
-                        "merged_proposals": [],
-                        "needs_fresh_ideation": False,
-                        "summary": {"carried_over": 1, "discarded": 0, "merged": 0, "final_pool_size": 1},
-                    }
-                },
-            )
-
-            self.assertTrue(payload["continue_campaign"])
-            self.assertEqual(payload["recommended_next_machine_state"], "QUIESCE_SLOTS")
-            self.assertEqual(updated_state["machine_state"], "QUIESCE_SLOTS")
-            self.assertIsNone(updated_state["selected_experiment"])
-            self.assertEqual(updated_state["current_iteration"], 4)
-            self.assertEqual(len(updated_state["current_proposals"]), 1)
-            self.assertEqual(updated_state["next_proposals"], [])
-            self.assertIn("Iteration 3 Report", updated_state["last_iteration_report"])
-
-    def test_gate_roll_iteration_enriches_merged_proposals(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            payload, updated_state, _ = self._run(
-                Path(tempdir_str),
-                mode="gate_roll_iteration",
-                state=self._base_state(),
-                worker_results={
-                    "rollover-iter-3": {
-                        "filtered_proposals": [],
-                        "merged_proposals": [
-                            {
-                                "title": "Merge two validation ideas",
-                                "rationale": "Combine the strongest cutoff and split hygiene ideas",
-                                "expected_impact": {"direction": "improve", "magnitude": "medium"},
-                                "target_area": "validation",
-                            }
-                        ],
-                        "needs_fresh_ideation": False,
-                        "summary": {"carried_over": 0, "discarded": 1, "merged": 1, "final_pool_size": 1},
-                    }
-                },
-            )
-
-            merged = updated_state["current_proposals"][0]
-            self.assertEqual(payload["recommended_next_machine_state"], "QUIESCE_SLOTS")
-            self.assertEqual(merged["source_slot_id"], "rollover")
-            self.assertEqual(merged["creation_iteration"], 4)
-            self.assertTrue(merged["proposal_id"].startswith("market-forecast-v3-p"))
-
-    def test_gate_roll_iteration_stops_on_target_metric_without_incrementing_iteration(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            state = self._base_state()
-            state["baseline"]["aggregate"] = 0.1199
-            payload, updated_state, _ = self._run(
-                Path(tempdir_str),
-                mode="gate_roll_iteration",
-                state=state,
-                worker_results={
-                    "rollover-iter-3": {
-                        "filtered_proposals": [],
-                        "merged_proposals": [],
-                        "needs_fresh_ideation": False,
-                        "summary": {"carried_over": 0, "discarded": 1, "merged": 0, "final_pool_size": 0},
-                    }
-                },
-            )
-
-            self.assertFalse(payload["continue_campaign"])
-            self.assertEqual(payload["stop_reason"], "target_metric")
-            self.assertEqual(updated_state["current_iteration"], 3)
-            self.assertEqual(updated_state["machine_state"], "QUIESCE_SLOTS")
-
-    def test_quiesce_slots_routes_continue_and_appends_apply_results(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            state = self._base_state()
-            state["machine_state"] = "QUIESCE_SLOTS"
-            state["current_iteration"] = 4
-            state["selected_experiment"] = None
-            payload, updated_state, _ = self._run(
-                Path(tempdir_str),
-                mode="quiesce_slots",
-                state=state,
-                executor_events={
-                    "quiesce-slots-iter-4": {
-                        "continue_campaign": True,
-                        "stop_reason": "",
-                        "finished_slots": ["bg-1"],
-                        "canceled_slots": [{"slot_id": "bg-2", "reason": "drain timeout"}],
-                        "drain_duration_seconds": 60,
-                        "maintenance_apply_results": [
-                            {
-                                "patch_path": ".ml-metaopt/artifacts/patches/maintenance/bg-1.patch",
-                                "status": "applied",
-                                "error": None,
-                            }
-                        ],
-                        "summary": "drained one slot and canceled one slot",
-                    }
-                },
-            )
-
-            self.assertEqual(payload["recommended_next_machine_state"], "MAINTAIN_BACKGROUND_POOL")
-            self.assertEqual(updated_state["machine_state"], "MAINTAIN_BACKGROUND_POOL")
-            self.assertEqual(updated_state["status"], "RUNNING")
-            self.assertEqual(updated_state["active_slots"], [])
-            self.assertEqual(updated_state["local_changeset"]["apply_results"][-1]["patch_path"], ".ml-metaopt/artifacts/patches/maintenance/bg-1.patch")
-
-    def test_quiesce_slots_routes_stop_to_complete(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            state = self._base_state()
-            state["machine_state"] = "QUIESCE_SLOTS"
-            state["selected_experiment"] = None
-            payload, updated_state, _ = self._run(
-                Path(tempdir_str),
-                mode="quiesce_slots",
-                state=state,
-                executor_events={
-                    "quiesce-slots-iter-3": {
-                        "continue_campaign": False,
-                        "stop_reason": "target_metric",
-                        "finished_slots": [],
-                        "canceled_slots": [],
-                        "drain_duration_seconds": 5,
-                        "maintenance_apply_results": [],
-                        "summary": "all work drained cleanly",
-                    }
-                },
-            )
-
-            self.assertEqual(payload["recommended_next_machine_state"], "COMPLETE")
-            self.assertEqual(updated_state["status"], "COMPLETE")
-            self.assertEqual(updated_state["machine_state"], "COMPLETE")
-
-    def test_gate_roll_iteration_stops_on_max_wallclock_hours(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            state = self._base_state()
-            state["campaign_started_at"] = "2026-04-01T00:00:00Z"
-            load_handoff = self._write_load_handoff(Path(tempdir_str))
-            load_data = json.loads(load_handoff.read_text(encoding="utf-8"))
-            load_data["stop_conditions"]["max_wallclock_hours"] = 0.001
-            load_handoff.write_text(json.dumps(load_data), encoding="utf-8")
-
-            payload, updated_state, _ = self._run(
-                Path(tempdir_str),
-                mode="gate_roll_iteration",
-                state=state,
-                worker_results={
-                    "rollover-iter-3": {
-                        "filtered_proposals": [],
-                        "merged_proposals": [],
-                        "needs_fresh_ideation": False,
-                        "summary": {"carried_over": 0, "discarded": 0, "merged": 0, "final_pool_size": 0},
-                    }
-                },
-            )
-
-            self.assertFalse(payload["continue_campaign"])
-            self.assertEqual(payload["stop_reason"], "max_wallclock_hours")
-            self.assertEqual(updated_state["current_iteration"], 3)
-
-    def test_quiesce_complete_emits_terminal_cleanup_directives(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            state = self._base_state()
-            state["machine_state"] = "QUIESCE_SLOTS"
-            state["selected_experiment"] = None
-            payload, updated_state, _ = self._run(
-                Path(tempdir_str),
-                mode="quiesce_slots",
-                state=state,
-                executor_events={
-                    "quiesce-slots-iter-3": {
-                        "continue_campaign": False,
-                        "stop_reason": "target_metric",
-                        "finished_slots": [],
-                        "canceled_slots": [],
-                        "drain_duration_seconds": 5,
-                        "maintenance_apply_results": [],
-                        "summary": "all work drained cleanly",
-                    }
-                },
-            )
-
-            directives = payload["pre_launch_directives"]
-            self.assertEqual(
-                [directive["action"] for directive in directives],
-                ["remove_agents_hook", "delete_state_file", "emit_final_report"],
-            )
-            remove_hook = directives[0]
-            self.assertEqual(remove_hook["agents_path"], "AGENTS.md")
-            delete_state = directives[1]
-            self.assertEqual(delete_state["state_path"], ".ml-metaopt/state.json")
-            emit_final = directives[2]
-            self.assertEqual(emit_final["report_type"], "final")
-
-    def test_quiesce_blocked_protocol_preserves_state_and_removes_hook(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            state = self._base_state()
-            state["machine_state"] = "QUIESCE_SLOTS"
-            state["selected_experiment"] = None
-            payload, updated_state, _ = self._run(
-                Path(tempdir_str),
-                mode="quiesce_slots",
-                state=state,
-                executor_events={
-                    "quiesce-slots-iter-3": {
-                        "continue_campaign": False,
-                        "blocked_protocol": True,
-                        "stop_reason": "protocol_violation",
-                        "finished_slots": [],
-                        "canceled_slots": [],
-                        "drain_duration_seconds": 5,
-                        "maintenance_apply_results": [],
-                        "summary": "protocol cannot represent next step",
-                    }
-                },
-            )
-
-            self.assertEqual(updated_state["status"], "BLOCKED_PROTOCOL")
-            self.assertEqual(updated_state["machine_state"], "BLOCKED_PROTOCOL")
-            self.assertEqual(updated_state["active_slots"], [])
-            self.assertEqual(payload["recommended_next_machine_state"], "BLOCKED_PROTOCOL")
-            directives = payload["pre_launch_directives"]
-            self.assertEqual(
-                [directive["action"] for directive in directives],
-                ["remove_agents_hook"],
-            )
-            self.assertEqual(directives[0]["agents_path"], "AGENTS.md")
-
-    def test_quiesce_blocked_protocol_does_not_delete_state_or_emit_report(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            state = self._base_state()
-            state["machine_state"] = "QUIESCE_SLOTS"
-            state["selected_experiment"] = None
-            payload, _, _ = self._run(
-                Path(tempdir_str),
-                mode="quiesce_slots",
-                state=state,
-                executor_events={
-                    "quiesce-slots-iter-3": {
-                        "continue_campaign": False,
-                        "blocked_protocol": True,
-                        "stop_reason": "protocol_violation",
-                        "finished_slots": [],
-                        "canceled_slots": [],
-                        "drain_duration_seconds": 5,
-                        "maintenance_apply_results": [],
-                        "summary": "protocol cannot represent next step",
-                    }
-                },
-            )
-
-            directive_actions = [d["action"] for d in payload["pre_launch_directives"]]
-            self.assertNotIn("delete_state_file", directive_actions)
-            self.assertNotIn("emit_final_report", directive_actions)
-
-    # ── drift regression: protocol gap blocks instead of inventing ────
-
-    def test_regression_quiesce_blocked_preserves_state_for_human_review(self) -> None:
-        """Drift temptation: on BLOCKED_PROTOCOL, the iteration close control
-        might clear state, delete artefacts, or invent a recovery lane.
-        The correct behaviour is to preserve state intact (except status/machine_state)
-        so a human can inspect and resume."""
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            state = self._base_state()
-            state["machine_state"] = "QUIESCE_SLOTS"
-            state["selected_experiment"] = None
-            original_baseline = dict(state["baseline"])
-            original_completed = list(state["completed_experiments"])
-            original_learnings = list(state["key_learnings"])
-
-            payload, updated_state, _ = self._run(
-                Path(tempdir_str),
-                mode="quiesce_slots",
-                state=state,
-                executor_events={
-                    "quiesce-slots-iter-3": {
-                        "continue_campaign": False,
-                        "blocked_protocol": True,
-                        "stop_reason": "protocol_violation",
-                        "finished_slots": [],
-                        "canceled_slots": [],
-                        "drain_duration_seconds": 5,
-                        "maintenance_apply_results": [],
-                        "summary": "protocol cannot represent next step",
-                    }
-                },
-            )
-
-            self.assertEqual(updated_state["status"], "BLOCKED_PROTOCOL")
-            self.assertEqual(updated_state["machine_state"], "BLOCKED_PROTOCOL")
-            # Campaign progress must be preserved for human review
-            self.assertEqual(updated_state["baseline"], original_baseline,
-                "baseline must be preserved on BLOCKED_PROTOCOL")
-            self.assertEqual(updated_state["completed_experiments"], original_completed,
-                "completed_experiments must be preserved on BLOCKED_PROTOCOL")
-            self.assertEqual(updated_state["key_learnings"], original_learnings,
-                "key_learnings must be preserved on BLOCKED_PROTOCOL")
-            # No invented workers
-            self.assertEqual(payload["launch_requests"], [],
-                "BLOCKED_PROTOCOL must not launch recovery workers")
-
-    def test_regression_rollover_gap_blocks_not_invents_new_iteration(self) -> None:
-        """Drift temptation: gate_roll_iteration is called without a rollover
-        worker result.  The control agent must emit a runtime_error rather than
-        inventing a synthetic rollover or advancing the iteration counter."""
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            state = self._base_state()
-            original_iteration = state["current_iteration"]
-            # No rollover worker result provided
-            payload, updated_state, _ = self._run(
-                Path(tempdir_str),
-                mode="gate_roll_iteration",
-                state=state,
-            )
-
-            # Must be runtime_error — not a synthetic advance
-            self.assertEqual(payload["summary"], "rollover worker result missing")
-            self.assertIsNone(payload["recommended_next_machine_state"])
-            # Iteration must NOT have been incremented
-            self.assertEqual(updated_state["current_iteration"], original_iteration,
-                "iteration must not advance without rollover worker output")
-            # No launch requests for invented workers
-            self.assertEqual(payload["launch_requests"], [],
-                "runtime_error must not spawn workers")
-
-    def test_regression_malformed_rollover_result_blocks_protocol(self) -> None:
-        """Drift temptation: accept a half-written rollover payload and keep
-        going. The control agent must fail closed instead of treating missing
-        contract fields as empty defaults."""
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            state = self._base_state()
-            original_iteration = state["current_iteration"]
-            original_selected = state["selected_experiment"]["proposal_id"]
-            original_pool = list(state["next_proposals"])
-
-            payload, updated_state, _ = self._run(
-                Path(tempdir_str),
-                mode="gate_roll_iteration",
-                state=state,
-                worker_results={
-                    "rollover-iter-3": {
-                        "filtered_proposals": [],
-                        # missing merged_proposals + needs_fresh_ideation
-                        "summary": {"carried_over": 0, "discarded": 0, "merged": 0, "final_pool_size": 0},
-                    }
-                },
-            )
-
-            self.assertEqual(payload["recommended_next_machine_state"], "BLOCKED_PROTOCOL")
-            self.assertEqual(updated_state["status"], "BLOCKED_PROTOCOL")
-            self.assertEqual(updated_state["machine_state"], "BLOCKED_PROTOCOL")
-            self.assertEqual(updated_state["current_iteration"], original_iteration)
-            self.assertEqual(updated_state["selected_experiment"]["proposal_id"], original_selected)
-            self.assertEqual(updated_state["next_proposals"], original_pool)
-            self.assertEqual(payload["launch_requests"], [])
-
-    def test_regression_quiesce_requires_explicit_routing_event(self) -> None:
-        """Drift temptation: interpret an underspecified quiesce event as a
-        clean stop. The control agent must block rather than invent continue vs
-        complete semantics from missing fields."""
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            state = self._base_state()
-            state["machine_state"] = "QUIESCE_SLOTS"
-            state["selected_experiment"] = None
-            original_completed = list(state["completed_experiments"])
-            original_baseline = dict(state["baseline"])
-
-            payload, updated_state, _ = self._run(
-                Path(tempdir_str),
-                mode="quiesce_slots",
-                state=state,
-                executor_events={
-                    "quiesce-slots-iter-3": {
-                        # missing continue_campaign/blocked_protocol and drain metadata
-                        "summary": "executor wrote an incomplete quiesce event",
-                    }
-                },
-            )
-
-            self.assertEqual(payload["recommended_next_machine_state"], "BLOCKED_PROTOCOL")
-            self.assertEqual(updated_state["status"], "BLOCKED_PROTOCOL")
-            self.assertEqual(updated_state["machine_state"], "BLOCKED_PROTOCOL")
-            self.assertEqual(updated_state["completed_experiments"], original_completed)
-            self.assertEqual(updated_state["baseline"], original_baseline)
-            self.assertEqual(payload["launch_requests"], [])
-
-    def test_quiesce_continue_has_no_terminal_cleanup_directives(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            state = self._base_state()
-            state["machine_state"] = "QUIESCE_SLOTS"
-            state["current_iteration"] = 4
-            state["selected_experiment"] = None
-            payload, _, _ = self._run(
-                Path(tempdir_str),
-                mode="quiesce_slots",
-                state=state,
-                executor_events={
-                    "quiesce-slots-iter-4": {
-                        "continue_campaign": True,
-                        "stop_reason": "",
-                        "finished_slots": [],
-                        "canceled_slots": [],
-                        "drain_duration_seconds": 5,
-                        "maintenance_apply_results": [],
-                        "summary": "all work drained cleanly",
-                    }
-                },
-            )
-
-            self.assertEqual(payload["pre_launch_directives"], [])
-            self.assertEqual(payload["post_launch_directives"], [])
-
-    # ── directive authoritativeness tests ───────────────────────────────
-
-    def test_plan_roll_iteration_has_no_directives(self) -> None:
-        """PLAN_ROLL_ITERATION only launches a worker; no executor-side work."""
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            payload, _, _ = self._run(
-                Path(tempdir_str),
-                mode="plan_roll_iteration",
-                state=self._base_state(),
-            )
-            self.assertEqual(payload["pre_launch_directives"], [])
-            self.assertEqual(payload["post_launch_directives"], [])
-
-    def test_gate_roll_iteration_continuing_emits_pre_launch_directives(self) -> None:
-        """GATE_ROLL_ITERATION must tell the executor to emit_iteration_report, drain_slots, cancel_slots."""
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            payload, _, _ = self._run(
-                Path(tempdir_str),
-                mode="gate_roll_iteration",
-                state=self._base_state(),
-                worker_results={
-                    "rollover-iter-3": {
-                        "filtered_proposals": [],
-                        "merged_proposals": [],
-                        "needs_fresh_ideation": False,
-                        "summary": {"carried_over": 0, "discarded": 0, "merged": 0, "final_pool_size": 0},
-                    }
-                },
-            )
-
-            self.assertTrue(payload["continue_campaign"])
-            directives = payload["pre_launch_directives"]
-            self.assertEqual(
-                [directive["action"] for directive in directives],
-                ["emit_iteration_report", "drain_slots", "cancel_slots"],
-            )
-            report_dir = directives[0]
-            self.assertEqual(report_dir["report_type"], "iteration")
-            self.assertEqual(report_dir["iteration"], 3)
-            drain_dir = directives[1]
-            self.assertEqual(drain_dir["drain_window_seconds"], 60)
-            cancel_dir = directives[2]
-            self.assertEqual(cancel_dir["slot_ids"], ["bg-1", "bg-2"])
-            for d in directives:
-                self.assertIn("reason", d)
-                self.assertTrue(d["reason"])
-
-    def test_gate_roll_iteration_stopping_emits_pre_launch_directives(self) -> None:
-        """When stop_reason is set, gate still emits the quiesce directives."""
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            state = self._base_state()
-            state["baseline"]["aggregate"] = 0.1199
-            payload, _, _ = self._run(
-                Path(tempdir_str),
-                mode="gate_roll_iteration",
-                state=state,
-                worker_results={
-                    "rollover-iter-3": {
-                        "filtered_proposals": [],
-                        "merged_proposals": [],
-                        "needs_fresh_ideation": False,
-                        "summary": {"carried_over": 0, "discarded": 0, "merged": 0, "final_pool_size": 0},
-                    }
-                },
-            )
-
-            self.assertFalse(payload["continue_campaign"])
-            directives = payload["pre_launch_directives"]
-            actions = [d["action"] for d in directives]
-            self.assertIn("emit_iteration_report", actions)
-            self.assertIn("drain_slots", actions)
-            self.assertIn("cancel_slots", actions)
-
-    def test_gate_roll_iteration_emit_iteration_report_directive_carries_iteration(self) -> None:
-        """emit_iteration_report directive must reference the completed iteration."""
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            payload, _, _ = self._run(
-                Path(tempdir_str),
-                mode="gate_roll_iteration",
-                state=self._base_state(),
-                worker_results={
-                    "rollover-iter-3": {
-                        "filtered_proposals": [],
-                        "merged_proposals": [],
-                        "needs_fresh_ideation": False,
-                        "summary": {"carried_over": 0, "discarded": 0, "merged": 0, "final_pool_size": 0},
-                    }
-                },
-            )
-
-            report_dir = next(d for d in payload["pre_launch_directives"] if d["action"] == "emit_iteration_report")
-            self.assertEqual(report_dir["iteration"], 3)
-
-    def test_runtime_error_has_no_directives(self) -> None:
-        """Runtime errors are informational; they must not carry executor work."""
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            state = self._base_state()
-            state["selected_experiment"] = None
-            payload, _, _ = self._run(
-                Path(tempdir_str),
-                mode="plan_roll_iteration",
-                state=state,
-            )
-            self.assertEqual(payload["summary"], "analysis summary missing")
-            self.assertIsNone(payload["recommended_next_machine_state"])
-            self.assertEqual(payload["pre_launch_directives"], [])
-            self.assertEqual(payload["post_launch_directives"], [])
-
-    def _assert_envelope_keys(
-        self,
-        payload: dict,
-        *,
-        handoff_type: str,
-        control_agent: str = "metaopt-iteration-close-control",
-    ) -> None:
-        self.assertEqual(payload["handoff_type"], handoff_type)
-        self.assertEqual(payload["control_agent"], control_agent)
-        self.assertIsInstance(payload["launch_requests"], list)
-        self.assertTrue(payload["state_patch"] is None or isinstance(payload["state_patch"], dict))
-        self.assertIsInstance(payload.get("pre_launch_directives", []), list)
-        self.assertIsInstance(payload.get("post_launch_directives", []), list)
-        self.assertIn("summary", payload)
-        self.assertIn("warnings", payload)
-        self.assertIn("recommended_next_machine_state", payload)
-
-    def test_plan_roll_iteration_envelope_keys(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            payload, _, _ = self._run(
-                Path(tempdir_str),
-                mode="plan_roll_iteration",
-                state=self._base_state(),
-            )
-            self._assert_envelope_keys(payload, handoff_type="iteration_close.plan_roll_iteration")
-
-    def test_quiesce_slots_envelope_keys(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            state = self._base_state()
-            state["machine_state"] = "QUIESCE_SLOTS"
-            state["selected_experiment"] = None
-            payload, _, _ = self._run(
-                Path(tempdir_str),
-                mode="quiesce_slots",
-                state=state,
-                executor_events={
-                    "quiesce-slots-iter-3": {
-                        "continue_campaign": False,
-                        "stop_reason": "target_metric",
-                        "finished_slots": [],
-                        "canceled_slots": [],
-                        "drain_duration_seconds": 5,
-                        "maintenance_apply_results": [],
-                        "summary": "all work drained cleanly",
-                    }
-                },
-            )
-            self._assert_envelope_keys(payload, handoff_type="iteration_close.quiesce_slots")
-
-    def test_agent_profile_exists_and_declares_all_modes(self) -> None:
-        self.assertTrue(AGENT_PROFILE.exists(), f"missing {AGENT_PROFILE}")
-        content = AGENT_PROFILE.read_text(encoding="utf-8")
-        self.assertIn("name: metaopt-iteration-close-control", content)
-        self.assertIn("model: claude-opus-4.6", content)
-        self.assertIn("plan_roll_iteration", content)
-        self.assertIn("gate_roll_iteration", content)
-        self.assertIn("quiesce_slots", content)
-        self.assertIn("scripts/iteration_close_control_handoff.py", content)
-
-    def test_rollover_worker_profile_exists_and_is_leaf_only(self) -> None:
-        self.assertTrue(WORKER_PROFILE.exists(), f"missing {WORKER_PROFILE}")
-        content = WORKER_PROFILE.read_text(encoding="utf-8")
-        self.assertIn("name: metaopt-rollover-worker", content)
-        self.assertIn("model: claude-opus-4.6", content)
-        self.assertIn("Do not launch subagents.", content)
-        self.assertIn("Do not mutate `.ml-metaopt/state.json`.", content)
-
-    def test_plan_roll_iteration_emits_launch_request_for_rollover_worker(self) -> None:
-        """plan_roll_iteration must include the rollover worker in launch_requests.
-
-        The orchestrator dispatches workers mechanically via launch_requests per
-        the control-protocol contract.  Body fields such as worker_ref and task_file
-        are informational only.  Without a launch_requests entry the orchestrator
-        has no protocol-compliant signal to launch the rollover worker, so the gate
-        phase would have no worker output to consume.
-
-        Rollover uses inline dispatch (no slot entry), so the launch_requests entry
-        must not carry slot_class or mode.
-        """
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            payload, _, _ = self._run(
-                Path(tempdir_str),
-                mode="plan_roll_iteration",
-                state=self._base_state(),
-            )
-            self.assertGreater(
-                len(payload["launch_requests"]),
-                0,
-                "plan_roll_iteration must include rollover worker in launch_requests",
-            )
+    def test_plan_roll_iteration_emits_launch_request(self):
+        with tempfile.TemporaryDirectory() as td:
+            state = _v4_state()
+            payload, _, _ = self._run(td, "plan_roll_iteration", state=state)
+            self.assertEqual(len(payload["launch_requests"]), 1)
             lr = payload["launch_requests"][0]
-            self.assertEqual(lr["worker_ref"], "metaopt-rollover-worker")
+            self.assertEqual(lr["worker_ref"], "metaopt-analysis-worker")
             self.assertEqual(lr["model_class"], "strong_reasoner")
-            self.assertEqual(lr["preferred_model"], "claude-opus-4.6")
-            # Inline dispatch: no slot_class or mode
-            self.assertNotIn("slot_class", lr,
-                "rollover is inline dispatch and must not carry slot_class")
-            self.assertNotIn("mode", lr,
-                "rollover is inline dispatch and must not carry mode")
+
+    def test_plan_roll_iteration_envelope_keys(self):
+        with tempfile.TemporaryDirectory() as td:
+            state = _v4_state()
+            payload, _, _ = self._run(td, "plan_roll_iteration", state=state)
+            self.assertEqual(payload["handoff_type"], "iteration_close.plan_roll_iteration")
+            self.assertEqual(payload["control_agent"], "metaopt-iteration-close-control")
+            self.assertIn("state_patch", payload)
+            self.assertIn("summary", payload)
+            self.assertIn("warnings", payload)
+            self.assertEqual(payload["directives"], [])
+
+    # ── gate_roll_iteration ────────────────────────────────────────────
+
+    def test_gate_roll_iteration_continues_to_ideate(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            state = _v4_state()
+            rp = tmp / ".ml-metaopt" / "worker-results" / "rollover-iter-1.json"
+            rp.parent.mkdir(parents=True, exist_ok=True)
+            rp.write_text(json.dumps({
+                "filtered_proposals": [{"proposal_id": "test-campaign-p1", "title": "P1"}],
+                "merged_proposals": [],
+                "needs_fresh_ideation": True,
+                "summary": "filtered proposals carried forward",
+            }))
+            payload, updated, _ = self._run(td, "gate_roll_iteration", state=state)
+            self.assertEqual(payload["recommended_next_machine_state"], "IDEATE")
+            self.assertTrue(payload["continue_campaign"])
+            self.assertEqual(updated["current_iteration"], 2)
+            self.assertIsNone(updated["selected_sweep"])
+            self.assertIsNone(updated["current_sweep"])
+
+    def test_gate_roll_iteration_stops_on_max_iterations(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            state = _v4_state(current_iteration=20)
+            rp = tmp / ".ml-metaopt" / "worker-results" / "rollover-iter-20.json"
+            rp.parent.mkdir(parents=True, exist_ok=True)
+            rp.write_text(json.dumps({
+                "filtered_proposals": [],
+                "merged_proposals": [],
+                "needs_fresh_ideation": False,
+                "summary": "done",
+            }))
+            payload, updated, _ = self._run(td, "gate_roll_iteration", state=state)
+            self.assertEqual(payload["recommended_next_machine_state"], "COMPLETE")
+            self.assertFalse(payload["continue_campaign"])
+            self.assertEqual(payload["stop_reason"], "max_iterations")
+
+    def test_gate_roll_iteration_stops_on_no_improve(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            state = _v4_state(no_improve_iterations=5)
+            rp = tmp / ".ml-metaopt" / "worker-results" / "rollover-iter-1.json"
+            rp.parent.mkdir(parents=True, exist_ok=True)
+            rp.write_text(json.dumps({
+                "filtered_proposals": [],
+                "merged_proposals": [],
+                "needs_fresh_ideation": False,
+                "summary": "done",
+            }))
+            payload, _, _ = self._run(td, "gate_roll_iteration", state=state)
+            self.assertEqual(payload["recommended_next_machine_state"], "COMPLETE")
+            self.assertEqual(payload["stop_reason"], "max_no_improve_iterations")
+
+    def test_gate_roll_iteration_stops_on_target_metric(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            state = _v4_state(baseline={"metric": "val/accuracy", "value": 0.995, "wandb_run_id": "r", "wandb_run_url": "u", "established_at": "t"})
+            rp = tmp / ".ml-metaopt" / "worker-results" / "rollover-iter-1.json"
+            rp.parent.mkdir(parents=True, exist_ok=True)
+            rp.write_text(json.dumps({
+                "filtered_proposals": [],
+                "merged_proposals": [],
+                "needs_fresh_ideation": False,
+                "summary": "done",
+            }))
+            payload, updated, _ = self._run(td, "gate_roll_iteration", state=state)
+            self.assertEqual(payload["recommended_next_machine_state"], "COMPLETE")
+            self.assertEqual(payload["stop_reason"], "target_metric")
+            # Should NOT increment iteration when stopping
+            self.assertEqual(updated["current_iteration"], 1)
+
+    def test_gate_roll_iteration_enriches_merged_proposals(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            state = _v4_state()
+            rp = tmp / ".ml-metaopt" / "worker-results" / "rollover-iter-1.json"
+            rp.parent.mkdir(parents=True, exist_ok=True)
+            rp.write_text(json.dumps({
+                "filtered_proposals": [],
+                "merged_proposals": [{"title": "New merged P"}],
+                "needs_fresh_ideation": True,
+                "summary": "merged in",
+            }))
+            _, updated, _ = self._run(td, "gate_roll_iteration", state=state)
+            merged = [p for p in updated["current_proposals"] if p.get("source_slot_id") == "rollover"]
+            self.assertEqual(len(merged), 1)
+            self.assertTrue(merged[0]["proposal_id"].startswith("test-campaign-p"))
+
+    def test_gate_roll_iteration_missing_result_returns_error(self):
+        with tempfile.TemporaryDirectory() as td:
+            state = _v4_state()
+            payload, _, _ = self._run(td, "gate_roll_iteration", state=state)
+            self.assertIsNone(payload["recommended_next_machine_state"])
+            self.assertIn("missing", payload["summary"].lower())
+
+    def test_gate_roll_iteration_malformed_result_returns_error(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            state = _v4_state()
+            rp = tmp / ".ml-metaopt" / "worker-results" / "rollover-iter-1.json"
+            rp.parent.mkdir(parents=True, exist_ok=True)
+            rp.write_text(json.dumps({"some_field": "no required keys"}))
+            payload, _, _ = self._run(td, "gate_roll_iteration", state=state)
+            self.assertIsNone(payload["recommended_next_machine_state"])
+
+    def test_gate_roll_iteration_continuing_emits_iteration_report_directive(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            state = _v4_state()
+            rp = tmp / ".ml-metaopt" / "worker-results" / "rollover-iter-1.json"
+            rp.parent.mkdir(parents=True, exist_ok=True)
+            rp.write_text(json.dumps({
+                "filtered_proposals": [],
+                "merged_proposals": [],
+                "needs_fresh_ideation": True,
+                "summary": "ok",
+            }))
+            payload, _, _ = self._run(td, "gate_roll_iteration", state=state)
+            actions = [d["action"] for d in payload["directives"]]
+            self.assertIn("emit_iteration_report", actions)
+            self.assertNotIn("emit_final_report", actions)
+            self.assertNotIn("remove_agents_hook", actions)
+
+    def test_gate_roll_iteration_stopping_emits_terminal_directives(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            state = _v4_state(current_iteration=20)
+            rp = tmp / ".ml-metaopt" / "worker-results" / "rollover-iter-20.json"
+            rp.parent.mkdir(parents=True, exist_ok=True)
+            rp.write_text(json.dumps({
+                "filtered_proposals": [],
+                "merged_proposals": [],
+                "needs_fresh_ideation": False,
+                "summary": "done",
+            }))
+            payload, _, _ = self._run(td, "gate_roll_iteration", state=state)
+            actions = [d["action"] for d in payload["directives"]]
+            self.assertIn("emit_iteration_report", actions)
+            self.assertIn("emit_final_report", actions)
+            self.assertIn("remove_agents_hook", actions)
+
+    def test_gate_roll_iteration_preserves_sweep_cleared_state(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            state = _v4_state()
+            rp = tmp / ".ml-metaopt" / "worker-results" / "rollover-iter-1.json"
+            rp.parent.mkdir(parents=True, exist_ok=True)
+            rp.write_text(json.dumps({
+                "filtered_proposals": [],
+                "merged_proposals": [],
+                "needs_fresh_ideation": True,
+                "summary": "ok",
+            }))
+            _, updated, _ = self._run(td, "gate_roll_iteration", state=state)
+            self.assertIsNone(updated["selected_sweep"])
+            self.assertIsNone(updated["current_sweep"])
+
+    def test_gate_roll_iteration_clears_next_proposals(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            state = _v4_state()
+            rp = tmp / ".ml-metaopt" / "worker-results" / "rollover-iter-1.json"
+            rp.parent.mkdir(parents=True, exist_ok=True)
+            rp.write_text(json.dumps({
+                "filtered_proposals": [{"proposal_id": "test-campaign-p1", "title": "P1"}],
+                "merged_proposals": [],
+                "needs_fresh_ideation": True,
+                "summary": "ok",
+            }))
+            _, updated, _ = self._run(td, "gate_roll_iteration", state=state)
+            self.assertEqual(updated["next_proposals"], [])
+
+    def test_runtime_error_on_invalid_load_handoff(self):
+        with tempfile.TemporaryDirectory() as td:
+            bad = {"control_agent": "wrong"}
+            state = _v4_state()
+            payload, _, _ = self._run(td, "plan_roll_iteration", state=state, load_handoff=bad)
+            self.assertIsNone(payload["recommended_next_machine_state"])
+
+    def test_iteration_report_present_on_gate_success(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            state = _v4_state()
+            rp = tmp / ".ml-metaopt" / "worker-results" / "rollover-iter-1.json"
+            rp.parent.mkdir(parents=True, exist_ok=True)
+            rp.write_text(json.dumps({
+                "filtered_proposals": [],
+                "merged_proposals": [],
+                "needs_fresh_ideation": True,
+                "summary": "ok",
+            }))
+            payload, _, _ = self._run(td, "gate_roll_iteration", state=state)
+            self.assertIsNotNone(payload.get("iteration_report"))
+            self.assertIn("Iteration 1", payload["iteration_report"])
 
 
 if __name__ == "__main__":

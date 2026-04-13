@@ -1,1066 +1,295 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import json
 import subprocess
 import tempfile
 import unittest
+from copy import deepcopy
 from pathlib import Path
-
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "remote_execution_control_handoff.py"
-AGENT_PROFILE = ROOT / ".github" / "agents" / "metaopt-remote-execution-control.agent.md"
-ANALYSIS_WORKER_PROFILE = ROOT / ".github" / "agents" / "metaopt-analysis-worker.agent.md"
+
+
+def _v4_state(**overrides):
+    base = {
+        "version": 4,
+        "campaign_id": "test-campaign",
+        "campaign_identity_hash": "sha256:" + "a" * 64,
+        "status": "RUNNING",
+        "machine_state": "LOCAL_SANITY",
+        "current_iteration": 1,
+        "next_action": "run smoke test",
+        "objective_snapshot": {
+            "metric": "val/accuracy",
+            "direction": "maximize",
+            "improvement_threshold": 0.005,
+        },
+        "proposal_cycle": {"cycle_id": "iter-1-cycle-1", "current_pool_frozen": True},
+        "current_sweep": None,
+        "selected_sweep": {
+            "proposal_id": "prop-001",
+            "sweep_config": {
+                "method": "bayes",
+                "metric": {"name": "val/accuracy", "goal": "maximize"},
+                "parameters": {"lr": {"distribution": "log_uniform_values", "min": 1e-4, "max": 1e-2}},
+            },
+        },
+        "baseline": {"metric": "val/accuracy", "value": 0.923, "wandb_run_id": "run-001", "wandb_run_url": "https://wandb.ai/x", "established_at": "2026-04-13T08:00:00Z"},
+        "current_proposals": [],
+        "next_proposals": [],
+        "key_learnings": [],
+        "completed_iterations": [],
+        "no_improve_iterations": 0,
+        "campaign_started_at": "2026-04-13T07:00:00Z",
+    }
+    base.update(overrides)
+    return base
+
+
+def _v4_load_handoff():
+    return {
+        "schema_version": 1,
+        "handoff_type": "load_campaign.validate",
+        "control_agent": "metaopt-load-campaign",
+        "campaign_id": "test-campaign",
+        "campaign_valid": True,
+        "campaign_identity_hash": "sha256:" + "a" * 64,
+        "objective_snapshot": {"metric": "val/accuracy", "direction": "maximize", "improvement_threshold": 0.005},
+        "compute": {"provider": "vast_ai", "accelerator": "A100:1", "num_sweep_agents": 4, "idle_timeout_minutes": 15, "max_budget_usd": 10},
+        "wandb": {"entity": "my-entity", "project": "my-project"},
+        "project": {"repo": "git@github.com:org/repo.git", "smoke_test_command": "python train.py --smoke"},
+        "proposal_policy": {"current_target": 5},
+        "stop_conditions": {"max_iterations": 20, "target_metric": 0.99, "max_no_improve_iterations": 5},
+        "recommended_next_machine_state": "HYDRATE_STATE",
+        "state_patch": None,
+        "directives": [],
+        "warnings": [],
+        "summary": "ok",
+    }
 
 
 class RemoteExecutionControlAgentTests(unittest.TestCase):
-    def _today_batch_id(self, sequence: int = 2) -> str:
-        today = datetime.now(timezone.utc).strftime("%Y%m%d")
-        return f"batch-{today}-{sequence:04d}"
 
-    def _write_load_handoff(self, tempdir: Path, *, malformed: bool = False) -> Path:
-        handoff = tempdir / ".ml-metaopt" / "handoffs" / "load_campaign.latest.json"
-        handoff.parent.mkdir(parents=True, exist_ok=True)
-        if malformed:
-            handoff.write_text("{not-json", encoding="utf-8")
-            return handoff
-        payload = {
-            "schema_version": 1,
-            "handoff_type": "load_campaign.validate",
-            "control_agent": "metaopt-load-campaign",
-            "campaign_id": "market-forecast-v3",
-            "campaign_valid": True,
-            "campaign_identity_hash": "sha256:f50928628873800b25a5dfb41f2fd6c93acfc210424953f53a5005e09379fa4c",
-            "runtime_config_hash": "sha256:6f59ca57fb3da56f815d7fb03f8be7335fa9d14344c49154308e9e65990e9ac6",
-            "objective_snapshot": {
-                "metric": "rmse",
-                "direction": "minimize",
-                "aggregation": {"method": "weighted_mean", "weights": {"ds_main": 0.7, "ds_holdout": 0.3}},
-                "improvement_threshold": 0.0005,
-            },
-            "remote_queue": {
-                "backend": "ray-hetzner",
-                "retry_policy": {"max_attempts": 2},
-                "enqueue_command": "python3 /opt/ray-hetzner/metaopt/enqueue_batch.py --manifest",
-                "status_command": "python3 /opt/ray-hetzner/metaopt/get_batch_status.py --batch-id",
-                "results_command": "python3 /opt/ray-hetzner/metaopt/fetch_batch_results.py --batch-id",
-            },
-            "execution": {
-                "runner_type": "ray_queue_runner",
-                "entrypoint": "python3 /srv/metaopt/project/scripts/ray_runner.py",
-            },
-            "recommended_next_machine_state": "HYDRATE_STATE",
-            "state_patch": None,
-            "warnings": [],
-            "summary": "ok",
-        }
-        handoff.write_text(json.dumps(payload), encoding="utf-8")
-        return handoff
-
-    def _base_state(self) -> dict:
-        return {
-            "version": 3,
-            "campaign_id": "market-forecast-v3",
-            "campaign_identity_hash": "sha256:f50928628873800b25a5dfb41f2fd6c93acfc210424953f53a5005e09379fa4c",
-            "runtime_config_hash": "sha256:6f59ca57fb3da56f815d7fb03f8be7335fa9d14344c49154308e9e65990e9ac6",
-            "status": "RUNNING",
-            "machine_state": "ENQUEUE_REMOTE_BATCH",
-            "current_iteration": 1,
-            "next_action": "enqueue remote batch",
-            "objective_snapshot": {
-                "metric": "rmse",
-                "direction": "minimize",
-                "aggregation": {"method": "weighted_mean", "weights": {"ds_main": 0.7, "ds_holdout": 0.3}},
-                "improvement_threshold": 0.0005,
-            },
-            "proposal_cycle": {
-                "cycle_id": "iter-1-cycle-1",
-                "current_pool_frozen": True,
-                "ideation_rounds_by_slot": {"bg-1": 2, "bg-2": 2},
-                "shortfall_reason": "",
-            },
-            "active_slots": [],
-            "current_proposals": [],
-            "next_proposals": [],
-            "selected_experiment": {
-                "proposal_id": "market-forecast-v3-p1",
-                "proposal_snapshot": {
-                    "proposal_id": "market-forecast-v3-p1",
-                    "title": "Tighten rolling validation",
-                    "target_area": "validation",
-                },
-                "selection_rationale": "best fit",
-                "sanity_attempts": 1,
-                "design": {
-                    "proposal_id": "market-forecast-v3-p1",
-                    "target_area": "validation",
-                    "primary_intervention": "Reduce leakage risk in evaluation",
-                },
-                "diagnosis_history": [],
-                "analysis_summary": None,
-            },
-            "local_changeset": {
-                "integration_worktree": ".ml-metaopt/worktrees/iter-1-materialization",
-                "patch_artifacts": [
-                    {
-                        "producer_slot_id": "aux-1",
-                        "purpose": "candidate patch bundle",
-                        "patch_path": ".ml-metaopt/artifacts/patches/batch-20260405-0001/aux-1.patch",
-                        "target_worktree": ".ml-metaopt/worktrees/iter-1-materialization",
-                    }
-                ],
-                "apply_results": [
-                    {
-                        "patch_path": ".ml-metaopt/artifacts/patches/batch-20260405-0001/aux-1.patch",
-                        "status": "applied",
-                        "error": None,
-                    }
-                ],
-                "verification_notes": ["pytest passed"],
-                "code_artifact_uri": ".ml-metaopt/artifacts/code/batch-20260405-0001.tar.gz",
-                "data_manifest_uri": ".ml-metaopt/artifacts/data/batch-20260405-0001.json",
-            },
-            "remote_batches": [],
-            "baseline": {
-                "aggregate": 0.1284,
-                "by_dataset": {"ds_main": 0.1269, "ds_holdout": 0.1320},
-            },
-            "completed_experiments": [
-                {"batch_id": "batch-20260401-0001", "aggregate": 0.1292},
-            ],
-            "key_learnings": ["Leakage checks matter more than model capacity early in the campaign"],
-            "no_improve_iterations": 1,
-            "runtime_capabilities": {
-                "verified_at": "2026-04-06T00:00:00Z",
-                "available_skills": ["metaopt-analysis-worker", "metaopt-diagnosis-worker"],
-                "missing_skills": [],
-                "degraded_lanes": [],
-            },
-        }
-
-    def _run(
-        self,
-        tempdir: Path,
-        *,
-        mode: str,
-        state: dict,
-        malformed_handoff: bool = False,
-        executor_events: dict[str, dict] | None = None,
-        worker_results: dict[str, dict] | None = None,
-        queue_results: dict[str, dict] | None = None,
-    ) -> tuple[dict, dict, Path]:
-        load_handoff = self._write_load_handoff(tempdir, malformed=malformed_handoff)
-        state_path = tempdir / ".ml-metaopt" / "state.json"
+    def _run(self, tempdir, mode, *, state=None, load_handoff=None):
+        tmp = Path(tempdir)
+        state_path = tmp / ".ml-metaopt" / "state.json"
         state_path.parent.mkdir(parents=True, exist_ok=True)
-        state_path.write_text(json.dumps(state), encoding="utf-8")
-
-        tasks_dir = tempdir / ".ml-metaopt" / "tasks"
+        if state is not None:
+            state_path.write_text(json.dumps(state), encoding="utf-8")
+        load_h_path = tmp / ".ml-metaopt" / "handoffs" / "load_campaign.latest.json"
+        load_h_path.parent.mkdir(parents=True, exist_ok=True)
+        load_h_path.write_text(json.dumps(load_handoff or _v4_load_handoff()), encoding="utf-8")
+        tasks_dir = tmp / ".ml-metaopt" / "tasks"
         tasks_dir.mkdir(parents=True, exist_ok=True)
-        worker_results_dir = tempdir / ".ml-metaopt" / "worker-results"
+        worker_results_dir = tmp / ".ml-metaopt" / "worker-results"
         worker_results_dir.mkdir(parents=True, exist_ok=True)
-        executor_events_dir = tempdir / ".ml-metaopt" / "executor-events"
+        executor_events_dir = tmp / ".ml-metaopt" / "executor-events"
         executor_events_dir.mkdir(parents=True, exist_ok=True)
-        queue_results_dir = tempdir / ".ml-metaopt" / "queue-results"
-        queue_results_dir.mkdir(parents=True, exist_ok=True)
-        output_path = tempdir / ".ml-metaopt" / "handoffs" / f"{mode}.latest.json"
-        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path = tmp / "handoff.json"
+        cmd = [
+            "python3", str(SCRIPT),
+            "--mode", mode,
+            "--load-handoff", str(load_h_path),
+            "--state-path", str(state_path),
+            "--tasks-dir", str(tasks_dir),
+            "--worker-results-dir", str(worker_results_dir),
+            "--executor-events-dir", str(executor_events_dir),
+            "--output", str(output_path),
+            "--apply-state",
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(ROOT / "scripts"))
+        self.assertEqual(result.returncode, 0, msg=f"stdout:\n{result.stdout}\n\nstderr:\n{result.stderr}")
+        payload = json.loads(output_path.read_text()) if output_path.exists() else {}
+        updated_state = json.loads(state_path.read_text()) if state_path.exists() else {}
+        return payload, updated_state, result
 
-        for name, payload in (executor_events or {}).items():
-            (executor_events_dir / f"{name}.json").write_text(json.dumps(payload), encoding="utf-8")
-        for name, payload in (worker_results or {}).items():
-            (worker_results_dir / f"{name}.json").write_text(json.dumps(payload), encoding="utf-8")
-        for name, payload in (queue_results or {}).items():
-            (queue_results_dir / f"{name}.json").write_text(json.dumps(payload), encoding="utf-8")
+    # ── gate_local_sanity ──────────────────────────────────────────────
 
-        completed = subprocess.run(
-            [
-                "python3",
-                str(SCRIPT),
-                "--mode",
-                mode,
-                "--load-handoff",
-                str(load_handoff),
-                "--state-path",
-                str(state_path),
-                "--tasks-dir",
-                str(tasks_dir),
-                "--worker-results-dir",
-                str(worker_results_dir),
-                "--executor-events-dir",
-                str(executor_events_dir),
-                "--queue-results-dir",
-                str(queue_results_dir),
-                "--output",
-                str(output_path),
-                "--apply-state",
-            ],
-            cwd=ROOT,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        self.assertEqual(
-            completed.returncode,
-            0,
-            msg=f"stdout:\n{completed.stdout}\n\nstderr:\n{completed.stderr}",
-        )
-        payload = json.loads(output_path.read_text(encoding="utf-8"))
-        self.assertEqual(payload, json.loads(completed.stdout))
-        updated_state = json.loads(state_path.read_text(encoding="utf-8"))
-        return payload, updated_state, tasks_dir
+    def test_gate_local_sanity_passes_and_recommends_launch_sweep(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            state = _v4_state()
+            smoke = tmp / ".ml-metaopt" / "executor-events" / "smoke-test-iter-1.json"
+            smoke.parent.mkdir(parents=True, exist_ok=True)
+            smoke.write_text(json.dumps({"exit_code": 0, "timed_out": False}))
+            payload, updated, _ = self._run(td, "gate_local_sanity", state=state)
+            self.assertEqual(payload["recommended_next_machine_state"], "LAUNCH_SWEEP")
+            self.assertIn("passed", payload["summary"])
 
-    def test_plan_remote_batch_emits_manifest_and_batch_id(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            batch_id = self._today_batch_id()
-            payload, updated_state, _ = self._run(
-                Path(tempdir_str),
-                mode="plan_remote_batch",
-                state=self._base_state(),
-            )
+    def test_gate_local_sanity_fails_on_nonzero_exit_code(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            state = _v4_state()
+            smoke = tmp / ".ml-metaopt" / "executor-events" / "smoke-test-iter-1.json"
+            smoke.parent.mkdir(parents=True, exist_ok=True)
+            smoke.write_text(json.dumps({"exit_code": 1, "timed_out": False}))
+            payload, _, _ = self._run(td, "gate_local_sanity", state=state)
+            self.assertEqual(payload["recommended_next_machine_state"], "FAILED")
 
-            self.assertEqual(payload["handoff_type"], "remote_execution.plan_remote_batch")
-            self.assertEqual(payload["batch_id"], batch_id)
-            self.assertEqual(payload["recommended_next_machine_state"], "ENQUEUE_REMOTE_BATCH")
-            self.assertTrue(payload["manifest_path"].endswith(f"{batch_id}.json"))
-            self.assertEqual(updated_state["machine_state"], "ENQUEUE_REMOTE_BATCH")
+    def test_gate_local_sanity_fails_on_timeout(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            state = _v4_state()
+            smoke = tmp / ".ml-metaopt" / "executor-events" / "smoke-test-iter-1.json"
+            smoke.parent.mkdir(parents=True, exist_ok=True)
+            smoke.write_text(json.dumps({"exit_code": 0, "timed_out": True}))
+            payload, _, _ = self._run(td, "gate_local_sanity", state=state)
+            self.assertEqual(payload["recommended_next_machine_state"], "FAILED")
+            self.assertIn("timed out", payload["summary"])
 
-    def test_gate_remote_batch_records_enqueue_ack_and_advances_to_wait(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            batch_id = self._today_batch_id()
-            state = self._base_state()
-            payload, updated_state, _ = self._run(
-                Path(tempdir_str),
-                mode="gate_remote_batch",
-                state=state,
-                queue_results={
-                    f"enqueue-{batch_id}": {
-                        "batch_id": batch_id,
-                        "queue_ref": "ray-queue-123",
-                        "status": "queued",
-                    }
-                },
-            )
+    def test_gate_local_sanity_missing_smoke_result_returns_runtime_error(self):
+        with tempfile.TemporaryDirectory() as td:
+            state = _v4_state()
+            payload, _, _ = self._run(td, "gate_local_sanity", state=state)
+            self.assertIsNone(payload["recommended_next_machine_state"])
+            self.assertIn("missing", payload["summary"])
 
-            self.assertEqual(payload["recommended_next_machine_state"], "WAIT_FOR_REMOTE_BATCH")
-            self.assertEqual(updated_state["machine_state"], "WAIT_FOR_REMOTE_BATCH")
-            self.assertEqual(updated_state["remote_batches"][0]["batch_id"], batch_id)
-            self.assertEqual(updated_state["remote_batches"][0]["queue_ref"], "ray-queue-123")
+    # ── plan_launch ────────────────────────────────────────────────────
 
-    def test_gate_remote_batch_uses_pending_batch_id_from_state(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            state = self._base_state()
-            state["pending_remote_batch"] = {
-                "batch_id": "batch-20260406-0002",
-                "manifest_path": ".ml-metaopt/artifacts/manifests/batch-20260406-0002.json",
-            }
-            payload, updated_state, _ = self._run(
-                Path(tempdir_str),
-                mode="gate_remote_batch",
-                state=state,
-                queue_results={
-                    "enqueue-batch-20260406-0002": {
-                        "batch_id": "batch-20260406-0002",
-                        "queue_ref": "ray-queue-123",
-                        "status": "queued",
-                    }
-                },
-            )
+    def test_plan_launch_emits_launch_sweep_directive(self):
+        with tempfile.TemporaryDirectory() as td:
+            state = _v4_state()
+            payload, _, _ = self._run(td, "plan_launch", state=state)
+            self.assertEqual(payload["recommended_next_machine_state"], "LAUNCH_SWEEP")
+            self.assertEqual(len(payload["directives"]), 1)
+            d = payload["directives"][0]
+            self.assertEqual(d["action"], "launch_sweep")
+            self.assertIn("sweep_config", d)
+            self.assertIn("sky_task_spec", d)
+            self.assertEqual(d["sky_task_spec"]["provider"], "vast_ai")
 
-            self.assertEqual(payload["recommended_next_machine_state"], "WAIT_FOR_REMOTE_BATCH")
-            self.assertEqual(updated_state["machine_state"], "WAIT_FOR_REMOTE_BATCH")
-            self.assertEqual(updated_state["remote_batches"][0]["batch_id"], "batch-20260406-0002")
-            self.assertEqual(updated_state["remote_batches"][0]["queue_ref"], "ray-queue-123")
+    def test_plan_launch_missing_selected_sweep_returns_error(self):
+        with tempfile.TemporaryDirectory() as td:
+            state = _v4_state(selected_sweep=None)
+            payload, _, _ = self._run(td, "plan_launch", state=state)
+            self.assertIsNone(payload["recommended_next_machine_state"])
+            self.assertIn("missing", payload["summary"].lower())
 
-    def test_gate_remote_batch_requests_results_after_completion(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            state = self._base_state()
-            state["machine_state"] = "WAIT_FOR_REMOTE_BATCH"
-            state["remote_batches"] = [{"batch_id": "batch-20260406-0002", "queue_ref": "ray-queue-123", "status": "running"}]
-            payload, updated_state, _ = self._run(
-                Path(tempdir_str),
-                mode="gate_remote_batch",
-                state=state,
-                queue_results={
-                    "status-batch-20260406-0002": {
-                        "batch_id": "batch-20260406-0002",
-                        "status": "completed",
-                        "timestamps": {"queued_at": "2026-04-06T10:00:00Z", "started_at": "2026-04-06T10:02:00Z"},
-                    }
-                },
-            )
+    # ── poll_sweep ─────────────────────────────────────────────────────
 
-            self.assertEqual(payload["recommended_next_machine_state"], "WAIT_FOR_REMOTE_BATCH")
-            self.assertEqual(updated_state["machine_state"], "WAIT_FOR_REMOTE_BATCH")
-            self.assertEqual(updated_state["remote_batches"][0]["status"], "completed")
+    def test_poll_sweep_missing_current_sweep_returns_error(self):
+        with tempfile.TemporaryDirectory() as td:
+            state = _v4_state(current_sweep=None)
+            payload, _, _ = self._run(td, "poll_sweep", state=state)
+            self.assertIsNone(payload["recommended_next_machine_state"])
 
-    def test_gate_remote_batch_emits_analysis_task_when_results_are_ready(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            state = self._base_state()
-            state["machine_state"] = "WAIT_FOR_REMOTE_BATCH"
-            state["remote_batches"] = [{"batch_id": "batch-20260406-0002", "queue_ref": "ray-queue-123", "status": "completed"}]
-            payload, _, tasks_dir = self._run(
-                Path(tempdir_str),
-                mode="gate_remote_batch",
-                state=state,
-                queue_results={
-                    "status-batch-20260406-0002": {
-                        "batch_id": "batch-20260406-0002",
-                        "status": "completed",
-                        "timestamps": {"queued_at": "2026-04-06T10:00:00Z", "started_at": "2026-04-06T10:02:00Z"},
-                    },
-                    "results-batch-20260406-0002": {
-                        "batch_id": "batch-20260406-0002",
-                        "status": "completed",
-                        "best_aggregate_result": {"metric": "rmse", "value": 0.1213},
-                        "per_dataset": {"ds_main": 0.1208, "ds_holdout": 0.1225},
-                        "artifact_locations": {
-                            "code": "s3://metaopt/artifacts/code/batch-20260406-0002.tar.gz",
-                            "data_manifest": "s3://metaopt/artifacts/data/batch-20260406-0002.json",
-                            "metrics": "s3://metaopt/results/batch-20260406-0002/metrics.json",
-                        },
-                        "logs_location": "s3://metaopt/results/batch-20260406-0002/logs.txt",
-                    },
-                },
-            )
+    def test_poll_sweep_no_poll_file_emits_directive(self):
+        with tempfile.TemporaryDirectory() as td:
+            state = _v4_state(current_sweep={"sweep_id": "sw-1", "sky_job_ids": ["job-1"]})
+            payload, _, _ = self._run(td, "poll_sweep", state=state)
+            self.assertIsNone(payload["recommended_next_machine_state"])
+            self.assertEqual(len(payload["directives"]), 1)
+            self.assertEqual(payload["directives"][0]["action"], "poll_sweep")
 
-            self.assertEqual(payload["recommended_next_machine_state"], "WAIT_FOR_REMOTE_BATCH")
-            self.assertEqual(payload["worker_kind"], "custom_agent")
-            self.assertEqual(payload["worker_ref"], "metaopt-analysis-worker")
-            task_file = tasks_dir / "remote-analysis-batch-20260406-0002.md"
-            self.assertTrue(task_file.exists())
-            task_text = task_file.read_text(encoding="utf-8")
-            self.assertIn("metaopt-analysis-worker", task_text)
-            self.assertIn("Objective Context", task_text)
-            self.assertIn("Baseline Context", task_text)
-            self.assertIn("Result Context", task_text)
-            self.assertIn("Expected JSON fields", task_text)
+    def test_poll_sweep_running_returns_null(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            state = _v4_state(current_sweep={"sweep_id": "sw-1", "sky_job_ids": ["job-1"]})
+            poll = tmp / ".ml-metaopt" / "executor-events" / "poll-sweep-iter-1.json"
+            poll.parent.mkdir(parents=True, exist_ok=True)
+            poll.write_text(json.dumps({"sweep_status": "running"}))
+            payload, _, _ = self._run(td, "poll_sweep", state=state)
+            self.assertIsNone(payload["recommended_next_machine_state"])
+            self.assertIn("still running", payload["summary"])
 
-    def test_analyze_remote_results_updates_state_and_advances(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            state = self._base_state()
-            state["machine_state"] = "WAIT_FOR_REMOTE_BATCH"
-            state["remote_batches"] = [{"batch_id": "batch-20260406-0002", "queue_ref": "ray-queue-123", "status": "completed"}]
-            payload, updated_state, _ = self._run(
-                Path(tempdir_str),
-                mode="analyze_remote_results",
-                state=state,
-                queue_results={
-                    "results-batch-20260406-0002": {
-                        "batch_id": "batch-20260406-0002",
-                        "status": "completed",
-                        "best_aggregate_result": {"metric": "rmse", "value": 0.1213},
-                        "per_dataset": {"ds_main": 0.1208, "ds_holdout": 0.1225},
-                        "artifact_locations": {
-                            "code": "s3://metaopt/artifacts/code/batch-20260406-0002.tar.gz",
-                            "data_manifest": "s3://metaopt/artifacts/data/batch-20260406-0002.json",
-                            "metrics": "s3://metaopt/results/batch-20260406-0002/metrics.json",
-                        },
-                        "logs_location": "s3://metaopt/results/batch-20260406-0002/logs.txt",
-                    }
-                },
-                worker_results={
-                    "remote-analysis-batch-20260406-0002": {
-                        "judgment": "improvement",
-                        "new_aggregate": 0.1213,
-                        "delta": -0.0071,
-                        "learnings": ["Rolling validation tightened the aggregate metric."],
-                        "invalidations": [{"proposal_id": "market-forecast-v3-p9", "reason": "validation issue addressed"}],
-                        "carry_over_candidates": [{"title": "Try stricter cutoff", "rationale": "Follow-on validation refinement"}],
-                    }
-                },
-            )
+    def test_poll_sweep_completed_advances_to_analyze(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            state = _v4_state(current_sweep={"sweep_id": "sw-1", "sky_job_ids": ["job-1"]})
+            poll = tmp / ".ml-metaopt" / "executor-events" / "poll-sweep-iter-1.json"
+            poll.parent.mkdir(parents=True, exist_ok=True)
+            poll.write_text(json.dumps({"sweep_status": "completed"}))
+            payload, _, _ = self._run(td, "poll_sweep", state=state)
+            self.assertEqual(payload["recommended_next_machine_state"], "ANALYZE")
 
-            self.assertEqual(payload["handoff_type"], "remote_execution.analyze_remote_results")
-            self.assertEqual(payload["recommended_next_machine_state"], "ROLL_ITERATION")
-            self.assertEqual(updated_state["machine_state"], "ROLL_ITERATION")
-            self.assertEqual(updated_state["baseline"]["aggregate"], 0.1213)
-            self.assertEqual(updated_state["no_improve_iterations"], 0)
-            self.assertEqual(updated_state["completed_experiments"][-1]["batch_id"], "batch-20260406-0002")
-            self.assertEqual(updated_state["selected_experiment"]["analysis_summary"]["judgment"], "improvement")
-
-    def test_gate_remote_batch_routes_remote_config_failure_to_blocked(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            state = self._base_state()
-            state["machine_state"] = "WAIT_FOR_REMOTE_BATCH"
-            state["remote_batches"] = [{"batch_id": "batch-20260406-0002", "queue_ref": "ray-queue-123", "status": "running"}]
-            payload, updated_state, _ = self._run(
-                Path(tempdir_str),
-                mode="gate_remote_batch",
-                state=state,
-                queue_results={
-                    "status-batch-20260406-0002": {
-                        "batch_id": "batch-20260406-0002",
-                        "status": "failed",
-                        "timestamps": {"queued_at": "2026-04-06T10:00:00Z"},
-                        "classification": "config_error",
-                        "message": "dataset path invalid",
-                        "returncode": 2,
-                    }
-                },
-                worker_results={
-                    "remote-diagnosis-batch-20260406-0002": {
-                        "root_cause": "dataset path invalid on cluster",
-                        "classification": "config_error",
-                        "fix_recommendation": {
-                            "action": "adjust_config",
-                            "code_guidance": None,
-                            "config_guidance": "repair dataset path in campaign config",
-                        },
-                        "learnings": ["Remote execution is blocked by invalid dataset path configuration."],
-                    }
-                },
-            )
-
+    def test_poll_sweep_budget_exceeded_blocks(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            state = _v4_state(current_sweep={"sweep_id": "sw-1", "sky_job_ids": ["job-1"]})
+            poll = tmp / ".ml-metaopt" / "executor-events" / "poll-sweep-iter-1.json"
+            poll.parent.mkdir(parents=True, exist_ok=True)
+            poll.write_text(json.dumps({"sweep_status": "budget_exceeded"}))
+            payload, _, _ = self._run(td, "poll_sweep", state=state)
             self.assertEqual(payload["recommended_next_machine_state"], "BLOCKED_CONFIG")
-            self.assertEqual(updated_state["status"], "BLOCKED_CONFIG")
-            self.assertEqual(updated_state["machine_state"], "BLOCKED_CONFIG")
 
-    def test_gate_remote_batch_emits_diagnosis_task_for_failed_batch(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            state = self._base_state()
-            state["machine_state"] = "WAIT_FOR_REMOTE_BATCH"
-            state["remote_batches"] = [{"batch_id": "batch-20260406-0002", "queue_ref": "ray-queue-123", "status": "running"}]
-            payload, updated_state, tasks_dir = self._run(
-                Path(tempdir_str),
-                mode="gate_remote_batch",
-                state=state,
-                queue_results={
-                    "status-batch-20260406-0002": {
-                        "batch_id": "batch-20260406-0002",
-                        "status": "failed",
-                        "timestamps": {"queued_at": "2026-04-06T10:00:00Z"},
-                        "classification": "infra_error",
-                        "message": "worker exited on cluster",
-                        "returncode": 137,
-                    }
-                },
-            )
+    def test_poll_sweep_failed_goes_to_failed(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            state = _v4_state(current_sweep={"sweep_id": "sw-1", "sky_job_ids": ["job-1"]})
+            poll = tmp / ".ml-metaopt" / "executor-events" / "poll-sweep-iter-1.json"
+            poll.parent.mkdir(parents=True, exist_ok=True)
+            poll.write_text(json.dumps({"sweep_status": "failed"}))
+            payload, _, _ = self._run(td, "poll_sweep", state=state)
+            self.assertEqual(payload["recommended_next_machine_state"], "FAILED")
 
-            self.assertEqual(payload["recommended_next_machine_state"], "WAIT_FOR_REMOTE_BATCH")
-            self.assertEqual(payload["worker_kind"], "custom_agent")
-            self.assertEqual(payload["worker_ref"], "metaopt-diagnosis-worker")
-            self.assertEqual(updated_state["machine_state"], "WAIT_FOR_REMOTE_BATCH")
-            task_text = (tasks_dir / "remote-diagnosis-batch-20260406-0002.md").read_text(encoding="utf-8")
-            self.assertIn("metaopt-diagnosis-worker", task_text)
-            self.assertIn("Failure Classification", task_text)
-            self.assertIn("Result File", task_text)
+    # ── analyze ────────────────────────────────────────────────────────
 
-    def test_malformed_load_handoff_returns_runtime_error_without_state_overwrite(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            state = self._base_state()
-            original = json.dumps(state, sort_keys=True)
-            payload, updated_state, _ = self._run(
-                Path(tempdir_str),
-                mode="plan_remote_batch",
-                state=state,
-                malformed_handoff=True,
-            )
-
-            self.assertEqual(payload["summary"], "load handoff unreadable")
-            self.assertEqual(payload["recovery_action"], "repair or replace load_campaign.latest.json")
-            self.assertIsNone(payload["recommended_next_machine_state"])
-            self.assertEqual(json.dumps(updated_state, sort_keys=True), original)
-
-    def _assert_envelope_keys(
-        self,
-        payload: dict,
-        *,
-        handoff_type: str,
-        control_agent: str = "metaopt-remote-execution-control",
-    ) -> None:
-        self.assertEqual(payload["handoff_type"], handoff_type)
-        self.assertEqual(payload["control_agent"], control_agent)
-        self.assertIsInstance(payload["launch_requests"], list)
-        self.assertTrue(payload["state_patch"] is None or isinstance(payload["state_patch"], dict))
-        self.assertIsInstance(payload.get("pre_launch_directives", []), list)
-        self.assertIsInstance(payload.get("post_launch_directives", []), list)
-        self.assertIn("summary", payload)
-        self.assertIn("warnings", payload)
-        self.assertIn("recommended_next_machine_state", payload)
-
-    def test_plan_remote_batch_envelope_keys(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            payload, _, _ = self._run(
-                Path(tempdir_str),
-                mode="plan_remote_batch",
-                state=self._base_state(),
-            )
-            self._assert_envelope_keys(payload, handoff_type="remote_execution.plan_remote_batch")
-
-    def test_analyze_remote_results_envelope_keys(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            state = self._base_state()
-            state["machine_state"] = "WAIT_FOR_REMOTE_BATCH"
-            state["remote_batches"] = [{"batch_id": "batch-20260406-0002", "queue_ref": "ray-queue-123", "status": "completed"}]
-            payload, _, _ = self._run(
-                Path(tempdir_str),
-                mode="analyze_remote_results",
-                state=state,
-                queue_results={
-                    "results-batch-20260406-0002": {
-                        "batch_id": "batch-20260406-0002",
-                        "status": "completed",
-                        "per_dataset": {"ds_main": 0.1208, "ds_holdout": 0.1225},
-                    }
-                },
-                worker_results={
-                    "remote-analysis-batch-20260406-0002": {
-                        "judgment": "improvement",
-                        "new_aggregate": 0.1213,
-                        "delta": -0.0071,
-                        "learnings": [],
-                    }
-                },
-            )
-            self._assert_envelope_keys(payload, handoff_type="remote_execution.analyze_remote_results")
-
-    def test_analyze_remote_results_emits_state_patch_for_analysis_and_baseline(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            state = self._base_state()
-            state["machine_state"] = "WAIT_FOR_REMOTE_BATCH"
-            state["remote_batches"] = [{"batch_id": "batch-20260406-0002", "queue_ref": "ray-queue-123", "status": "completed"}]
-            payload, _, _ = self._run(
-                Path(tempdir_str),
-                mode="analyze_remote_results",
-                state=state,
-                queue_results={
-                    "results-batch-20260406-0002": {
-                        "batch_id": "batch-20260406-0002",
-                        "status": "completed",
-                        "per_dataset": {"ds_main": 0.1208, "ds_holdout": 0.1225},
-                    }
-                },
-                worker_results={
-                    "remote-analysis-batch-20260406-0002": {
-                        "judgment": "improvement",
-                        "new_aggregate": 0.1213,
-                        "delta": -0.0071,
-                        "learnings": ["Rolling validation tightened the aggregate metric."],
-                        "invalidations": [],
-                        "carry_over_candidates": [],
-                    }
-                },
-            )
-
-            self.assertIn("baseline", payload["state_patch"])
-            self.assertIn("completed_experiments", payload["state_patch"])
-            self.assertIn("selected_experiment", payload["state_patch"])
-            self.assertEqual(payload["state_patch"]["next_action"], "roll iteration")
-
-    def test_runtime_error_envelope_keys(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            payload, _, _ = self._run(
-                Path(tempdir_str),
-                mode="plan_remote_batch",
-                state=self._base_state(),
-                malformed_handoff=True,
-            )
-            self._assert_envelope_keys(payload, handoff_type="remote_execution.plan_remote_batch")
-            self.assertEqual(payload["summary"], "load handoff unreadable")
-
-    # ── directive-driven execution tests ─────────────────────────────
-
-    def test_plan_remote_batch_emits_write_manifest_and_enqueue_directives(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            batch_id = self._today_batch_id()
-            payload, _, _ = self._run(
-                Path(tempdir_str),
-                mode="plan_remote_batch",
-                state=self._base_state(),
-            )
-
-            directives = payload["pre_launch_directives"]
-            actions = [d["action"] for d in directives]
-            self.assertEqual(actions, ["write_manifest", "queue_op"])
-
-            write_d = directives[0]
-            self.assertEqual(write_d["manifest_path"], payload["manifest_path"])
-            self.assertEqual(write_d["batch_id"], batch_id)
-            self.assertIn("reason", write_d)
-
-            enqueue_d = directives[1]
-            self.assertEqual(enqueue_d["operation"], "enqueue")
-            self.assertIsInstance(enqueue_d["result_file"], str)
-            self.assertTrue(enqueue_d["result_file"])
-            self.assertIn("reason", enqueue_d)
-
-    def test_gate_remote_batch_enqueue_ack_emits_poll_directive(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            batch_id = self._today_batch_id()
-            state = self._base_state()
-            payload, _, _ = self._run(
-                Path(tempdir_str),
-                mode="gate_remote_batch",
-                state=state,
-                queue_results={
-                    f"enqueue-{batch_id}": {
-                        "batch_id": batch_id,
-                        "queue_ref": "ray-queue-123",
-                        "status": "queued",
-                    }
-                },
-            )
-
-            directives = payload["pre_launch_directives"]
-            self.assertEqual(len(directives), 1)
-            self.assertEqual(directives[0]["action"], "queue_op")
-            self.assertEqual(directives[0]["operation"], "status")
-            self.assertEqual(directives[0]["batch_id"], batch_id)
-
-    def test_gate_remote_batch_still_running_emits_poll_directive(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            state = self._base_state()
-            state["machine_state"] = "WAIT_FOR_REMOTE_BATCH"
-            state["remote_batches"] = [{"batch_id": "batch-20260406-0002", "queue_ref": "ray-queue-123", "status": "running"}]
-            payload, _, _ = self._run(
-                Path(tempdir_str),
-                mode="gate_remote_batch",
-                state=state,
-                queue_results={
-                    "status-batch-20260406-0002": {
-                        "batch_id": "batch-20260406-0002",
-                        "status": "running",
-                    }
-                },
-            )
-
-            directives = payload["pre_launch_directives"]
-            self.assertEqual(len(directives), 1)
-            self.assertEqual(directives[0]["action"], "queue_op")
-            self.assertEqual(directives[0]["operation"], "status")
-            self.assertEqual(directives[0]["batch_id"], "batch-20260406-0002")
-
-    def test_gate_remote_batch_completed_no_results_emits_fetch_directive(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            state = self._base_state()
-            state["machine_state"] = "WAIT_FOR_REMOTE_BATCH"
-            state["remote_batches"] = [{"batch_id": "batch-20260406-0002", "queue_ref": "ray-queue-123", "status": "running"}]
-            payload, _, _ = self._run(
-                Path(tempdir_str),
-                mode="gate_remote_batch",
-                state=state,
-                queue_results={
-                    "status-batch-20260406-0002": {
-                        "batch_id": "batch-20260406-0002",
-                        "status": "completed",
-                        "timestamps": {"queued_at": "2026-04-06T10:00:00Z", "started_at": "2026-04-06T10:02:00Z"},
-                    }
-                },
-            )
-
-            directives = payload["pre_launch_directives"]
-            self.assertEqual(len(directives), 1)
-            self.assertEqual(directives[0]["action"], "queue_op")
-            self.assertEqual(directives[0]["operation"], "results")
-            self.assertEqual(directives[0]["batch_id"], "batch-20260406-0002")
-
-    def test_gate_remote_batch_analysis_launch_has_no_directives(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            state = self._base_state()
-            state["machine_state"] = "WAIT_FOR_REMOTE_BATCH"
-            state["remote_batches"] = [{"batch_id": "batch-20260406-0002", "queue_ref": "ray-queue-123", "status": "completed"}]
-            payload, _, _ = self._run(
-                Path(tempdir_str),
-                mode="gate_remote_batch",
-                state=state,
-                queue_results={
-                    "status-batch-20260406-0002": {
-                        "batch_id": "batch-20260406-0002",
-                        "status": "completed",
-                        "timestamps": {"queued_at": "2026-04-06T10:00:00Z", "started_at": "2026-04-06T10:02:00Z"},
-                    },
-                    "results-batch-20260406-0002": {
-                        "batch_id": "batch-20260406-0002",
-                        "status": "completed",
-                        "best_aggregate_result": {"metric": "rmse", "value": 0.1213},
-                        "per_dataset": {"ds_main": 0.1208, "ds_holdout": 0.1225},
-                        "artifact_locations": {},
-                        "logs_location": "s3://logs",
-                    },
-                },
-            )
-
-            self.assertEqual(payload["worker_ref"], "metaopt-analysis-worker")
-            self.assertEqual(payload.get("pre_launch_directives", []), [])
-            self.assertEqual(payload.get("post_launch_directives", []), [])
-
-    def test_gate_remote_batch_diagnosis_launch_has_no_directives(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            state = self._base_state()
-            state["machine_state"] = "WAIT_FOR_REMOTE_BATCH"
-            state["remote_batches"] = [{"batch_id": "batch-20260406-0002", "queue_ref": "ray-queue-123", "status": "running"}]
-            payload, _, _ = self._run(
-                Path(tempdir_str),
-                mode="gate_remote_batch",
-                state=state,
-                queue_results={
-                    "status-batch-20260406-0002": {
-                        "batch_id": "batch-20260406-0002",
-                        "status": "failed",
-                        "timestamps": {"queued_at": "2026-04-06T10:00:00Z"},
-                        "classification": "infra_error",
-                        "message": "worker exited",
-                        "returncode": 137,
-                    }
-                },
-            )
-
-            self.assertEqual(payload["worker_ref"], "metaopt-diagnosis-worker")
-            self.assertEqual(payload.get("pre_launch_directives", []), [])
-            self.assertEqual(payload.get("post_launch_directives", []), [])
-
-    def test_plan_remote_batch_stability_emits_same_directives(self) -> None:
-        """Re-running plan on a state with pending_remote_batch uses same batch_id in directives."""
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            state = self._base_state()
-            state["pending_remote_batch"] = {
-                "batch_id": "batch-20260406-0002",
-                "manifest_path": ".ml-metaopt/artifacts/manifests/batch-20260406-0002.json",
-            }
-            payload, _, _ = self._run(
-                Path(tempdir_str),
-                mode="plan_remote_batch",
-                state=state,
-            )
-
-            directives = payload["pre_launch_directives"]
-            self.assertEqual(directives[0]["batch_id"], "batch-20260406-0002")
-            self.assertEqual(directives[1]["batch_id"], "batch-20260406-0002")
-
-    # ── Task 4: fail-closed guardrails ────────────────────────────────
-
-    def test_analyze_blocks_to_blocked_protocol_without_analysis_artifact(self) -> None:
-        """Semantic result judgment must block with BLOCKED_PROTOCOL if analysis artifact is missing."""
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            state = self._base_state()
-            state["machine_state"] = "ANALYZE_RESULTS"
-            state["remote_batches"] = [{"batch_id": "batch-20260406-0002", "queue_ref": "ray-queue-123", "status": "completed"}]
-            # Provide remote results but NO analysis artifact
-            payload, updated_state, _ = self._run(
-                Path(tempdir_str),
-                mode="analyze_remote_results",
-                state=state,
-                queue_results={
-                    "results-batch-20260406-0002": {
-                        "batch_id": "batch-20260406-0002",
-                        "status": "completed",
-                        "per_dataset": {"ds_main": 0.1208, "ds_holdout": 0.1225},
-                    }
-                },
-            )
-
-            self.assertEqual(payload["recommended_next_machine_state"], "BLOCKED_PROTOCOL")
-            self.assertEqual(updated_state["status"], "BLOCKED_PROTOCOL")
-            self.assertEqual(updated_state["machine_state"], "BLOCKED_PROTOCOL")
-
-    # ── drift regression: baseline immutability without analysis ──────
-
-    def test_regression_baseline_immutable_without_analysis_worker_output(self) -> None:
-        """Drift temptation: raw remote results show a big improvement, tempting
-        the orchestrator to update baseline without the analysis worker's semantic
-        judgment.  Baseline, completed_experiments, and no_improve_iterations
-        must all remain unchanged when the analysis artifact is missing."""
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            state = self._base_state()
-            state["machine_state"] = "ANALYZE_RESULTS"
-            state["remote_batches"] = [{"batch_id": "batch-20260406-0002", "queue_ref": "ray-queue-123", "status": "completed"}]
-            original_baseline = dict(state["baseline"])
-            original_completed = list(state["completed_experiments"])
-            original_no_improve = state["no_improve_iterations"]
-
-            # Very favourable raw results — would be tempting to use directly
-            payload, updated_state, _ = self._run(
-                Path(tempdir_str),
-                mode="analyze_remote_results",
-                state=state,
-                queue_results={
-                    "results-batch-20260406-0002": {
-                        "batch_id": "batch-20260406-0002",
-                        "status": "completed",
-                        "best_aggregate_result": {"metric": "rmse", "value": 0.0500},
-                        "per_dataset": {"ds_main": 0.0480, "ds_holdout": 0.0550},
-                        "artifact_locations": {},
-                        "logs_location": "s3://logs",
-                    }
-                },
-                # NO analysis worker result → must block
-            )
-
-            self.assertEqual(updated_state["machine_state"], "BLOCKED_PROTOCOL")
-            self.assertEqual(updated_state["baseline"]["aggregate"], original_baseline["aggregate"],
-                "baseline.aggregate must not change without analysis worker output")
-            self.assertEqual(updated_state["baseline"]["by_dataset"], original_baseline["by_dataset"],
-                "baseline.by_dataset must not change without analysis worker output")
-            self.assertEqual(updated_state["completed_experiments"], original_completed,
-                "completed_experiments must not grow without analysis worker output")
-            self.assertEqual(updated_state["no_improve_iterations"], original_no_improve,
-                "no_improve_iterations must not change without analysis worker output")
-            # No launch requests for invented workers
-            self.assertEqual(payload["launch_requests"], [])
-
-    def test_gate_analysis_launch_request_has_preferred_model_claude_opus(self) -> None:
-        """Analysis worker launch must be a legal auxiliary launch with preferred_model."""
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            state = self._base_state()
-            state["machine_state"] = "WAIT_FOR_REMOTE_BATCH"
-            state["remote_batches"] = [{"batch_id": "batch-20260406-0002", "queue_ref": "ray-queue-123", "status": "completed"}]
-            payload, _, _ = self._run(
-                Path(tempdir_str),
-                mode="gate_remote_batch",
-                state=state,
-                queue_results={
-                    "status-batch-20260406-0002": {
-                        "batch_id": "batch-20260406-0002",
-                        "status": "completed",
-                        "timestamps": {"queued_at": "2026-04-06T10:00:00Z"},
-                    },
-                    "results-batch-20260406-0002": {
-                        "batch_id": "batch-20260406-0002",
-                        "status": "completed",
-                        "per_dataset": {"ds_main": 0.1208, "ds_holdout": 0.1225},
-                        "artifact_locations": {},
-                        "logs_location": "s3://logs",
-                    },
-                },
-            )
-
-            self.assertGreater(len(payload["launch_requests"]), 0)
+    def test_analyze_missing_result_emits_analysis_worker_launch(self):
+        with tempfile.TemporaryDirectory() as td:
+            state = _v4_state()
+            payload, _, _ = self._run(td, "analyze", state=state)
+            self.assertEqual(payload["recommended_next_machine_state"], "ANALYZE")
+            self.assertEqual(len(payload["launch_requests"]), 1)
             lr = payload["launch_requests"][0]
-            self.assertEqual(lr["slot_class"], "auxiliary")
-            self.assertEqual(lr["mode"], "analysis")
             self.assertEqual(lr["worker_ref"], "metaopt-analysis-worker")
-            self.assertEqual(lr["model_class"], "strong_reasoner")
-            self.assertEqual(lr["preferred_model"], "claude-opus-4.6")
 
-    def test_gate_remote_diagnosis_launch_request_has_preferred_model_claude_opus(self) -> None:
-        """Remote diagnosis worker launch must be a legal auxiliary launch with preferred_model."""
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            state = self._base_state()
-            state["machine_state"] = "WAIT_FOR_REMOTE_BATCH"
-            state["remote_batches"] = [{"batch_id": "batch-20260406-0002", "queue_ref": "ray-queue-123", "status": "running"}]
-            payload, _, _ = self._run(
-                Path(tempdir_str),
-                mode="gate_remote_batch",
-                state=state,
-                queue_results={
-                    "status-batch-20260406-0002": {
-                        "batch_id": "batch-20260406-0002",
-                        "status": "failed",
-                        "timestamps": {"queued_at": "2026-04-06T10:00:00Z"},
-                        "classification": "infra_error",
-                        "message": "worker exited",
-                        "returncode": 137,
-                    }
-                },
-            )
+    def test_analyze_improved_updates_baseline_and_rolls(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            state = _v4_state()
+            analysis = tmp / ".ml-metaopt" / "worker-results" / "sweep-analysis-iter-1.json"
+            analysis.parent.mkdir(parents=True, exist_ok=True)
+            analysis.write_text(json.dumps({
+                "improved": True,
+                "best_metric_value": 0.95,
+                "best_run_id": "run-best",
+                "best_run_url": "https://wandb.ai/best",
+                "learnings": ["use higher lr"],
+            }))
+            payload, updated, _ = self._run(td, "analyze", state=state)
+            self.assertEqual(payload["recommended_next_machine_state"], "ROLL_ITERATION")
+            self.assertEqual(updated["baseline"]["value"], 0.95)
+            self.assertEqual(updated["no_improve_iterations"], 0)
+            self.assertEqual(len(updated["completed_iterations"]), 1)
+            self.assertIn("use higher lr", updated["key_learnings"])
 
-            self.assertGreater(len(payload["launch_requests"]), 0)
-            lr = payload["launch_requests"][0]
-            self.assertEqual(lr["slot_class"], "auxiliary")
-            self.assertEqual(lr["mode"], "diagnosis")
-            self.assertEqual(lr["worker_ref"], "metaopt-diagnosis-worker")
-            self.assertEqual(lr["model_class"], "strong_reasoner")
-            self.assertEqual(lr["preferred_model"], "claude-opus-4.6")
+    def test_analyze_not_improved_increments_no_improve(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            state = _v4_state()
+            analysis = tmp / ".ml-metaopt" / "worker-results" / "sweep-analysis-iter-1.json"
+            analysis.parent.mkdir(parents=True, exist_ok=True)
+            analysis.write_text(json.dumps({"improved": False, "best_metric_value": 0.91}))
+            payload, updated, _ = self._run(td, "analyze", state=state)
+            self.assertEqual(payload["recommended_next_machine_state"], "ROLL_ITERATION")
+            self.assertEqual(updated["no_improve_iterations"], 1)
+            # Baseline unchanged
+            self.assertEqual(updated["baseline"]["value"], 0.923)
 
-    def test_queue_only_no_raw_cluster_directives(self) -> None:
-        """Remote execution must remain queue-only; all directives must use allowed actions."""
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            batch_id = self._today_batch_id()
-            # Plan phase
-            plan_payload, _, _ = self._run(
-                Path(tempdir_str),
-                mode="plan_remote_batch",
-                state=self._base_state(),
-            )
-            blocked_actions = {"ssh_command", "raw_ssh", "shell_exec", "kubectl_exec"}
-            for d in plan_payload.get("pre_launch_directives", []) + plan_payload.get("post_launch_directives", []):
-                self.assertNotIn(d["action"], blocked_actions,
-                                 f"raw-cluster action {d['action']!r} found in plan_remote_batch")
+    # ── envelope ───────────────────────────────────────────────────────
 
-    # ── fail-closed: malformed analysis/results payloads ────────────
+    def test_envelope_keys_present(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            state = _v4_state()
+            smoke = tmp / ".ml-metaopt" / "executor-events" / "smoke-test-iter-1.json"
+            smoke.parent.mkdir(parents=True, exist_ok=True)
+            smoke.write_text(json.dumps({"exit_code": 0, "timed_out": False}))
+            payload, _, _ = self._run(td, "gate_local_sanity", state=state)
+            self.assertIn("handoff_type", payload)
+            self.assertIn("control_agent", payload)
+            self.assertEqual(payload["control_agent"], "metaopt-remote-execution-control")
+            self.assertIn("state_patch", payload)
+            self.assertIn("summary", payload)
+            self.assertIn("warnings", payload)
 
-    def test_analyze_missing_new_aggregate_returns_runtime_error(self) -> None:
-        """analysis_payload without new_aggregate must fail closed, not KeyError."""
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            state = self._base_state()
-            state["machine_state"] = "WAIT_FOR_REMOTE_BATCH"
-            state["remote_batches"] = [{"batch_id": "batch-20260406-0002", "queue_ref": "ray-queue-123", "status": "completed"}]
-            original_baseline = dict(state["baseline"])
-            payload, updated_state, _ = self._run(
-                Path(tempdir_str),
-                mode="analyze_remote_results",
-                state=state,
-                queue_results={
-                    "results-batch-20260406-0002": {
-                        "batch_id": "batch-20260406-0002",
-                        "status": "completed",
-                        "per_dataset": {"ds_main": 0.1208, "ds_holdout": 0.1225},
-                    }
-                },
-                worker_results={
-                    "remote-analysis-batch-20260406-0002": {
-                        "judgment": "improvement",
-                        "delta": -0.0071,
-                        "learnings": [],
-                    }
-                },
-            )
+    def test_runtime_error_on_invalid_load_handoff(self):
+        with tempfile.TemporaryDirectory() as td:
+            bad_load = {"control_agent": "wrong", "campaign_valid": False}
+            state = _v4_state()
+            payload, _, _ = self._run(td, "gate_local_sanity", state=state, load_handoff=bad_load)
             self.assertIsNone(payload["recommended_next_machine_state"])
-            self.assertIn("new_aggregate", payload["summary"])
-            self.assertEqual(updated_state["baseline"]["aggregate"], original_baseline["aggregate"],
-                "baseline must not change when analysis payload is malformed")
-
-    def test_analyze_missing_delta_on_improvement_returns_runtime_error(self) -> None:
-        """analysis_payload with improvement judgment but no delta must fail closed."""
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            state = self._base_state()
-            state["machine_state"] = "WAIT_FOR_REMOTE_BATCH"
-            state["remote_batches"] = [{"batch_id": "batch-20260406-0002", "queue_ref": "ray-queue-123", "status": "completed"}]
-            payload, updated_state, _ = self._run(
-                Path(tempdir_str),
-                mode="analyze_remote_results",
-                state=state,
-                queue_results={
-                    "results-batch-20260406-0002": {
-                        "batch_id": "batch-20260406-0002",
-                        "status": "completed",
-                        "per_dataset": {"ds_main": 0.1208, "ds_holdout": 0.1225},
-                    }
-                },
-                worker_results={
-                    "remote-analysis-batch-20260406-0002": {
-                        "judgment": "improvement",
-                        "new_aggregate": 0.1213,
-                        "learnings": [],
-                    }
-                },
-            )
-            self.assertIsNone(payload["recommended_next_machine_state"])
-            self.assertIn("delta", payload["summary"])
-
-    def test_analyze_missing_per_dataset_on_improvement_returns_runtime_error(self) -> None:
-        """results_payload without per_dataset when baseline update would occur must fail closed."""
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            state = self._base_state()
-            state["machine_state"] = "WAIT_FOR_REMOTE_BATCH"
-            state["remote_batches"] = [{"batch_id": "batch-20260406-0002", "queue_ref": "ray-queue-123", "status": "completed"}]
-            original_baseline = dict(state["baseline"])
-            payload, updated_state, _ = self._run(
-                Path(tempdir_str),
-                mode="analyze_remote_results",
-                state=state,
-                queue_results={
-                    "results-batch-20260406-0002": {
-                        "batch_id": "batch-20260406-0002",
-                        "status": "completed",
-                    }
-                },
-                worker_results={
-                    "remote-analysis-batch-20260406-0002": {
-                        "judgment": "improvement",
-                        "new_aggregate": 0.1213,
-                        "delta": -0.0071,
-                        "learnings": [],
-                    }
-                },
-            )
-            self.assertIsNone(payload["recommended_next_machine_state"])
-            self.assertIn("per_dataset", payload["summary"])
-            self.assertEqual(updated_state["baseline"]["by_dataset"], original_baseline["by_dataset"],
-                "baseline.by_dataset must not change when per_dataset is missing")
-
-    def test_gate_remote_batch_analysis_task_includes_batch_results_payload(self) -> None:
-        """Analysis task file must embed the actual batch results payload, not just a reference."""
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            state = self._base_state()
-            state["machine_state"] = "WAIT_FOR_REMOTE_BATCH"
-            state["remote_batches"] = [{"batch_id": "batch-20260406-0002", "queue_ref": "ray-queue-123", "status": "completed"}]
-            results_payload = {
-                "batch_id": "batch-20260406-0002",
-                "status": "completed",
-                "best_aggregate_result": {"metric": "rmse", "value": 0.1213},
-                "per_dataset": {"ds_main": 0.1208, "ds_holdout": 0.1225},
-                "artifact_locations": {
-                    "code": "s3://metaopt/artifacts/code/batch-20260406-0002.tar.gz",
-                    "data_manifest": "s3://metaopt/artifacts/data/batch-20260406-0002.json",
-                    "metrics": "s3://metaopt/results/batch-20260406-0002/metrics.json",
-                },
-                "logs_location": "s3://metaopt/results/batch-20260406-0002/logs.txt",
-            }
-            _, _, tasks_dir = self._run(
-                Path(tempdir_str),
-                mode="gate_remote_batch",
-                state=state,
-                queue_results={
-                    "status-batch-20260406-0002": {
-                        "batch_id": "batch-20260406-0002",
-                        "status": "completed",
-                        "timestamps": {"queued_at": "2026-04-06T10:00:00Z"},
-                    },
-                    "results-batch-20260406-0002": results_payload,
-                },
-            )
-
-            task_text = (tasks_dir / "remote-analysis-batch-20260406-0002.md").read_text(encoding="utf-8")
-            self.assertIn("Batch Results", task_text)
-            self.assertIn("0.1208", task_text, "per_dataset ds_main value must appear in task file")
-            self.assertIn("0.1213", task_text, "best_aggregate_result value must appear in task file")
-            self.assertIn("s3://metaopt/results/batch-20260406-0002/metrics.json", task_text,
-                          "artifact location must appear in task file")
-
-    def test_gate_remote_batch_diagnosis_task_includes_experiment_context(self) -> None:
-        """Remote diagnosis task file must include experiment design, changeset, sanity config, and attempt number."""
-        with tempfile.TemporaryDirectory() as tempdir_str:
-            state = self._base_state()
-            state["machine_state"] = "WAIT_FOR_REMOTE_BATCH"
-            state["remote_batches"] = [{"batch_id": "batch-20260406-0002", "queue_ref": "ray-queue-123", "status": "running"}]
-            state["selected_experiment"]["sanity_attempts"] = 1
-            state["selected_experiment"]["design"] = {
-                "proposal_id": "market-forecast-v3-p1",
-                "primary_intervention": "Reduce leakage risk in evaluation",
-                "target_area": "validation",
-            }
-            _, _, tasks_dir = self._run(
-                Path(tempdir_str),
-                mode="gate_remote_batch",
-                state=state,
-                queue_results={
-                    "status-batch-20260406-0002": {
-                        "batch_id": "batch-20260406-0002",
-                        "status": "failed",
-                        "timestamps": {"queued_at": "2026-04-06T10:00:00Z"},
-                        "classification": "infra_error",
-                        "message": "worker exited on cluster",
-                        "returncode": 137,
-                    }
-                },
-            )
-
-            task_text = (tasks_dir / "remote-diagnosis-batch-20260406-0002.md").read_text(encoding="utf-8")
-            self.assertIn("Experiment Context", task_text)
-            self.assertIn("primary_intervention", task_text, "experiment design must appear in task file")
-            self.assertIn("iter-1-materialization", task_text, "local changeset must appear in task file")
-            self.assertIn("Attempt Number", task_text)
-            self.assertIn("1", task_text, "sanity_attempts value must appear")
-
-    def test_agent_profile_exists_and_declares_all_modes(self) -> None:
-        self.assertTrue(AGENT_PROFILE.exists(), f"missing {AGENT_PROFILE}")
-        content = AGENT_PROFILE.read_text(encoding="utf-8")
-        self.assertIn("name: metaopt-remote-execution-control", content)
-        self.assertIn("model: claude-opus-4.6", content)
-        self.assertIn("plan_remote_batch", content)
-        self.assertIn("gate_remote_batch", content)
-        self.assertIn("analyze_remote_results", content)
-        self.assertIn("scripts/remote_execution_control_handoff.py", content)
-
-    def test_analysis_worker_profile_exists_and_is_leaf_only(self) -> None:
-        self.assertTrue(ANALYSIS_WORKER_PROFILE.exists(), f"missing {ANALYSIS_WORKER_PROFILE}")
-        content = ANALYSIS_WORKER_PROFILE.read_text(encoding="utf-8")
-        self.assertIn("name: metaopt-analysis-worker", content)
-        self.assertIn("model: claude-opus-4.6", content)
-        self.assertIn("Do not launch subagents.", content)
-        self.assertIn("Do not mutate `.ml-metaopt/state.json`.", content)
 
 
 if __name__ == "__main__":

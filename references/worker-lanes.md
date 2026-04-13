@@ -26,26 +26,31 @@ No `strong_coder` class — v4 does not produce code patches.
 - Campaign objective (`metric`, `direction`, `improvement_threshold`)
 - Prior `key_learnings`
 - `baseline` (if established)
-- `completed_iterations` history
 - Current and next proposal pool context (to avoid duplication)
-- Rejected proposals and their reasons (if any)
+- `proposal_policy` (current_target and related settings)
 
 **Output:** A JSON file written to `.ml-metaopt/worker-results/<worker-id>.json`:
 
 ```json
 {
+  "slot_id": "bg-1",
+  "mode": "ideation",
   "status": "completed",
-  "proposal_id": "prop-001",
-  "rationale": "Exploring residual connections based on prior learning that deeper networks overfit",
-  "sweep_config": {
-    "method": "bayes",
-    "metric": { "name": "val/accuracy", "goal": "maximize" },
-    "parameters": {
-      "lr": { "distribution": "log_uniform_values", "min": 1e-4, "max": 1e-2 },
-      "use_residual": { "values": [true, false] },
-      "num_layers": { "values": [2, 3, 4] }
+  "summary": "Exploring residual connections based on prior learning that deeper networks overfit.",
+  "proposal_candidates": [
+    {
+      "rationale": "Prior learnings show deeper networks overfit. This proposal explores residual connections and constrained lr to mitigate.",
+      "sweep_config": {
+        "method": "bayes",
+        "metric": { "name": "val/accuracy", "goal": "maximize" },
+        "parameters": {
+          "lr": { "distribution": "log_uniform_values", "min": 1e-4, "max": 1e-2 },
+          "use_residual": { "values": [true, false] },
+          "num_layers": { "values": [2, 3, 4] }
+        }
+      }
     }
-  }
+  ]
 }
 ```
 

@@ -93,6 +93,7 @@ Use ONLY these distribution types for parameters:
 
 ```json
 {
+  "status": "completed",
   "proposal_id": "prop-7e2a4f19",
   "rationale": "Prior learnings show lr > 0.005 causes instability. This proposal narrows lr to [1e-4, 5e-3] using log-uniform and explores batch sizes 32-256, which were not covered in iteration 1.",
   "sweep_config": {
@@ -109,6 +110,7 @@ Use ONLY these distribution types for parameters:
 
 ## Rules
 
+- `"status": "completed"` MUST be present exactly as shown — the gate checks this exact string and silently drops results that omit it.
 - `sweep_config.metric.name` MUST exactly match `objective.metric` from the task file. Do not rename, abbreviate, or alias it.
 - `sweep_config.metric.goal` MUST be `"maximize"` if `objective.direction == "maximize"`, and `"minimize"` if `objective.direction == "minimize"`.
 - Do NOT produce code patches, file diffs, code changes, or any code-modification content. You produce ONLY a sweep config.

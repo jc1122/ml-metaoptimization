@@ -20,8 +20,9 @@ The orchestrator invokes you with the current `machine_state` as context. You ha
 ## Inputs
 
 1. **State**: `.ml-metaopt/state.json` — read `machine_state`, `current_iteration`, `selected_sweep`, `current_sweep`, `baseline`, `key_learnings`, `objective_snapshot`
-2. **Campaign**: `ml_metaopt_campaign.yaml` — read `project.smoke_test_command`, `compute.*`, `wandb.*`
-3. **Worker results**: `.ml-metaopt/worker-results/` — results written by `skypilot-wandb-worker` or `metaopt-analysis-worker`
+2. **Load handoff**: `.ml-metaopt/handoffs/metaopt-load-campaign-LOAD_CAMPAIGN.json` — read `project.smoke_test_command`, `compute.*`, `wandb.*` (do NOT re-read `ml_metaopt_campaign.yaml` directly; the load handoff is the canonical denormalized source)
+3. **Executor events**: `.ml-metaopt/executor-events/` — directive results written by `skypilot-wandb-worker`
+4. **Worker results**: `.ml-metaopt/worker-results/` — results written by `metaopt-analysis-worker`
 
 ## Phase: LOCAL_SANITY
 
@@ -37,7 +38,7 @@ The orchestrator invokes you with the current `machine_state` as context. You ha
     "type": "run_smoke_test",
     "payload": {
       "command": "<project.smoke_test_command from campaign YAML>",
-      "result_file": ".ml-metaopt/worker-results/smoke-iter-<current_iteration>.json"
+      "result_file": ".ml-metaopt/executor-events/smoke-test-iter-<current_iteration>.json"
     }
   }
 }
@@ -45,7 +46,7 @@ The orchestrator invokes you with the current `machine_state` as context. You ha
 
 The orchestrator dispatches `skypilot-wandb-worker` with this directive. `recommended_next_machine_state: null` tells the orchestrator to re-invoke this agent after the directive completes.
 
-**Step 2 (re-invocation):** Read the result file `.ml-metaopt/worker-results/smoke-iter-<N>.json`:
+**Step 2 (re-invocation):** Read the result file `.ml-metaopt/executor-events/smoke-test-iter-<N>.json`:
 
 - If `exit_code == 0` and `timed_out == false` → smoke test passed:
   ```json
@@ -146,7 +147,7 @@ The orchestrator dispatches `skypilot-wandb-worker` with this directive. `recomm
       "idle_timeout_minutes": "<compute.idle_timeout_minutes>",
       "max_budget_usd": "<compute.max_budget_usd>",
       "cumulative_spend_usd_so_far": "<state.current_sweep.cumulative_spend_usd>",
-      "result_file": ".ml-metaopt/worker-results/poll-sweep-iter-<current_iteration>-<ISO8601-compact>.json"
+      "result_file": ".ml-metaopt/executor-events/poll-sweep-iter-<current_iteration>.json"
     }
   }
 }
@@ -266,7 +267,7 @@ Write a task file to `.ml-metaopt/tasks/analysis-iter-<current_iteration>.json`:
 ```json
 {
   "task_type": "analysis",
-  "result_file": ".ml-metaopt/worker-results/analysis-iter-<current_iteration>.json",
+  "result_file": ".ml-metaopt/worker-results/sweep-analysis-iter-<current_iteration>.json",
   "best_run_id": "<state.current_sweep.best_run_id>",
   "sweep_url": "<state.current_sweep.sweep_url>",
   "wandb_entity": "<wandb.entity>",
@@ -292,7 +293,7 @@ Emit handoff:
 }
 ```
 
-**Step 2 (re-invocation after analysis completes):** Read `.ml-metaopt/worker-results/analysis-iter-<N>.json`:
+**Step 2 (re-invocation after analysis completes):** Read `.ml-metaopt/worker-results/sweep-analysis-iter-<N>.json`:
 
 If the result contains an `error` field → transition to FAILED:
 ```json

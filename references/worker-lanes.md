@@ -34,6 +34,7 @@ No `strong_coder` class — v4 does not produce code patches.
 
 ```json
 {
+  "status": "completed",
   "proposal_id": "prop-001",
   "rationale": "Exploring residual connections based on prior learning that deeper networks overfit",
   "sweep_config": {

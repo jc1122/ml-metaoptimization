@@ -111,15 +111,22 @@ class IterationCloseControlAgentTests(unittest.TestCase):
             self.assertEqual(payload["recommended_next_machine_state"], "ROLL_ITERATION")
             task_files = list((tmp / ".ml-metaopt" / "tasks").glob("rollover-iter-*.md"))
             self.assertEqual(len(task_files), 1)
+            self.assertIn("inline", task_files[0].read_text())
 
-    def test_plan_roll_iteration_emits_launch_request(self):
+    def test_plan_roll_iteration_inline_no_launch_request(self):
+        """Rollover is computed inline — no worker dispatch, rollover result file written directly."""
         with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
             state = _v4_state()
             payload, _, _ = self._run(td, "plan_roll_iteration", state=state)
-            self.assertEqual(len(payload["launch_requests"]), 1)
-            lr = payload["launch_requests"][0]
-            self.assertEqual(lr["worker_ref"], "metaopt-analysis-worker")
-            self.assertEqual(lr["model_class"], "strong_reasoner")
+            self.assertEqual(payload["launch_requests"], [])
+            result_files = list((tmp / ".ml-metaopt" / "worker-results").glob("rollover-iter-*.json"))
+            self.assertEqual(len(result_files), 1)
+            rollover = json.loads(result_files[0].read_text())
+            self.assertIn("filtered_proposals", rollover)
+            self.assertIn("merged_proposals", rollover)
+            self.assertIn("needs_fresh_ideation", rollover)
+            self.assertIn("summary", rollover)
 
     def test_plan_roll_iteration_envelope_keys(self):
         with tempfile.TemporaryDirectory() as td:

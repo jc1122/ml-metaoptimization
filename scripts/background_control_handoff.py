@@ -139,7 +139,7 @@ def _plan_background_work(
         persist_state_handoff(state_path, previous_state, state, payload, control_agent=_CONTROL_AGENT)
         return emit_handoff(output_path, payload, handoff_type=_PLAN_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
 
-    needed = max(1, proposal_policy["current_target"] - len(state["current_proposals"]))
+    needed = max(0, proposal_policy["current_target"] - len(state["current_proposals"]))
     launch_requests: list[dict[str, Any]] = []
 
     for i in range(needed):

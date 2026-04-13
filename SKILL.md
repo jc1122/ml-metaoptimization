@@ -143,6 +143,12 @@ These files define the contract surface. Follow persisted state and canonical ha
 
 Use `ml_metaopt_campaign.example.yaml` as the canonical campaign example.
 
+## Context Window Guide
+
+**Read `references/context-window-guide.md` before your first turn.** It tells you exactly which files to read, when, and which to skip to stay within your context budget.
+
+TL;DR: read 4 reference docs once at startup, then only `state.json` (machine_state field) + the latest handoff JSON per turn. Never re-read the campaign YAML (it is denormalized into the LOAD_CAMPAIGN handoff). Estimated budget: ~10 000 tokens for a 5-iteration campaign.
+
 ## Orchestrator Actions
 
 The orchestrator may:

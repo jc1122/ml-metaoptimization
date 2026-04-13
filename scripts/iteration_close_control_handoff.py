@@ -136,36 +136,78 @@ def _iteration_report(iteration: int, state: dict[str, Any]) -> str:
     return f"=== Iteration {iteration} Report ===\nMetric: {metric}\nBaseline value: {baseline.get('value')}\nNo-improve iterations: {state['no_improve_iterations']}\nNext action: {state['next_action']}"
 
 
-def _plan_roll_iteration(load_handoff: dict[str, Any], state_path: Path, tasks_dir: Path, output_path: Path) -> dict[str, Any]:
+def _compute_rollover_inline(
+    state: dict[str, Any],
+    worker_results_dir: Path,
+    iteration: int,
+) -> None:
+    """Compute proposal rollover inline and write the result file.
+
+    Performs mechanical filtering: proposals whose proposal_id was already run in a
+    completed iteration are dropped; all others are carried forward.  Semantic
+    filtering (contradiction against key_learnings) is left to the agent layer.
+    """
+    completed_ids = {
+        entry.get("proposal_id") for entry in state.get("completed_iterations", [])
+    }
+    next_proposals = state.get("next_proposals", [])
+    merged: list[dict[str, Any]] = [p for p in next_proposals if p.get("proposal_id") not in completed_ids]
+    filtered: list[str] = [
+        p.get("proposal_id", "?") for p in next_proposals if p.get("proposal_id") in completed_ids
+    ]
+    proposal_policy = state.get("proposal_policy", {})
+    current_target = proposal_policy.get("current_target", 2) if isinstance(proposal_policy, dict) else 2
+    needs_fresh_ideation = len(merged) < current_target
+    rollover_result = {
+        "filtered_proposals": filtered,
+        "merged_proposals": merged,
+        "needs_fresh_ideation": needs_fresh_ideation,
+        "summary": (
+            f"Iteration {iteration} rollover: {len(merged)} carried forward, "
+            f"{len(filtered)} filtered. Needs fresh ideation: {needs_fresh_ideation}."
+        ),
+    }
+    worker_results_dir.mkdir(parents=True, exist_ok=True)
+    write_json(worker_results_dir / f"rollover-iter-{iteration}.json", rollover_result)
+
+
+def _plan_roll_iteration(
+    load_handoff: dict[str, Any],
+    state_path: Path,
+    tasks_dir: Path,
+    worker_results_dir: Path,
+    output_path: Path,
+) -> dict[str, Any]:
     state = read_json(state_path)
     previous_state = deepcopy(state)
 
     iteration = state["current_iteration"]
+
+    # Compute rollover inline — no external worker dispatch needed.
+    _compute_rollover_inline(state, worker_results_dir, iteration)
+    state["next_action"] = "gate iteration rollover"
+
+    # Write audit task file for traceability.
+    rollover_result_file = str(Path(".ml-metaopt") / "worker-results" / f"rollover-iter-{iteration}.json")
     task_path = tasks_dir / f"rollover-iter-{iteration}.md"
     task_path.parent.mkdir(parents=True, exist_ok=True)
-    task_path.write_text(f"# Rollover Task: iteration {iteration}\n", encoding="utf-8")
-    state["next_action"] = "run proposal rollover"
+    task_path.write_text(
+        f"# Rollover Audit: iteration {iteration}\n\n"
+        f"Rollover was computed inline by the control script.\n"
+        f"Result written to: `{rollover_result_file}`\n",
+        encoding="utf-8",
+    )
 
-    rollover_task_file = str(Path(".ml-metaopt") / "tasks" / f"rollover-iter-{iteration}.md")
-    rollover_result_file = str(Path(".ml-metaopt") / "worker-results" / f"rollover-iter-{iteration}.json")
     payload = {
         "schema_version": 1,
         "continue_campaign": None,
         "stop_reason": "",
         "recommended_next_machine_state": "ROLL_ITERATION",
         "iteration_report": None,
-        "launch_requests": [
-            {
-                "slot_class": "auxiliary",
-                "mode": "analysis",
-                "worker_ref": "metaopt-analysis-worker",
-                "model_class": "strong_reasoner",
-                "task_file": rollover_task_file,
-                "result_file": rollover_result_file,
-            },
-        ],
+        "launch_requests": [],
+        "directives": [],
         "warnings": [],
-        "summary": "iteration rollover worker is ready to run",
+        "summary": "rollover computed inline; gate is ready",
     }
     persist_state_handoff(state_path, previous_state, state, payload, control_agent=_CONTROL_AGENT)
     return emit_handoff(output_path, payload, handoff_type=_PLAN_HANDOFF_TYPE, control_agent=_CONTROL_AGENT)
@@ -295,7 +337,13 @@ def main() -> int:
         return 0
 
     if args.mode == "plan_roll_iteration":
-        payload = _plan_roll_iteration(load_handoff, Path(args.state_path), Path(args.tasks_dir), Path(args.output))
+        payload = _plan_roll_iteration(
+            load_handoff,
+            Path(args.state_path),
+            Path(args.tasks_dir),
+            Path(args.worker_results_dir),
+            Path(args.output),
+        )
     else:
         payload = _gate_roll_iteration(load_handoff, Path(args.state_path), Path(args.worker_results_dir), Path(args.output))
     print(json.dumps(payload, indent=2, sort_keys=True))
